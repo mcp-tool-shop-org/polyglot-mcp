@@ -1,0 +1,57 @@
+{
+  "name": "@mcptoolshop/polyglot-mcp",
+  "version": "0.1.0",
+  "description": "Local GPU translation MCP server — TranslateGemma via Ollama, 55 languages, zero cloud dependency",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "polyglot-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit",
+    "dev": "node --watch dist/index.js",
+    "start": "node dist/index.js",
+    "test": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "translation",
+    "ollama",
+    "translategemma",
+    "gpu",
+    "local",
+    "llm",
+    "polyglot"
+  ],
+  "author": "MCP Tool Shop",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mcp-tool-shop-org/polyglot-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mcp-tool-shop-org/polyglot-mcp/issues"
+  },
+  "homepage": "https://github.com/mcp-tool-shop-org/polyglot-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.3.3",
+    "vitest": "^1.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
