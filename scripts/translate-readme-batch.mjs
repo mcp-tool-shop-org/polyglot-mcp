@@ -9,7 +9,7 @@
  *   node scripts/translate-readme-batch.mjs <readme-path> --all [--fast] [--no-cache] [--concurrency N]
  *
  * --all          Translate to all 7 default languages (ja zh es fr hi it pt)
- * --fast         Use translategemma:2b for speed (lower quality)
+ * --fast         Use translategemma:12b for speed (lower quality)
  * --no-cache     Skip the segment-level cache
  * --concurrency  Max parallel languages (default: 3)
  */
@@ -49,7 +49,7 @@ const readmePath = positional[0];
 const useFast = flags.has("--fast");
 const useCache = !flags.has("--no-cache");
 const useAll = flags.has("--all");
-const model = useFast ? "translategemma:2b" : "translategemma:12b";
+const model = useFast ? "translategemma:12b" : "translategemma:27b";
 
 if (!readmePath) {
   console.error(

@@ -6,7 +6,7 @@
  *
  * Usage: node scripts/translate-readme.mjs <readme-path> <target-lang-code> [--fast] [--no-cache]
  *
- * --fast     Use translategemma:2b for speed (lower quality)
+ * --fast     Use translategemma:12b for speed (lower quality)
  * --no-cache Skip the segment-level cache
  */
 
@@ -43,7 +43,7 @@ if (!target) {
 
 const useFast = flags.has("--fast");
 const useCache = !flags.has("--no-cache");
-const model = useFast ? "translategemma:2b" : "translategemma:12b";
+const model = useFast ? "translategemma:12b" : "translategemma:27b";
 const absReadmePath = resolve(readmePath);
 const readme = readFileSync(absReadmePath, "utf-8");
 
