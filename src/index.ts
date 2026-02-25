@@ -94,13 +94,13 @@ server.tool(
   {},
   async () => {
     const client = new OllamaClient();
-    const available = await client.isAvailable();
+    const available = await client.ensureRunning();
     if (!available) {
       return {
         content: [
           {
             type: "text" as const,
-            text: "Ollama is not running. Start it with: ollama serve",
+            text: "Ollama is not installed or could not be started. Install from https://ollama.com",
           },
         ],
         isError: true,

@@ -100,10 +100,17 @@ export async function translate(
   const model = options.model ?? DEFAULT_MODEL;
   const client = new OllamaClient(options.ollamaUrl);
 
-  // Check Ollama is running
-  if (!(await client.isAvailable())) {
+  // Auto-start Ollama if not running
+  if (!(await client.ensureRunning())) {
     throw new Error(
-      "Ollama is not running. Start it with: ollama serve"
+      "Could not start Ollama. Install it from https://ollama.com then try again."
+    );
+  }
+
+  // Auto-pull model if not present
+  if (!(await client.ensureModel(model))) {
+    throw new Error(
+      `Could not pull model "${model}". Run manually: ollama pull ${model}`
     );
   }
 
