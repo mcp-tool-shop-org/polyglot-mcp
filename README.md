@@ -1,12 +1,13 @@
-<p align="center"><strong>polyglot-mcp</strong></p>
+<p align="center"><img src="logo.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center">Local GPU translation MCP server — 55 languages, zero cloud dependency.</p>
+<p align="center"><strong>Local GPU translation MCP server — 55 languages, zero cloud dependency.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp"><img src="https://img.shields.io/github/stars/mcp-tool-shop-org/polyglot-mcp?style=flat" alt="GitHub stars"></a>
+  <a href="https://www.npmjs.com/package/@mcptoolshop/polyglot-mcp"><img src="https://img.shields.io/npm/v/@mcptoolshop/polyglot-mcp.svg" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-18%2B-brightgreen.svg" alt="node 18+"></a>
   <a href="https://ollama.com/library/translategemma"><img src="https://img.shields.io/badge/TranslateGemma-Ollama-blue" alt="TranslateGemma"></a>
+  <a href="https://mcp-tool-shop-org.github.io/polyglot-mcp/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
 ---
