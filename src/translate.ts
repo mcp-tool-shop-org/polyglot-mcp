@@ -1,9 +1,16 @@
 /**
  * Core translation logic — builds prompts, calls Ollama, handles chunking.
+ * Includes glossary injection and post-translation polish.
  */
 
 import { OllamaClient } from "./ollama.js";
 import { resolveLanguage, type Language } from "./languages.js";
+import {
+  buildGlossaryHint,
+  SOFTWARE_GLOSSARY,
+  type GlossaryEntry,
+} from "./glossary.js";
+import { polish } from "./polish.js";
 
 const DEFAULT_MODEL = "translategemma:12b";
 const CHUNK_SIZE = 2000; // characters per chunk (conservative for 2K token context)
@@ -12,6 +19,12 @@ export interface TranslateOptions {
   model?: string;
   temperature?: number;
   ollamaUrl?: string;
+  /** Custom glossary entries (merged with built-in software glossary). */
+  glossary?: GlossaryEntry[];
+  /** Set to false to disable the built-in software glossary. Default: true. */
+  softwareGlossary?: boolean;
+  /** Set to false to skip post-translation polish. Default: true. */
+  polish?: boolean;
 }
 
 export interface TranslateResult {
@@ -27,10 +40,11 @@ export interface TranslateResult {
 function buildPrompt(
   source: Language,
   target: Language,
-  text: string
+  text: string,
+  glossaryHint: string
 ): string {
   return `You are a professional ${source.name} (${source.code}) to ${target.name} (${target.code}) translator. Your goal is to accurately convey the meaning and nuances of the original ${source.name} text while adhering to ${target.name} grammar, vocabulary, and cultural sensitivities.
-Produce only the ${target.name} translation, without any additional explanations or commentary. Please translate the following ${source.name} text into ${target.name}:
+Produce only the ${target.name} translation, without any additional explanations or commentary.${glossaryHint} Please translate the following ${source.name} text into ${target.name}:
 
 
 ${text}`;
@@ -114,12 +128,22 @@ export async function translate(
     );
   }
 
+  // Build glossary
+  const glossaryEntries: GlossaryEntry[] = [];
+  if (options.softwareGlossary !== false) {
+    glossaryEntries.push(...SOFTWARE_GLOSSARY);
+  }
+  if (options.glossary) {
+    glossaryEntries.push(...options.glossary);
+  }
+
   const chunks = chunkText(text.trim(), CHUNK_SIZE);
   const start = Date.now();
   const translations: string[] = [];
 
   for (const chunk of chunks) {
-    const prompt = buildPrompt(source, target, chunk);
+    const glossaryHint = buildGlossaryHint(chunk, target.code, glossaryEntries);
+    const prompt = buildPrompt(source, target, chunk, glossaryHint);
     const response = await client.generate({
       model,
       prompt,
@@ -127,7 +151,12 @@ export async function translate(
         temperature: options.temperature ?? 0.1,
       },
     });
-    translations.push(response.response.trim());
+
+    let translated = response.response.trim();
+    if (options.polish !== false) {
+      translated = polish(translated);
+    }
+    translations.push(translated);
   }
 
   return {

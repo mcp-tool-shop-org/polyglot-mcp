@@ -36,14 +36,34 @@ export class OllamaClient {
   constructor(private baseUrl: string = "http://localhost:11434") {}
 
   async generate(req: OllamaGenerateRequest): Promise<OllamaGenerateResponse> {
-    const res = await fetch(`${this.baseUrl}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...req, stream: false }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...req, stream: false }),
+      });
+    } catch (err) {
+      if (err instanceof TypeError && String(err.message).includes("fetch")) {
+        throw new Error(
+          "Cannot connect to Ollama. Is it running? Start with: ollama serve"
+        );
+      }
+      throw new Error(
+        `Network error reaching Ollama: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
     if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Ollama generate failed (${res.status}): ${text}`);
+      const body = await res.text();
+      if (res.status === 404 && body.includes("not found")) {
+        const model = req.model;
+        throw new Error(
+          `Model "${model}" not found. Pull it with: ollama pull ${model}`
+        );
+      }
+      throw new Error(
+        `Ollama returned an error (HTTP ${res.status}): ${body.slice(0, 200)}`
+      );
     }
     return res.json() as Promise<OllamaGenerateResponse>;
   }

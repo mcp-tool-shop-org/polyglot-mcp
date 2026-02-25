@@ -9,7 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { translate } from "./translate.js";
-import { LANGUAGES, resolveLanguage, isSupported } from "./languages.js";
+import { LANGUAGES } from "./languages.js";
 import { OllamaClient } from "./ollama.js";
 
 const server = new McpServer({
@@ -21,7 +21,7 @@ const server = new McpServer({
 
 server.tool(
   "translate",
-  "Translate text between any of 55 supported languages using TranslateGemma running locally on your GPU via Ollama. Fast, private, zero cloud dependency.",
+  "Translate text between any of 55 supported languages using TranslateGemma running locally on your GPU via Ollama. Automatically starts Ollama and pulls the model if needed. Includes a built-in software glossary for accurate technical translations.",
   {
     text: z.string().describe("The text to translate"),
     from: z
@@ -38,12 +38,26 @@ server.tool(
       .string()
       .optional()
       .describe(
-        'Ollama model to use (default: "translategemma:12b"). Use "translategemma:4b" for faster but lower quality.'
+        'Ollama model (default: "translategemma:12b"). Use "translategemma:4b" for speed or "translategemma:27b" for max quality.'
+      ),
+    glossary: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe(
+        'Custom term overrides as {"source term": "target translation"}. Merged with the built-in software glossary.'
       ),
   },
-  async ({ text, from, to, model }) => {
+  async ({ text, from, to, model, glossary }) => {
     try {
-      const result = await translate(text, from, to, { model });
+      // Convert flat glossary to GlossaryEntry format
+      const customGlossary = glossary
+        ? Object.entries(glossary).map(([term, translation]) => ({
+            term,
+            translations: { [to.split("-")[0].toLowerCase()]: translation },
+          }))
+        : undefined;
+
+      const result = await translate(text, from, to, { model, glossary: customGlossary });
       const secs = (result.durationMs / 1000).toFixed(1);
       return {
         content: [
@@ -58,11 +72,12 @@ server.tool(
         ],
       };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       return {
         content: [
           {
             type: "text" as const,
-            text: `Translation error: ${err instanceof Error ? err.message : String(err)}`,
+            text: friendlyError(msg),
           },
         ],
         isError: true,
@@ -90,17 +105,25 @@ server.tool(
 
 server.tool(
   "check_status",
-  "Check if Ollama is running and TranslateGemma models are available.",
+  "Check if Ollama is running and TranslateGemma models are available. Attempts to auto-start Ollama if not running.",
   {},
   async () => {
     const client = new OllamaClient();
+
     const available = await client.ensureRunning();
     if (!available) {
       return {
         content: [
           {
             type: "text" as const,
-            text: "Ollama is not installed or could not be started. Install from https://ollama.com",
+            text: [
+              "Ollama is not installed or could not be started.",
+              "",
+              "To fix this:",
+              "  1. Install Ollama from https://ollama.com",
+              "  2. Run: ollama serve",
+              "  3. Try again",
+            ].join("\n"),
           },
         ],
         isError: true,
@@ -117,7 +140,17 @@ server.tool(
         content: [
           {
             type: "text" as const,
-            text: "Ollama is running but no TranslateGemma model is installed.\n\nInstall with:\n  ollama pull translategemma:12b   (8.1 GB, best quality)\n  ollama pull translategemma:4b    (3.3 GB, faster)\n  ollama pull translategemma:27b   (17 GB, highest quality)",
+            text: [
+              "Ollama is running but no TranslateGemma model is installed.",
+              "",
+              "Pick a model based on your GPU:",
+              "  ollama pull translategemma:4b    3.3 GB  (fast, good quality)",
+              "  ollama pull translategemma:12b   8.1 GB  (balanced — recommended)",
+              "  ollama pull translategemma:27b   17 GB   (slow, best quality)",
+              "",
+              "Note: The translate tool will auto-pull the model on first use,",
+              "so you can also just start translating and it will download automatically.",
+            ].join("\n"),
           },
         ],
       };
@@ -131,12 +164,54 @@ server.tool(
       content: [
         {
           type: "text" as const,
-          text: `Ollama is running. TranslateGemma models available:\n${modelList}`,
+          text: `Ready to translate. TranslateGemma models installed:\n${modelList}`,
         },
       ],
     };
   }
 );
+
+// --- Friendly error messages ---
+
+function friendlyError(msg: string): string {
+  // Connection errors
+  if (msg.includes("Cannot connect") || msg.includes("fetch failed")) {
+    return [
+      "Cannot reach Ollama.",
+      "",
+      "Polyglot tried to auto-start it but couldn't connect.",
+      "Make sure Ollama is installed (https://ollama.com) and try again.",
+    ].join("\n");
+  }
+
+  // Model not found
+  if (msg.includes("not found")) {
+    return [
+      msg,
+      "",
+      "The translate tool normally auto-pulls models, but the pull may have",
+      "failed. Check your internet connection and try: ollama pull translategemma:12b",
+    ].join("\n");
+  }
+
+  // Unsupported language
+  if (msg.includes("Unsupported")) {
+    return [
+      msg,
+      "",
+      "Use the list_languages tool to see all 55 supported languages.",
+      "You can use either language codes (\"en\") or names (\"English\").",
+    ].join("\n");
+  }
+
+  // Same language
+  if (msg.includes("must be different")) {
+    return "Source and target languages are the same — nothing to translate.";
+  }
+
+  // Generic fallback
+  return `Translation failed: ${msg}`;
+}
 
 // --- Start ---
 
@@ -146,6 +221,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Fatal:", err);
+  process.stderr.write(
+    `Polyglot MCP failed to start: ${err instanceof Error ? err.message : String(err)}\n`
+  );
   process.exit(1);
 });
