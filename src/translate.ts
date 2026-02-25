@@ -1,6 +1,6 @@
 /**
  * Core translation logic — builds prompts, calls Ollama, handles chunking.
- * Includes glossary injection and post-translation polish.
+ * Includes glossary injection, post-translation polish, and batch mode.
  */
 
 import { OllamaClient } from "./ollama.js";
@@ -13,7 +13,14 @@ import {
 import { polish } from "./polish.js";
 
 const DEFAULT_MODEL = "translategemma:12b";
-const CHUNK_SIZE = 2000; // characters per chunk (conservative for 2K token context)
+const BATCH_SEPARATOR = "\n---POLYGLOT_SEP---\n";
+
+/** Chunk size varies by model — bigger models handle more context. */
+function getChunkSize(model: string): number {
+  if (model.includes(":2b") || model.includes(":4b")) return 2000;
+  if (model.includes(":27b")) return 6000;
+  return 4000; // 12b and default
+}
 
 export interface TranslateOptions {
   model?: string;
@@ -36,6 +43,26 @@ export interface TranslateResult {
   durationMs: number;
 }
 
+// --- Batch types ---
+
+export interface BatchItem {
+  text: string;
+  /** Hint for post-processing (e.g., "heading" strips trailing periods). */
+  kind?: "heading" | "text" | "cell";
+}
+
+export interface TranslateBatchOptions extends TranslateOptions {
+  /** Max combined characters before flushing a batch. Auto-derived from model if omitted. */
+  batchCharLimit?: number;
+}
+
+export interface TranslateBatchResult {
+  translations: string[];
+  model: string;
+  ollamaCalls: number;
+  durationMs: number;
+}
+
 /** Build the TranslateGemma prompt — two blank lines before text is critical. */
 function buildPrompt(
   source: Language,
@@ -48,6 +75,21 @@ Produce only the ${target.name} translation, without any additional explanations
 
 
 ${text}`;
+}
+
+/** Build a batch prompt with separator instructions. */
+function buildBatchPrompt(
+  source: Language,
+  target: Language,
+  joinedText: string,
+  glossaryHint: string
+): string {
+  return `You are a professional ${source.name} (${source.code}) to ${target.name} (${target.code}) translator. Your goal is to accurately convey the meaning and nuances of the original ${source.name} text while adhering to ${target.name} grammar, vocabulary, and cultural sensitivities.
+Produce only the ${target.name} translation, without any additional explanations or commentary.
+IMPORTANT: The text contains separator lines "---POLYGLOT_SEP---". Keep each separator exactly as-is in your output. Do NOT translate, remove, or modify the separators.${glossaryHint} Please translate the following ${source.name} text into ${target.name}:
+
+
+${joinedText}`;
 }
 
 /** Split text into chunks at paragraph/sentence boundaries. */
@@ -86,13 +128,12 @@ function chunkText(text: string, maxChars: number): string[] {
   return chunks;
 }
 
-/** Translate text using TranslateGemma via Ollama. */
-export async function translate(
-  text: string,
+/** Resolve languages and ensure Ollama + model are ready. Returns shared setup. */
+async function resolveSetup(
   sourceLang: string,
   targetLang: string,
-  options: TranslateOptions = {}
-): Promise<TranslateResult> {
+  options: TranslateOptions
+) {
   const source = resolveLanguage(sourceLang);
   if (!source) {
     throw new Error(
@@ -114,21 +155,18 @@ export async function translate(
   const model = options.model ?? DEFAULT_MODEL;
   const client = new OllamaClient(options.ollamaUrl);
 
-  // Auto-start Ollama if not running
   if (!(await client.ensureRunning())) {
     throw new Error(
       "Could not start Ollama. Install it from https://ollama.com then try again."
     );
   }
 
-  // Auto-pull model if not present
   if (!(await client.ensureModel(model))) {
     throw new Error(
       `Could not pull model "${model}". Run manually: ollama pull ${model}`
     );
   }
 
-  // Build glossary
   const glossaryEntries: GlossaryEntry[] = [];
   if (options.softwareGlossary !== false) {
     glossaryEntries.push(...SOFTWARE_GLOSSARY);
@@ -137,7 +175,23 @@ export async function translate(
     glossaryEntries.push(...options.glossary);
   }
 
-  const chunks = chunkText(text.trim(), CHUNK_SIZE);
+  return { source, target, model, client, glossaryEntries };
+}
+
+/** Translate text using TranslateGemma via Ollama. */
+export async function translate(
+  text: string,
+  sourceLang: string,
+  targetLang: string,
+  options: TranslateOptions = {}
+): Promise<TranslateResult> {
+  const { source, target, model, client, glossaryEntries } = await resolveSetup(
+    sourceLang,
+    targetLang,
+    options
+  );
+
+  const chunks = chunkText(text.trim(), getChunkSize(model));
   const start = Date.now();
   const translations: string[] = [];
 
@@ -165,6 +219,109 @@ export async function translate(
     targetLanguage: target,
     model,
     chunks: chunks.length,
+    durationMs: Date.now() - start,
+  };
+}
+
+/**
+ * Translate multiple text segments in as few Ollama calls as possible.
+ * Joins segments with a separator, translates in batches, splits results back.
+ * Falls back to individual translation if the model mangles the separators.
+ */
+export async function translateBatch(
+  items: BatchItem[],
+  sourceLang: string,
+  targetLang: string,
+  options: TranslateBatchOptions = {}
+): Promise<TranslateBatchResult> {
+  if (items.length === 0) {
+    return { translations: [], model: options.model ?? DEFAULT_MODEL, ollamaCalls: 0, durationMs: 0 };
+  }
+
+  const { source, target, model, client, glossaryEntries } = await resolveSetup(
+    sourceLang,
+    targetLang,
+    options
+  );
+
+  const batchLimit = options.batchCharLimit ?? getChunkSize(model);
+  const start = Date.now();
+  const results: string[] = new Array(items.length);
+  let ollamaCalls = 0;
+
+  // Group items into batches that fit within the char limit
+  let batchStart = 0;
+  while (batchStart < items.length) {
+    const batchItems: { index: number; text: string }[] = [];
+    let batchSize = 0;
+
+    for (let i = batchStart; i < items.length; i++) {
+      const addedSize = items[i].text.length + (batchItems.length > 0 ? BATCH_SEPARATOR.length : 0);
+      if (batchSize + addedSize > batchLimit && batchItems.length > 0) break;
+      batchItems.push({ index: i, text: items[i].text });
+      batchSize += addedSize;
+    }
+
+    if (batchItems.length === 1) {
+      // Single item — use normal prompt (no separator overhead)
+      const item = batchItems[0];
+      const glossaryHint = buildGlossaryHint(item.text, target.code, glossaryEntries);
+      const prompt = buildPrompt(source, target, item.text, glossaryHint);
+      const response = await client.generate({
+        model,
+        prompt,
+        options: { temperature: options.temperature ?? 0.1 },
+      });
+      ollamaCalls++;
+      let translated = response.response.trim();
+      if (options.polish !== false) translated = polish(translated);
+      results[item.index] = translated;
+    } else {
+      // Multiple items — join with separator
+      const joinedText = batchItems.map((b) => b.text).join(BATCH_SEPARATOR);
+      const glossaryHint = buildGlossaryHint(joinedText, target.code, glossaryEntries);
+      const prompt = buildBatchPrompt(source, target, joinedText, glossaryHint);
+      const response = await client.generate({
+        model,
+        prompt,
+        options: { temperature: options.temperature ?? 0.1 },
+      });
+      ollamaCalls++;
+
+      const outputParts = response.response.split(/---POLYGLOT_SEP---/);
+
+      if (outputParts.length === batchItems.length) {
+        // Separator count matches — split worked
+        for (let j = 0; j < batchItems.length; j++) {
+          let translated = outputParts[j].trim();
+          if (options.polish !== false) translated = polish(translated);
+          results[batchItems[j].index] = translated;
+        }
+      } else {
+        // Fallback: re-translate each item individually
+        for (const item of batchItems) {
+          const hint = buildGlossaryHint(item.text, target.code, glossaryEntries);
+          const fallbackPrompt = buildPrompt(source, target, item.text, hint);
+          const fallbackResponse = await client.generate({
+            model,
+            prompt: fallbackPrompt,
+            options: { temperature: options.temperature ?? 0.1 },
+          });
+          ollamaCalls++;
+          let translated = fallbackResponse.response.trim();
+          if (options.polish !== false) translated = polish(translated);
+          results[item.index] = translated;
+        }
+      }
+    }
+
+    batchStart += batchItems.length;
+  }
+
+  return {
+    translations: results,
+    model,
+    ollamaCalls,
     durationMs: Date.now() - start,
   };
 }

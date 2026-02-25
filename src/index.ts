@@ -14,7 +14,7 @@ import { OllamaClient } from "./ollama.js";
 
 const server = new McpServer({
   name: "polyglot-mcp",
-  version: "1.0.1",
+  version: "1.1.0",
 });
 
 // --- Tools ---

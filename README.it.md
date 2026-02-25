@@ -4,7 +4,7 @@
 
 <p align="center"><img src="logo.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center"><strong>Server di traduzione basato su GPU locale, che supporta 55 lingue e non richiede connessione al cloud.</strong></p>
+<p align="center"><strong>Server di traduzione GPU locale — 55 lingue, nessuna dipendenza dal cloud.</strong></p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@mcptoolshop/polyglot-mcp"><img src="https://img.shields.io/npm/v/@mcptoolshop/polyglot-mcp.svg" alt="npm version"></a>
@@ -18,24 +18,24 @@
 
 ## Cosa fa
 
-Traduce testi tra 55 lingue utilizzando [TranslateGemma](https://ollama.com/library/translategemma), eseguito localmente sulla vostra GPU tramite [Ollama](https://ollama.com). Non sono necessarie chiavi API, non si utilizza il cloud e non ci sono limiti di utilizzo: tutto viene eseguito sulla vostra macchina.
+Traduce testi tra 55 lingue utilizzando [TranslateGemma](https://ollama.com/library/translategemma), eseguito localmente sulla tua GPU tramite [Ollama](https://ollama.com). Nessuna chiave API, nessun cloud, nessun limite di velocità: tutto viene eseguito sulla tua macchina.
 
 ## Prerequisiti
 
-1. **[Ollama](https://ollama.com)** installato e in esecuzione (`ollama serve`).
+1. **[Ollama](https://ollama.com)** installato e in esecuzione (`ollama serve`)
 2. Modello **TranslateGemma** scaricato:
-   ```bash
-   ollama pull translategemma:12b   # 8,1 GB — miglior equilibrio tra qualità e velocità
-   # oppure
-   ollama pull translategemma:4b    # 3,3 GB — più veloce, qualità inferiore
-   ```
-3. **Node.js 18 o superiore**.
+```bash
+ollama pull translategemma:12b   # 8.1 GB — miglior equilibrio tra qualità e velocità
+# oppure
+ollama pull translategemma:4b    # 3.3 GB — più veloce, qualità inferiore
+```
+3. **Node.js 18+**
 
 ## Configurazione
 
 ### Claude Code / Claude Desktop
 
-Aggiungere le seguenti impostazioni alla configurazione di MCP (file `claude_desktop_config.json` o `.mcp.json`):
+Aggiungi alla configurazione di MCP (`claude_desktop_config.json` o `.mcp.json`):
 
 ```json
 {
@@ -48,7 +48,7 @@ Aggiungere le seguenti impostazioni alla configurazione di MCP (file `claude_des
 }
 ```
 
-### Dalla fonte
+### Da sorgente
 
 ```bash
 git clone https://github.com/mcp-tool-shop-org/polyglot-mcp.git
@@ -61,48 +61,48 @@ node dist/index.js
 
 ### `translate`
 
-Tradurre testi tra qualsiasi coppia di lingue supportate.
+Traduce testi tra qualsiasi coppia di lingue supportate.
 
-| Parametro. | Richiesto. | Descrizione. |
+| Parametro | Obbligatorio | Descrizione |
 |-----------|----------|-------------|
-| `text` | yes | Certo, forniscimi il testo che desideri tradurre. |
-| `from` | yes | Codice o nome della lingua di origine (ad esempio, `en`, `inglese`). |
-| `to` | yes | Codice o nome della lingua di destinazione (ad esempio, `ja`, `giapponese`). |
-| `model` | no | Modello Ollama (impostazione predefinita: `translategemma:12b`). |
+| `text` | yes | Testo da tradurre |
+| `from` | yes | Codice o nome della lingua di origine (es. `en`, `English`) |
+| `to` | yes | Codice o nome della lingua di destinazione (es. `ja`, `Japanese`) |
+| `model` | no | Modello Ollama (predefinito: `translategemma:12b`) |
 
 ### `list_languages`
 
-Elencare tutte le 55 lingue supportate, indicando i relativi codici.
+Elenca tutte le 55 lingue supportate con i relativi codici.
 
 ### `check_status`
 
-Verificare se Ollama è in esecuzione e quali modelli TranslateGemma sono installati.
+Verifica se Ollama è in esecuzione e quali modelli TranslateGemma sono installati.
 
 ## Lingue supportate
 
-Afrikaans, albanese, arabo, bengalese, bulgaro, catalano, cinese (semplificato), cinese (tradizionale), croato, ceco, danese, olandese, inglese, estone, finlandese, francese, galiziano, tedesco, greco, gujarati, ebraico, hindi, ungherese, indonesiano, irlandese, italiano, giapponese, kannada, coreano, lettone, lituano, macedone, malese, malayalam, maltese, marathi, norvegese, persiano, polacco, portoghese, rumeno, russo, scozzese (gaelico), serbo, slovacco, sloveno, spagnolo, swahili, svedese, tamil, telugu, tailandese, turco, ucraino, urdu, vietnamita, gallese.
+Afrikaans, albanese, arabo, bengalese, bulgaro, catalano, cinese (semplificato), cinese (tradizionale), croato, ceco, danese, olandese, inglese, estone, finlandese, francese, galiziano, tedesco, greco, gujarati, ebraico, hindi, ungherese, indonesiano, irlandese, italiano, giapponese, kannada, coreano, lettone, lituano, macedone, malese, malayalam, maltese, marathi, norvegese, persiano, polacco, portoghese, rumeno, russo, scozzese gaelico, serbo, slovacco, sloveno, spagnolo, swahili, svedese, tamil, telugu, tailandese, turco, ucraino, urdu, vietnamita, gallese.
 
-## Performance
+## Prestazioni
 
 Su una RTX 5080 (16 GB di VRAM) con TranslateGemma 12B (Q4):
 
-| Metrico. | Value |
+| Metrica | Value |
 |--------|-------|
-| Prima traduzione (carico a freddo). | ~15s |
-| Traduzioni successive. | Circa 600 millisecondi. |
-| Utilizzo della memoria video (VRAM). | Circa 8,1 GB. |
-| Testo lungo (suddiviso in blocchi). | Circa 600 millisecondi per blocco. |
+| Prima traduzione (caricamento iniziale) | ~15s |
+| Traduzioni successive | ~600ms |
+| Utilizzo della VRAM | ~8.1 GB |
+| Testo lungo (diviso in blocchi) | ~600ms per blocco |
 
 ## Come funziona
 
-1. Il client MCP (ad esempio, Claude Code) richiama lo strumento `translate`.
-2. Polyglot crea un prompt per TranslateGemma, specificando la coppia di lingue di origine e di destinazione.
+1. Il client MCP (Claude Code, ecc.) chiama lo strumento `translate`.
+2. Polyglot crea un prompt per TranslateGemma con la coppia di lingue di origine/destinazione.
 3. Il prompt viene inviato all'API HTTP locale di Ollama.
-4. Ollama esegue TranslateGemma sulla GPU e restituisce la traduzione.
-5. Per testi lunghi, il contenuto viene suddiviso in blocchi, rispettando i confini di paragrafo o frase.
+4. Ollama esegue TranslateGemma sulla tua GPU e restituisce la traduzione.
+5. Per testi lunghi, il contenuto viene suddiviso in blocchi ai confini di paragrafi/frasi.
 
 ## Licenza
 
-Licenza MIT: consultare il file [LICENSE](LICENSE) per i dettagli.
+Licenza MIT — consulta [LICENSE](LICENSE) per i dettagli.
 
-Parte di [MCP Tool Shop](https://mcptoolshop.com).
+> Parte di [MCP Tool Shop](https://mcptoolshop.com)

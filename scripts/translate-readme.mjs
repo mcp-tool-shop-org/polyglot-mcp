@@ -4,16 +4,34 @@
  * Translate a README.md using polyglot-mcp's translate engine.
  * Preserves code blocks, HTML, URLs, package names, and ASCII art.
  *
- * Usage: node scripts/translate-readme.mjs <readme-path> <target-lang-code>
+ * Usage: node scripts/translate-readme.mjs <readme-path> <target-lang-code> [--fast] [--no-cache]
+ *
+ * --fast     Use translategemma:2b for speed (lower quality)
+ * --no-cache Skip the segment-level cache
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { translate } from "../dist/translate.js";
+import { resolve } from "node:path";
+import { translateBatch } from "../dist/translate.js";
 import { resolveLanguage } from "../dist/languages.js";
+import {
+  loadCache,
+  saveCache,
+  cacheKey,
+  getCached,
+  setCached,
+  createCache,
+} from "../dist/cache.js";
 
-const [readmePath, targetCode] = process.argv.slice(2);
+// --- Parse args ---
+const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
+const [readmePath, targetCode] = args;
+
 if (!readmePath || !targetCode) {
-  console.error("Usage: node scripts/translate-readme.mjs <readme> <lang-code>");
+  console.error(
+    "Usage: node scripts/translate-readme.mjs <readme> <lang-code> [--fast] [--no-cache]"
+  );
   process.exit(1);
 }
 
@@ -23,9 +41,14 @@ if (!target) {
   process.exit(1);
 }
 
-const readme = readFileSync(readmePath, "utf-8");
+const useFast = flags.has("--fast");
+const useCache = !flags.has("--no-cache");
+const model = useFast ? "translategemma:2b" : "translategemma:12b";
+const absReadmePath = resolve(readmePath);
+const readme = readFileSync(absReadmePath, "utf-8");
 
-// Split README into segments: translatable text vs protected blocks
+// --- Segmentation ---
+
 function segmentReadme(md) {
   const segments = [];
   let i = 0;
@@ -58,8 +81,11 @@ function segmentReadme(md) {
     if (/^<[a-z]/.test(line.trim())) {
       const block = [line];
       i++;
-      // Collect until closing tag or empty line
-      while (i < lines.length && lines[i].trim() !== "" && !/^(---|##)/.test(lines[i])) {
+      while (
+        i < lines.length &&
+        lines[i].trim() !== "" &&
+        !/^(---|##)/.test(lines[i])
+      ) {
         block.push(lines[i]);
         i++;
       }
@@ -125,154 +151,289 @@ function segmentReadme(md) {
 /**
  * Clean up common TranslateGemma quirks:
  * - "Translation A\nまたは\nTranslation B" → keep only first option
- * - "Translation A\no\nTranslation B" (Spanish "or") → keep first
- * - "Translation A\nou\nTranslation B" (French/Portuguese "or") → keep first
  * - Trailing periods on short text (headings)
  */
 function cleanTranslation(text, isHeading = false) {
-  // Strip "or" alternatives in various languages
   const orPatterns = [
-    /\nまたは\n.*/s,      // Japanese
-    /\n또는\n.*/s,        // Korean
-    /\no\n[A-Z].*/s,      // Spanish/Italian/Portuguese "o"
-    /\nou\n.*/s,           // French/Portuguese "ou"
-    /\noder\n.*/s,         // German
-    /\nили\n.*/s,          // Russian
-    /\nया\n.*/s,           // Hindi
-    /\nveya\n.*/s,         // Turkish
-    /\nหรือ\n.*/s,         // Thai
-    /\nhoặc\n.*/s,         // Vietnamese
+    /\nまたは\n.*/s,
+    /\n또는\n.*/s,
+    /\no\n[A-Z].*/s,
+    /\nou\n.*/s,
+    /\noder\n.*/s,
+    /\nили\n.*/s,
+    /\nया\n.*/s,
+    /\nveya\n.*/s,
+    /\nหรือ\n.*/s,
+    /\nhoặc\n.*/s,
   ];
   let cleaned = text;
   for (const pat of orPatterns) {
     cleaned = cleaned.replace(pat, "");
   }
-
-  // Remove trailing period on headings
   if (isHeading) {
     cleaned = cleaned.replace(/[。．.]\s*$/, "");
   }
-
   return cleaned.trim();
 }
 
-// Translate a single text string, preserving inline markdown
-async function translateText(text, from, to, isHeading = false) {
-  // Skip if it's just a package name or command
-  if (/^`[^`]+`$/.test(text.trim())) return text;
-  if (/^@attestia\//.test(text.trim())) return text;
-
-  const result = await translate(text, from, to);
-  return cleanTranslation(result.translation, isHeading);
+/** Check if a table cell should be translated. */
+function isTranslatableCell(trimmed) {
+  if (/^`[^`]+`$/.test(trimmed)) return false;
+  if (/^@\w+\//.test(trimmed)) return false;
+  if (/^\*\*[A-Z]/.test(trimmed) && trimmed.length < 30) return false;
+  if (/^\d+$/.test(trimmed)) return false;
+  if (/^\[.*\]\(.*\)$/.test(trimmed)) return false;
+  if (trimmed.length <= 5) return false;
+  return true;
 }
 
-// Translate table cells (skip separator row and code/package cells)
-async function translateTable(tableText, from, to) {
+/** Parse table into rows/cells and identify translatable cells. */
+function parseTable(tableText) {
   const rows = tableText.split("\n");
-  const translated = [];
+  const parsed = [];
+  const translatableCells = []; // { rowIdx, cellIdx, text }
 
-  for (const row of rows) {
-    // Separator row (|---|---|)
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
     if (/^\|[\s-:|]+\|$/.test(row)) {
-      translated.push(row);
+      parsed.push({ type: "separator", raw: row });
       continue;
     }
-
-    const cells = row.split("|").slice(1, -1); // remove empty first/last
-    const newCells = [];
-
-    for (const cell of cells) {
+    const cells = row.split("|").slice(1, -1);
+    const cellData = cells.map((cell, c) => {
       const trimmed = cell.trim();
-      // Skip cells that are mostly code, packages, or numbers
-      if (
-        /^`[^`]+`$/.test(trimmed) ||
-        /^@attestia\//.test(trimmed) ||
-        /^\*\*[A-Z]/.test(trimmed) && trimmed.length < 30 ||
-        /^\d+$/.test(trimmed) ||
-        /^\[.*\]\(.*\)$/.test(trimmed)
-      ) {
-        newCells.push(cell);
-      } else if (trimmed.length > 5) {
-        try {
-          const t = await translateText(trimmed, from, to);
-          newCells.push(` ${t} `);
-        } catch {
-          newCells.push(cell);
-        }
-      } else {
-        newCells.push(cell);
+      if (isTranslatableCell(trimmed)) {
+        translatableCells.push({ rowIdx: parsed.length, cellIdx: c, text: trimmed });
+        return { translatable: true, original: cell };
       }
-    }
-
-    translated.push("|" + newCells.join("|") + "|");
+      return { translatable: false, original: cell };
+    });
+    parsed.push({ type: "data", cells: cellData });
   }
 
-  return translated.join("\n");
+  return { parsed, translatableCells };
+}
+
+/** Reassemble table from parsed data with translated cells. */
+function reassembleTable(parsed, translatedMap) {
+  const rows = [];
+  for (const row of parsed) {
+    if (row.type === "separator") {
+      rows.push(row.raw);
+      continue;
+    }
+    const cells = row.cells.map((c, idx) => {
+      const key = `${parsed.indexOf(row)}:${idx}`;
+      if (c.translatable && translatedMap.has(key)) {
+        return ` ${translatedMap.get(key)} `;
+      }
+      return c.original;
+    });
+    rows.push("|" + cells.join("|") + "|");
+  }
+  return rows.join("\n");
 }
 
 async function main() {
-  console.log(`Translating ${readmePath} → ${target.name} (${target.code})`);
+  console.log(
+    `Translating ${readmePath} → ${target.name} (${target.code})${useFast ? " [fast mode]" : ""}`
+  );
   const start = Date.now();
 
+  const cache = useCache ? loadCache(absReadmePath) : createCache();
   const segments = segmentReadme(readme);
   const output = [];
-  let translatedCount = 0;
 
-  for (const seg of segments) {
-    switch (seg.type) {
-      case "protected":
-        output.push(seg.text);
-        break;
+  // Collect all translatable items for batching
+  const batchItems = []; // { segIndex, kind, text, cacheHit?, tableKey? }
 
-      case "html-tagline": {
-        // Extract inner text from <p><strong>text</strong></p>
-        const match = seg.text.match(/^(.+<strong>)([^<]+)(<\/strong>.+)$/);
-        if (match) {
-          const t = await translateText(match[2], "en", targetCode);
-          output.push(match[1] + t + match[3]);
-          translatedCount++;
-          process.stdout.write("H");
+  for (let s = 0; s < segments.length; s++) {
+    const seg = segments[s];
+
+    if (seg.type === "protected") {
+      continue; // nothing to translate
+    }
+
+    if (seg.type === "html-tagline") {
+      const match = seg.text.match(/^(.+<strong>)([^<]+)(<\/strong>.+)$/);
+      if (match) {
+        const key = cacheKey(match[2], targetCode, model);
+        const cached = getCached(cache, key);
+        if (cached) {
+          batchItems.push({ segIndex: s, kind: "text", text: match[2], cacheHit: cached });
         } else {
-          output.push(seg.text);
+          batchItems.push({ segIndex: s, kind: "text", text: match[2] });
         }
-        break;
       }
+      continue;
+    }
 
-      case "heading": {
-        const t = await translateText(seg.text, "en", targetCode, true);
-        output.push(seg.prefix + t);
-        translatedCount++;
+    if (seg.type === "heading") {
+      const key = cacheKey(seg.text, targetCode, model);
+      const cached = getCached(cache, key);
+      if (cached) {
+        batchItems.push({ segIndex: s, kind: "heading", text: seg.text, cacheHit: cached });
+      } else {
+        batchItems.push({ segIndex: s, kind: "heading", text: seg.text });
+      }
+      continue;
+    }
+
+    if (seg.type === "text") {
+      // Skip if it's just a package name or command
+      if (/^`[^`]+`$/.test(seg.text.trim())) continue;
+      const key = cacheKey(seg.text, targetCode, model);
+      const cached = getCached(cache, key);
+      if (cached) {
+        batchItems.push({ segIndex: s, kind: "text", text: seg.text, cacheHit: cached });
+      } else {
+        batchItems.push({ segIndex: s, kind: "text", text: seg.text });
+      }
+      continue;
+    }
+
+    if (seg.type === "table") {
+      const { parsed, translatableCells } = parseTable(seg.text);
+      seg._parsed = parsed; // stash for reassembly
+      for (const cell of translatableCells) {
+        const key = cacheKey(cell.text, targetCode, model);
+        const cached = getCached(cache, key);
+        const tableKey = `${cell.rowIdx}:${cell.cellIdx}`;
+        if (cached) {
+          batchItems.push({ segIndex: s, kind: "cell", text: cell.text, cacheHit: cached, tableKey });
+        } else {
+          batchItems.push({ segIndex: s, kind: "cell", text: cell.text, tableKey });
+        }
+      }
+      continue;
+    }
+  }
+
+  // Split into cache hits and misses
+  const misses = batchItems.filter((b) => !b.cacheHit);
+  const cacheHits = batchItems.length - misses.length;
+
+  console.log(
+    `${batchItems.length} translatable segments (${cacheHits} cached, ${misses.length} to translate)`
+  );
+
+  // Translate all misses in batches
+  let translations = [];
+  if (misses.length > 0) {
+    const items = misses.map((m) => ({ text: m.text, kind: m.kind }));
+    const result = await translateBatch(items, "en", targetCode, { model });
+    translations = result.translations;
+
+    // Store in cache
+    for (let i = 0; i < misses.length; i++) {
+      const key = cacheKey(misses[i].text, targetCode, model);
+      setCached(cache, key, translations[i], model);
+    }
+
+    console.log(`${result.ollamaCalls} Ollama call(s) for ${misses.length} segments`);
+  }
+
+  // Build a map of segIndex → translations
+  const translationMap = new Map(); // segIndex → translation (for non-table)
+  const tableTranslationMaps = new Map(); // segIndex → Map<tableKey, translation>
+
+  let missIdx = 0;
+  for (const item of batchItems) {
+    const translated = item.cacheHit ?? translations[missIdx++  - (item.cacheHit ? 1 : 0)];
+    // Recalculate: use a simpler approach
+  }
+
+  // Simpler: build translation for each batchItem
+  missIdx = 0;
+  for (const item of batchItems) {
+    let translated;
+    if (item.cacheHit) {
+      translated = item.cacheHit;
+    } else {
+      translated = translations[missIdx++];
+    }
+
+    const cleaned =
+      item.kind === "heading"
+        ? cleanTranslation(translated, true)
+        : cleanTranslation(translated);
+
+    if (item.tableKey !== undefined) {
+      if (!tableTranslationMaps.has(item.segIndex)) {
+        tableTranslationMaps.set(item.segIndex, new Map());
+      }
+      tableTranslationMaps.get(item.segIndex).set(item.tableKey, cleaned);
+    } else {
+      translationMap.set(item.segIndex, cleaned);
+    }
+  }
+
+  // Assemble output
+  for (let s = 0; s < segments.length; s++) {
+    const seg = segments[s];
+
+    if (seg.type === "protected") {
+      output.push(seg.text);
+      continue;
+    }
+
+    if (seg.type === "html-tagline") {
+      const match = seg.text.match(/^(.+<strong>)([^<]+)(<\/strong>.+)$/);
+      if (match && translationMap.has(s)) {
+        output.push(match[1] + translationMap.get(s) + match[3]);
+        process.stdout.write("H");
+      } else {
+        output.push(seg.text);
+      }
+      continue;
+    }
+
+    if (seg.type === "heading") {
+      if (translationMap.has(s)) {
+        output.push(seg.prefix + translationMap.get(s));
         process.stdout.write(".");
-        break;
+      } else {
+        output.push(seg.prefix + seg.text);
       }
+      continue;
+    }
 
-      case "text": {
-        const t = await translateText(seg.text, "en", targetCode);
-        output.push(t);
-        translatedCount++;
+    if (seg.type === "text") {
+      if (translationMap.has(s)) {
+        output.push(translationMap.get(s));
         process.stdout.write(".");
-        break;
+      } else {
+        output.push(seg.text);
       }
+      continue;
+    }
 
-      case "table": {
-        const t = await translateTable(seg.text, "en", targetCode);
-        output.push(t);
-        translatedCount++;
+    if (seg.type === "table") {
+      const tMap = tableTranslationMaps.get(s) ?? new Map();
+      if (seg._parsed) {
+        output.push(reassembleTable(seg._parsed, tMap));
         process.stdout.write("T");
-        break;
+      } else {
+        output.push(seg.text);
       }
+      continue;
     }
   }
 
   const result = output.join("\n");
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-  console.log(`\n\nDone! ${translatedCount} segments translated in ${elapsed}s`);
+  console.log(`\n\nDone! ${batchItems.length} segments in ${elapsed}s`);
 
   // Write output
   const ext = targetCode.toLowerCase();
   const outPath = readmePath.replace(/README\.md$/, `README.${ext}.md`);
   writeFileSync(outPath, result, "utf-8");
   console.log(`Written to: ${outPath}`);
+
+  // Save cache
+  if (useCache) {
+    saveCache(absReadmePath, cache);
+  }
 }
 
 main().catch((err) => {
