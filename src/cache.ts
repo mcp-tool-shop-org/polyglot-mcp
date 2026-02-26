@@ -52,9 +52,38 @@ export function saveCache(readmePath: string, cache: TranslationCache): void {
   writeFileSync(cachePath, JSON.stringify(cache, null, 2), "utf-8");
 }
 
-/** Look up a cached translation. Returns undefined on miss. */
-export function getCached(cache: TranslationCache, key: string): string | undefined {
-  return cache.entries[key]?.translation;
+/** Default cache TTL: 30 days in milliseconds. */
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Look up a cached translation. Returns undefined on miss or if expired. */
+export function getCached(cache: TranslationCache, key: string, ttlMs: number = CACHE_TTL_MS): string | undefined {
+  const entry = cache.entries[key];
+  if (!entry) return undefined;
+  if (Date.now() - entry.timestamp > ttlMs) {
+    delete cache.entries[key];
+    return undefined;
+  }
+  return entry.translation;
+}
+
+/** Remove all expired entries from the cache. Returns number of entries pruned. */
+export function pruneCache(cache: TranslationCache, ttlMs: number = CACHE_TTL_MS): number {
+  const now = Date.now();
+  let pruned = 0;
+  for (const key of Object.keys(cache.entries)) {
+    if (now - cache.entries[key].timestamp > ttlMs) {
+      delete cache.entries[key];
+      pruned++;
+    }
+  }
+  return pruned;
+}
+
+/** Clear all entries from the cache. Returns number of entries cleared. */
+export function clearCache(cache: TranslationCache): number {
+  const count = Object.keys(cache.entries).length;
+  cache.entries = {};
+  return count;
 }
 
 /** Store a translation in the cache. */

@@ -4,10 +4,11 @@
  * Translate a README.md using polyglot-mcp's translate engine.
  * Preserves code blocks, HTML, URLs, package names, and ASCII art.
  *
- * Usage: node scripts/translate-readme.mjs <readme-path> <target-lang-code> [--fast] [--no-cache]
+ * Usage: node scripts/translate-readme.mjs <readme-path> <target-lang-code> [--fast] [--no-cache] [--cache-clear]
  *
- * --fast     Use translategemma:2b for speed (lower quality)
- * --no-cache Skip the segment-level cache
+ * --fast        Use translategemma:2b for speed (lower quality)
+ * --no-cache    Skip the segment-level cache
+ * --cache-clear Clear all cached translations before translating
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -21,6 +22,8 @@ import {
   getCached,
   setCached,
   createCache,
+  clearCache,
+  pruneCache,
 } from "../dist/cache.js";
 
 // --- Parse args ---
@@ -43,6 +46,7 @@ if (!target) {
 
 const useFast = flags.has("--fast");
 const useCache = !flags.has("--no-cache");
+const doCacheClear = flags.has("--cache-clear");
 const model = useFast ? "translategemma:2b" : "translategemma:12b";
 const absReadmePath = resolve(readmePath);
 const readme = readFileSync(absReadmePath, "utf-8");
@@ -178,12 +182,22 @@ function cleanTranslation(text, isHeading = false) {
 
 /** Check if a table cell should be translated. */
 function isTranslatableCell(trimmed) {
+  // Single backtick term: `Read`
   if (/^`[^`]+`$/.test(trimmed)) return false;
+  // Multiple backtick terms: `Read`, `WebFetch`, `WebSearch`
+  if (/^(`[^`]+`[,\s]*)+$/.test(trimmed)) return false;
+  // Scoped package name
   if (/^@\w+\//.test(trimmed)) return false;
-  if (/^\*\*[A-Z]/.test(trimmed) && trimmed.length < 30) return false;
+  // Bold short label: **intake**
+  if (/^\*\*[A-Za-z]/.test(trimmed) && trimmed.length < 30) return false;
+  // Pure number
   if (/^\d+$/.test(trimmed)) return false;
+  // Markdown link
   if (/^\[.*\]\(.*\)$/.test(trimmed)) return false;
-  if (trimmed.length <= 5) return false;
+  // Em dash alone
+  if (trimmed === "—" || trimmed === "-") return false;
+  // Too short to be meaningful prose (2 chars or less)
+  if (trimmed.length <= 2) return false;
   return true;
 }
 
@@ -241,6 +255,18 @@ async function main() {
   const start = Date.now();
 
   const cache = useCache ? loadCache(absReadmePath) : createCache();
+
+  // Handle --cache-clear: wipe all entries, save, and continue with fresh cache
+  if (doCacheClear && useCache) {
+    const cleared = clearCache(cache);
+    saveCache(absReadmePath, cache);
+    if (cleared > 0) console.log(`Cleared ${cleared} cached entries`);
+  } else if (useCache) {
+    // Prune expired entries (30-day TTL)
+    const pruned = pruneCache(cache);
+    if (pruned > 0) console.log(`Pruned ${pruned} expired cache entries`);
+  }
+
   const segments = segmentReadme(readme);
   const output = [];
 
@@ -339,13 +365,6 @@ async function main() {
 
   let missIdx = 0;
   for (const item of batchItems) {
-    const translated = item.cacheHit ?? translations[missIdx++  - (item.cacheHit ? 1 : 0)];
-    // Recalculate: use a simpler approach
-  }
-
-  // Simpler: build translation for each batchItem
-  missIdx = 0;
-  for (const item of batchItems) {
     let translated;
     if (item.cacheHit) {
       translated = item.cacheHit;
@@ -422,6 +441,14 @@ async function main() {
 
   const result = output.join("\n");
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+
+  // Validate: line count should match source (translations don't add/remove lines)
+  const srcLines = readme.split("\n").length;
+  const outLines = result.split("\n").length;
+  if (outLines !== srcLines) {
+    console.warn(`\n⚠ Line count mismatch: source=${srcLines}, translated=${outLines} (delta=${outLines - srcLines})`);
+  }
+
   console.log(`\n\nDone! ${batchItems.length} segments in ${elapsed}s`);
 
   // Write output
