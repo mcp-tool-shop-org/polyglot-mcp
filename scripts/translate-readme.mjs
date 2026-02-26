@@ -190,14 +190,16 @@ function isTranslatableCell(trimmed) {
   if (/^@\w+\//.test(trimmed)) return false;
   // Bold short label: **intake**
   if (/^\*\*[A-Za-z]/.test(trimmed) && trimmed.length < 30) return false;
-  // Pure number
-  if (/^\d+$/.test(trimmed)) return false;
+  // Pure number or version-like
+  if (/^[\d.]+$/.test(trimmed)) return false;
   // Markdown link
   if (/^\[.*\]\(.*\)$/.test(trimmed)) return false;
   // Em dash alone
   if (trimmed === "—" || trimmed === "-") return false;
   // Too short to be meaningful prose (2 chars or less)
   if (trimmed.length <= 2) return false;
+  // No letters at all (pure punctuation/symbols/numbers)
+  if (!/[A-Za-z\u00C0-\u024F]/.test(trimmed)) return false;
   return true;
 }
 
@@ -335,28 +337,44 @@ async function main() {
     }
   }
 
-  // Split into cache hits and misses
+  // Split into cache hits and misses, then deduplicate misses
   const misses = batchItems.filter((b) => !b.cacheHit);
   const cacheHits = batchItems.length - misses.length;
 
+  // Deduplicate: many tables repeat identical text ("Yes", "No", "N/A", etc.)
+  const uniqueTexts = new Map(); // text → index in uniqueItems
+  const uniqueItems = [];        // deduplicated list for translateBatch
+  const missToUnique = [];       // missIdx → uniqueIdx
+
+  for (const m of misses) {
+    if (uniqueTexts.has(m.text)) {
+      missToUnique.push(uniqueTexts.get(m.text));
+    } else {
+      const idx = uniqueItems.length;
+      uniqueTexts.set(m.text, idx);
+      uniqueItems.push({ text: m.text, kind: m.kind });
+      missToUnique.push(idx);
+    }
+  }
+
+  const deduped = misses.length - uniqueItems.length;
   console.log(
-    `${batchItems.length} translatable segments (${cacheHits} cached, ${misses.length} to translate)`
+    `${batchItems.length} translatable segments (${cacheHits} cached, ${uniqueItems.length} to translate${deduped > 0 ? `, ${deduped} deduplicated` : ""})`
   );
 
-  // Translate all misses in batches
-  let translations = [];
-  if (misses.length > 0) {
-    const items = misses.map((m) => ({ text: m.text, kind: m.kind }));
-    const result = await translateBatch(items, "en", targetCode, { model });
-    translations = result.translations;
+  // Translate unique misses in batches
+  let uniqueTranslations = [];
+  if (uniqueItems.length > 0) {
+    const result = await translateBatch(uniqueItems, "en", targetCode, { model });
+    uniqueTranslations = result.translations;
 
-    // Store in cache
-    for (let i = 0; i < misses.length; i++) {
-      const key = cacheKey(misses[i].text, targetCode, model);
-      setCached(cache, key, translations[i], model);
+    // Store each unique translation in cache
+    for (let i = 0; i < uniqueItems.length; i++) {
+      const key = cacheKey(uniqueItems[i].text, targetCode, model);
+      setCached(cache, key, uniqueTranslations[i], model);
     }
 
-    console.log(`${result.ollamaCalls} Ollama call(s) for ${misses.length} segments`);
+    console.log(`${result.ollamaCalls} Ollama call(s) for ${uniqueItems.length} unique segments`);
   }
 
   // Build a map of segIndex → translations
@@ -369,7 +387,7 @@ async function main() {
     if (item.cacheHit) {
       translated = item.cacheHit;
     } else {
-      translated = translations[missIdx++];
+      translated = uniqueTranslations[missToUnique[missIdx++]];
     }
 
     const cleaned =

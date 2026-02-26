@@ -11,10 +11,11 @@ import { z } from "zod";
 import { translate } from "./translate.js";
 import { LANGUAGES } from "./languages.js";
 import { OllamaClient } from "./ollama.js";
+import { VERSION } from "./version.js";
 
 const server = new McpServer({
   name: "polyglot-mcp",
-  version: "1.1.0",
+  version: VERSION,
 });
 
 // --- Tools ---

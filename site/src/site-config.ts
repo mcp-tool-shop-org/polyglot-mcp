@@ -7,7 +7,7 @@ export const config: SiteConfig = {
   brandName: 'Polyglot MCP',
   repoUrl: 'https://github.com/mcp-tool-shop-org/polyglot-mcp',
   npmUrl: 'https://www.npmjs.com/package/@mcptoolshop/polyglot-mcp',
-  footerText: 'MIT Licensed — built by <a href="https://github.com/mcp-tool-shop-org" style="color:var(--color-muted);text-decoration:underline">mcp-tool-shop-org</a>',
+  footerText: 'MIT Licensed — built by <a href="https://mcp-tool-shop.github.io/" style="color:var(--color-muted);text-decoration:underline">MCP Tool Shop</a>',
 
   hero: {
     badge: '55 languages · local GPU · zero cloud',

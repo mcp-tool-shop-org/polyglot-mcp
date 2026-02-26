@@ -105,4 +105,4 @@ On an RTX 5080 (16 GB VRAM) with TranslateGemma 12B (Q4):
 
 MIT License — see [LICENSE](LICENSE) for details.
 
-> Part of [MCP Tool Shop](https://mcptoolshop.com)
+> Built by [MCP Tool Shop](https://mcp-tool-shop.github.io/)

@@ -9,11 +9,11 @@
  * --fast            Use translategemma:2b for speed (lower quality)
  * --no-cache        Skip the segment-level cache
  * --cache-clear     Clear all cached translations before translating
- * --concurrency=N   Run N languages in parallel (default 1, max 3)
+ * --concurrency=N   Run N languages in parallel (default 2, max 3)
  * --no-nav-bar      Skip language nav bar injection
  */
 
-import { execFileSync, execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -50,47 +50,41 @@ const LANGUAGES = [
   { code: "pt", name: "Portuguese", label: "Português (BR)", file: "pt-BR" },
 ];
 
-// Parse --concurrency=N flag (default 1 = sequential, max 3)
+// Parse --concurrency=N flag (default 2, max 3)
 const concurrencyFlag = flags.find((f) => f.startsWith("--concurrency="));
-const concurrency = Math.min(3, Math.max(1, parseInt(concurrencyFlag?.split("=")[1] ?? "1", 10)));
+const concurrency = Math.min(3, Math.max(1, parseInt(concurrencyFlag?.split("=")[1] ?? "2", 10)));
 const noNavBar = flags.includes("--no-nav-bar");
 
 const readmeDir = dirname(absReadmePath);
 const results = [];
 const totalStart = Date.now();
 let failed = 0;
+let completed = 0;
 
 const passFlags = flags.filter((f) => !f.startsWith("--concurrency") && f !== "--no-nav-bar");
 
-/** Translate a single language (sync). Returns a result object. */
-function translateLangSync(lang) {
-  const langStart = Date.now();
-  try {
-    execFileSync("node", [translateScript, absReadmePath, lang.code, ...passFlags], {
-      stdio: "inherit",
-      timeout: 300_000,
-    });
-    return finishLang(lang, langStart);
-  } catch (err) {
-    const elapsed = ((Date.now() - langStart) / 1000).toFixed(1);
-    return { lang: lang.code, name: lang.name, status: "error", time: elapsed, error: err.message };
-  }
-}
+console.log(`Translating ${basename(absReadmePath)} → ${LANGUAGES.length} languages (concurrency=${concurrency})`);
 
 /** Translate a single language (async). Returns a result object. */
-async function translateLangAsync(lang) {
+async function translateLang(lang) {
   const langStart = Date.now();
+  console.log(`  [start] ${lang.name} (${lang.code})`);
   try {
     const { stdout, stderr } = await execFileAsync("node", [translateScript, absReadmePath, lang.code, ...passFlags], {
-      timeout: 300_000,
+      timeout: 180_000,
     });
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);
-    return finishLang(lang, langStart);
+    const result = finishLang(lang, langStart);
+    completed++;
+    console.log(`  [done]  ${lang.name} — ${result.time}s (${completed}/${LANGUAGES.length})`);
+    return result;
   } catch (err) {
     if (err.stdout) process.stdout.write(err.stdout);
     if (err.stderr) process.stderr.write(err.stderr);
     const elapsed = ((Date.now() - langStart) / 1000).toFixed(1);
+    completed++;
+    console.error(`  [FAIL]  ${lang.name} after ${elapsed}s — ${err.message.split("\n")[0]}`);
     return { lang: lang.code, name: lang.name, status: "error", time: elapsed, error: err.message };
   }
 }
@@ -110,24 +104,13 @@ function finishLang(lang, langStart) {
   return { lang: lang.code, name: lang.name, status: "ok", time: elapsed, file: outputFile };
 }
 
-// Run translations with concurrency
-if (concurrency <= 1) {
-  // Sequential (original behavior, uses inherit stdio for live progress)
-  for (const lang of LANGUAGES) {
-    const result = translateLangSync(lang);
-    results.push(result);
-    if (result.status === "error") failed++;
-  }
-} else {
-  // Parallel batches (output buffered per language)
-  console.log(`Running with concurrency=${concurrency}`);
-  for (let i = 0; i < LANGUAGES.length; i += concurrency) {
-    const batch = LANGUAGES.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map((lang) => translateLangAsync(lang)));
-    for (const r of batchResults) {
-      results.push(r);
-      if (r.status === "error") failed++;
-    }
+// Run translations in parallel batches with semaphore
+for (let i = 0; i < LANGUAGES.length; i += concurrency) {
+  const batch = LANGUAGES.slice(i, i + concurrency);
+  const batchResults = await Promise.all(batch.map((lang) => translateLang(lang)));
+  for (const r of batchResults) {
+    results.push(r);
+    if (r.status === "error") failed++;
   }
 }
 
