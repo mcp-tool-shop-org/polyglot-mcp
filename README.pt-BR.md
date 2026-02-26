@@ -2,7 +2,9 @@
   <strong>English</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português</a>
 </p>
 
-<p align="center"><img src="logo.png" alt="Polyglot MCP" width="340"></p>
+<p align="center">
+            <img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/polyglot-mcp/readme.png"
+           alt="Polyglot MCP" width="340"></p>
 
 <p align="center"><strong>Servidor de tradução local com GPU – 55 idiomas, sem dependência de serviços em nuvem.</strong></p>
 
