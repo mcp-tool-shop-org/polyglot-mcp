@@ -1,12 +1,13 @@
 <p align="center">
-  <strong>English</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.md">English</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center"><img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/polyglot-mcp/readme.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center"><strong>Server di traduzione GPU locale — 55 lingue, nessuna dipendenza dal cloud.</strong></p>
+<p align="center"><strong>Local GPU translation MCP server — 55 languages, zero cloud dependency.</strong></p>
 
 <p align="center">
+  <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@mcptoolshop/polyglot-mcp"><img src="https://img.shields.io/npm/v/@mcptoolshop/polyglot-mcp.svg" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-18%2B-brightgreen.svg" alt="node 18+"></a>
@@ -18,7 +19,7 @@
 
 ## Cosa fa
 
-Traduce testi tra 55 lingue utilizzando [TranslateGemma](https://ollama.com/library/translategemma), eseguito localmente sulla tua GPU tramite [Ollama](https://ollama.com). Nessuna chiave API, nessun cloud, nessun limite di velocità: tutto viene eseguito sulla tua macchina.
+Traduce testi tra 55 lingue utilizzando [TranslateGemma](https://ollama.com/library/translategemma), eseguito localmente sulla tua GPU tramite [Ollama](https://ollama.com). Non sono necessarie chiavi API, non si utilizza il cloud e non ci sono limiti di utilizzo: tutto viene eseguito sulla tua macchina.
 
 ## Prerequisiti
 
@@ -31,11 +32,11 @@ ollama pull translategemma:4b    # 3.3 GB — più veloce, qualità inferiore
 ```
 3. **Node.js 18+**
 
-## Configurazione
+## Installazione
 
 ### Claude Code / Claude Desktop
 
-Aggiungi alla configurazione di MCP (`claude_desktop_config.json` o `.mcp.json`):
+Aggiungi alla tua configurazione MCP (`claude_desktop_config.json` o `.mcp.json`):
 
 ```json
 {
@@ -65,9 +66,9 @@ Traduce testi tra qualsiasi coppia di lingue supportate.
 
 | Parametro | Obbligatorio | Descrizione |
 |-----------|----------|-------------|
-| `text` | yes | Testo da tradurre |
-| `from` | yes | Codice o nome della lingua di origine (es. `en`, `English`) |
-| `to` | yes | Codice o nome della lingua di destinazione (es. `ja`, `Japanese`) |
+| `text` | sì | Testo da tradurre |
+| `from` | sì | Codice o nome della lingua di origine (es. `en`, `English`) |
+| `to` | sì | Codice o nome della lingua di destinazione (es. `ja`, `Japanese`) |
 | `model` | no | Modello Ollama (predefinito: `translategemma:12b`) |
 
 ### `list_languages`
@@ -86,12 +87,16 @@ Afrikaans, albanese, arabo, bengalese, bulgaro, catalano, cinese (semplificato),
 
 Su una RTX 5080 (16 GB di VRAM) con TranslateGemma 12B (Q4):
 
-| Metrica | Value |
+| Metrica | Valore |
 |--------|-------|
-| Prima traduzione (caricamento iniziale) | ~15s |
-| Traduzioni successive | ~600ms |
+| Prima traduzione (caricamento iniziale) | ~15 secondi |
+| Traduzioni successive | ~600 ms |
 | Utilizzo della VRAM | ~8.1 GB |
-| Testo lungo (diviso in blocchi) | ~600ms per blocco |
+| Testo lungo (diviso in blocchi) | ~600 ms per blocco |
+
+## Sicurezza e ambito dei dati
+
+**Dati utilizzati:** testo inviato all'API locale di Ollama (`localhost:11434`) per la traduzione, cache di segmenti `.polyglot-cache.json`. **Dati NON utilizzati:** nessun file al di fuori della directory di lavoro, nessun dato del browser, nessuna credenziale del sistema operativo. **Rete:** connessioni HTTP solo a `localhost:11434` — nessuna connessione esterna o internet. **Non vengono raccolti o inviati dati di telemetria**.
 
 ## Come funziona
 
@@ -105,4 +110,4 @@ Su una RTX 5080 (16 GB di VRAM) con TranslateGemma 12B (Q4):
 
 Licenza MIT — consulta [LICENSE](LICENSE) per i dettagli.
 
-> Parte di [MCP Tool Shop](https://mcptoolshop.com)
+> Creato da [MCP Tool Shop](https://mcp-tool-shop.github.io/)

@@ -1,12 +1,13 @@
 <p align="center">
-  <strong>English</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.md">English</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center"><img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/polyglot-mcp/readme.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center"><strong>本地 GPU 翻译 MCP 服务器 — 支持 55 种语言，无需云端依赖。</strong></p>
+<p align="center"><strong>Local GPU translation MCP server — 55 languages, zero cloud dependency.</strong></p>
 
 <p align="center">
+  <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@mcptoolshop/polyglot-mcp"><img src="https://img.shields.io/npm/v/@mcptoolshop/polyglot-mcp.svg" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-18%2B-brightgreen.svg" alt="node 18+"></a>
@@ -16,22 +17,22 @@
 
 ---
 
-## 功能
+## 它所做的事情
 
-使用 [TranslateGemma](https://ollama.com/library/translategemma) 模型，通过 [Ollama](https://ollama.com) 在您的 GPU 上本地运行，实现 55 种语言之间的文本翻译。无需 API 密钥，无需云服务，无需速率限制——所有操作都在您的机器上完成。
+使用 [TranslateGemma](https://ollama.com/library/translategemma) 在本地通过 [Ollama](https://ollama.com) 在您的 GPU 上运行，将文本翻译成 55 种语言。无需 API 密钥，无需云服务，无需速率限制——所有内容都在您的机器上运行。
 
 ## 先决条件
 
 1. **[Ollama](https://ollama.com)** 已安装并正在运行 (`ollama serve`)
 2. 下载 **TranslateGemma** 模型：
 ```bash
-ollama pull translategemma:12b   # 8.1 GB — 质量/速度平衡最佳
+ollama pull translategemma:12b   # 8.1 GB — 质量/速度的最佳平衡
 # 或者
-ollama pull translategemma:4b    # 3.3 GB — 速度更快，质量稍低
+ollama pull translategemma:4b    # 3.3 GB — 速度更快，质量较低
 ```
 3. **Node.js 18+**
 
-## 配置
+## 安装
 
 ### Claude Code / Claude Desktop
 
@@ -48,7 +49,7 @@ ollama pull translategemma:4b    # 3.3 GB — 速度更快，质量稍低
 }
 ```
 
-### 从源代码
+### 从源代码安装
 
 ```bash
 git clone https://github.com/mcp-tool-shop-org/polyglot-mcp.git
@@ -65,9 +66,9 @@ node dist/index.js
 
 | 参数 | 必需 | 描述 |
 |-----------|----------|-------------|
-| `text` | yes | 要翻译的文本 |
-| `from` | yes | 源语言代码或名称（例如：`en`，`English`） |
-| `to` | yes | 目标语言代码或名称（例如：`ja`，`Japanese`） |
+| `text` | 是 | 要翻译的文本 |
+| `from` | 是 | 源语言代码或名称（例如：`en`，`English`） |
+| `to` | 是 | 目标语言代码或名称（例如：`ja`，`Japanese`） |
 | `model` | no | Ollama 模型（默认：`translategemma:12b`） |
 
 ### `list_languages`
@@ -80,29 +81,33 @@ node dist/index.js
 
 ## 支持的语言
 
-阿法卡语、阿尔巴尼亚语、阿拉伯语、孟加拉语、保加利亚语、加泰罗尼亚语、简体中文、繁体中文、克罗地亚语、捷克语、丹麦语、荷兰语、英语、爱沙尼亚语、芬兰语、法语、加利西亚语、德语、希腊语、古吉拉特语、希伯来语、印地语、匈牙利语、印度尼西亚语、爱尔兰语、意大利语、日语、卡纳达语、韩语、拉脱维亚语、立陶宛语、马其顿语、马来语、马拉雅拉姆语、马耳他语、马拉提语、挪威语、波斯语、波兰语、葡萄牙语、罗马尼亚语、俄语、苏格兰盖尔语、塞尔维亚语、斯洛伐克语、斯洛文尼亚语、西班牙语、斯瓦希里语、瑞典语、泰米尔语、泰卢固语、泰语、土耳其语、乌克兰语、乌尔都语、越南语、威尔士语。
+阿法语、阿尔巴尼亚语、阿拉伯语、孟加拉语、保加利亚语、加泰罗尼亚语、中文（简体）、中文（繁体）、克罗地亚语、捷克语、丹麦语、荷兰语、英语、爱沙尼亚语、芬兰语、法语、加利西亚语、德语、希腊语、古吉拉特语、希伯来语、印地语、匈牙利语、印度尼西亚语、爱尔兰语、意大利语、日语、卡纳达语、韩语、拉脱维亚语、立陶宛语、马其顿语、马来语、马拉雅拉姆语、马耳他语、马拉地语、挪威语、波斯语、波兰语、葡萄牙语、罗马尼亚语、俄语、苏格兰盖尔语、塞尔维亚语、斯洛伐克语、斯洛文尼亚语、西班牙语、斯瓦希里语、瑞典语、泰米尔语、泰卢固语、泰语、土耳其语、乌克兰语、乌尔都语、越南语、威尔士语。
 
 ## 性能
 
 在配备 RTX 5080 (16 GB VRAM) 的机器上，使用 TranslateGemma 12B (Q4)：
 
-| 指标 | Value |
+| 指标 | 数值 |
 |--------|-------|
-| 首次翻译（冷启动） | ~15s |
+| 首次翻译（冷启动） | ~15 秒 |
 | 后续翻译 | ~600 毫秒 |
 | VRAM 使用量 | ~8.1 GB |
-| 长文本（分块处理） | ~600 毫秒/块 |
+| 长文本（分块） | 每个块 ~600 毫秒 |
+
+## 安全性和数据范围
+
+**涉及的数据：** 发送到本地 Ollama API (`localhost:11434`) 进行翻译的文本，以及 `.polyglot-cache.json` 分段缓存。 **未涉及的数据：** 不会读取工作目录之外的文件，不会读取浏览器数据，不会读取操作系统凭据。 **网络：** 仅限 HTTP 连接到 `localhost:11434`，没有外部/互联网访问。 **不会收集或发送任何遥测数据**。
 
 ## 工作原理
 
 1. 您的 MCP 客户端（Claude Code 等）调用 `translate` 工具。
 2. Polyglot 构建一个 TranslateGemma 提示，包含源语言/目标语言对。
-3. 该提示发送到 Ollama 的本地 HTTP API。
-4. Ollama 在您的 GPU 上运行 TranslateGemma，并返回翻译结果。
-5. 对于长文本，内容会被分割成块，每个块对应一个段落或句子。
+3. 提示发送到 Ollama 的本地 HTTP API。
+4. Ollama 在您的 GPU 上运行 TranslateGemma 并返回翻译结果。
+5. 对于长文本，内容会分割成块，分割点位于段落/句子边界。
 
 ## 许可证
 
 MIT 许可证 — 详情请参见 [LICENSE](LICENSE)。
 
-> [MCP Tool Shop](https://mcptoolshop.com) 的一部分。
+> 由 [MCP Tool Shop](https://mcp-tool-shop.github.io/) 构建。

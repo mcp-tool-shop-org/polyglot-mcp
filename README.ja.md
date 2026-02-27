@@ -1,12 +1,13 @@
 <p align="center">
-  <strong>English</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português</a>
+  <a href="README.md">English</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center"><img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/polyglot-mcp/readme.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center"><strong>ローカルGPU翻訳MCPサーバー — 55言語に対応、クラウド依存なし。</strong></p>
+<p align="center"><strong>Local GPU translation MCP server — 55 languages, zero cloud dependency.</strong></p>
 
 <p align="center">
+  <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@mcptoolshop/polyglot-mcp"><img src="https://img.shields.io/npm/v/@mcptoolshop/polyglot-mcp.svg" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-18%2B-brightgreen.svg" alt="node 18+"></a>
@@ -16,16 +17,16 @@
 
 ---
 
-## 機能
+## 何をするものか
 
-[TranslateGemma](https://ollama.com/library/translategemma) を[Ollama](https://ollama.com) を使用して、ローカルのGPU上で動作させ、55言語間のテキスト翻訳を行います。 APIキーも、クラウド接続も、レート制限も不要です。すべてがあなたのマシン上で実行されます。
+[TranslateGemma](https://ollama.com/library/translategemma) を使用して、55の言語間でテキストを翻訳します。これは、[Ollama](https://ollama.com) を介して、ローカルのGPUで実行されます。APIキーは不要で、クラウドも使用せず、レート制限もありません。すべてがあなたのマシン上で実行されます。
 
 ## 前提条件
 
 1. **[Ollama](https://ollama.com)** がインストールされ、実行中であること (`ollama serve` コマンドで起動)。
-2. **TranslateGemma** モデルをダウンロードする:
+2. **TranslateGemma** モデルがダウンロードされていること:
 ```bash
-ollama pull translategemma:12b   # 8.1 GB — 最高の品質/速度のバランス
+ollama pull translategemma:12b   # 8.1 GB — 品質/速度のバランスが良い
 # または
 ollama pull translategemma:4b    # 3.3 GB — より高速だが、品質は低い
 ```
@@ -65,18 +66,18 @@ node dist/index.js
 
 | パラメータ | 必須 | 説明 |
 |-----------|----------|-------------|
-| `text` | yes | 翻訳するテキスト |
-| `from` | yes | ソース言語のコードまたは名前 (例: `en`, `English`) |
-| `to` | yes | ターゲット言語のコードまたは名前 (例: `ja`, `Japanese`) |
+| `text` | はい | 翻訳するテキスト |
+| `from` | はい | ソース言語のコードまたは名前 (例: `en`, `English`) |
+| `to` | はい | ターゲット言語のコードまたは名前 (例: `ja`, `Japanese`) |
 | `model` | no | Ollamaモデル (デフォルト: `translategemma:12b`) |
 
 ### `list_languages`
 
-サポートされている55の言語を、それぞれのコードとともに一覧表示します。
+サポートされている55の言語とそのコードをすべて表示します。
 
 ### `check_status`
 
-Ollamaが実行されているかどうか、およびインストールされているTranslateGemmaモデルを確認します。
+Ollamaが実行されているかどうか、およびどのTranslateGemmaモデルがインストールされているかを確認します。
 
 ## サポートされている言語
 
@@ -86,12 +87,16 @@ Ollamaが実行されているかどうか、およびインストールされ�
 
 RTX 5080 (16 GB VRAM) で、TranslateGemma 12B (Q4) を使用した場合:
 
-| 指標 | Value |
+| 指標 | 値 |
 |--------|-------|
-| 初回翻訳 (コールドロード) | ~15s |
-| その後の翻訳 | 約600ms |
+| 最初の翻訳 (コールドロード) | 約15秒 |
+| その後の翻訳 | 約600ミリ秒 |
 | VRAM使用量 | 約8.1 GB |
-| 長いテキスト (チャンク分割) | チャンクあたり約600ms |
+| 長いテキスト (チャンク分割) | チャンクあたり約600ミリ秒 |
+
+## セキュリティとデータ範囲
+
+**アクセスされるデータ:** 翻訳のためにローカルのOllama API (`localhost:11434`) に送信されるテキスト、`.polyglot-cache.json` セグメントキャッシュ。 **アクセスされないデータ:** ワーキングディレクトリ外のファイル、ブラウザデータ、OSの認証情報。 **ネットワーク:** `localhost:11434` へのHTTP通信のみ。外部/インターネットへのアクセスはありません。 **テレメトリは収集または送信されません。**
 
 ## 仕組み
 
@@ -105,4 +110,4 @@ RTX 5080 (16 GB VRAM) で、TranslateGemma 12B (Q4) を使用した場合:
 
 MITライセンス — 詳細については、[LICENSE](LICENSE) を参照してください。
 
-> [MCP Tool Shop](https://mcptoolshop.com) の一部
+> [MCP Tool Shop](https://mcp-tool-shop.github.io/) が作成しました。

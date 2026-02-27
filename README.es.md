@@ -1,12 +1,13 @@
 <p align="center">
-  <strong>English</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.md">English</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center"><img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/polyglot-mcp/readme.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center"><strong>Servidor de traducción local con GPU — 55 idiomas, sin dependencia de la nube.</strong></p>
+<p align="center"><strong>Local GPU translation MCP server — 55 languages, zero cloud dependency.</strong></p>
 
 <p align="center">
+  <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@mcptoolshop/polyglot-mcp"><img src="https://img.shields.io/npm/v/@mcptoolshop/polyglot-mcp.svg" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-18%2B-brightgreen.svg" alt="node 18+"></a>
@@ -18,7 +19,7 @@
 
 ## ¿Qué hace?
 
-Traduce texto entre 55 idiomas utilizando [TranslateGemma](https://ollama.com/library/translategemma), que se ejecuta localmente en su GPU a través de [Ollama](https://ollama.com). No requiere claves de API, ni conexión a la nube, ni límites de uso; todo se ejecuta en su máquina.
+Traduce texto entre 55 idiomas utilizando [TranslateGemma](https://ollama.com/library/translategemma), que se ejecuta localmente en su GPU a través de [Ollama](https://ollama.com). No requiere claves de API, ni servicios en la nube, ni límites de uso; todo se ejecuta en su máquina.
 
 ## Requisitos previos
 
@@ -65,14 +66,14 @@ Traduce texto entre cualquier par de idiomas soportados.
 
 | Parámetro | Obligatorio | Descripción |
 |-----------|----------|-------------|
-| `text` | yes | Texto a traducir |
-| `from` | yes | Código o nombre del idioma de origen (ej., `en`, `English`). |
-| `to` | yes | Código o nombre del idioma de destino (ej., `ja`, `Japanese`). |
+| `text` | sí | Texto a traducir |
+| `from` | sí | Código o nombre del idioma de origen (ej., `en`, `English`). |
+| `to` | sí | Código o nombre del idioma de destino (ej., `ja`, `Japanese`). |
 | `model` | no | Modelo de Ollama (por defecto: `translategemma:12b`). |
 
 ### `list_languages`
 
-Lista los 55 idiomas soportados con sus códigos.
+Lista todos los 55 idiomas soportados con sus códigos.
 
 ### `check_status`
 
@@ -86,12 +87,16 @@ Afrikáans, albanés, árabe, bengalí, búlgaro, catalán, chino (simplificado)
 
 En una RTX 5080 (16 GB de VRAM) con TranslateGemma 12B (Q4):
 
-| Métrica | Value |
+| Métrica | Valor |
 |--------|-------|
-| Primera traducción (carga inicial) | ~15s |
+| Primera traducción (carga inicial) | ~15 segundos |
 | Traducciones posteriores | ~600 ms |
 | Uso de VRAM | ~8.1 GB |
 | Texto largo (dividido en fragmentos) | ~600 ms por fragmento |
+
+## Seguridad y alcance de los datos
+
+**Datos accedidos:** texto enviado a la API local de Ollama (`localhost:11434`) para la traducción, caché de segmentos `.polyglot-cache.json`. **Datos NO accedidos:** no hay archivos fuera del directorio de trabajo, no hay datos del navegador, no hay credenciales del sistema operativo. **Red:** solo HTTP a `localhost:11434` — no hay conexiones externas ni a Internet. **No se recopila ni se envía** telemetría.
 
 ## Cómo funciona
 
@@ -105,4 +110,4 @@ En una RTX 5080 (16 GB de VRAM) con TranslateGemma 12B (Q4):
 
 Licencia MIT — consulte [LICENSE](LICENSE) para obtener más detalles.
 
-> Parte de [MCP Tool Shop](https://mcptoolshop.com)
+> Creado por [MCP Tool Shop](https://mcp-tool-shop.github.io/)
