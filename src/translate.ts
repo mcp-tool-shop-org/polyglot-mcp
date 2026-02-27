@@ -11,6 +11,7 @@ import {
   type GlossaryEntry,
 } from "./glossary.js";
 import { polish } from "./polish.js";
+import { PolyglotError } from "./errors.js";
 
 const DEFAULT_MODEL = "translategemma:12b";
 const BATCH_SEPARATOR = "\n---POLYGLOT_SEP---\n";
@@ -136,35 +137,52 @@ async function resolveSetup(
 ) {
   const source = resolveLanguage(sourceLang);
   if (!source) {
-    throw new Error(
-      `Unsupported source language: "${sourceLang}". Use list_languages to see supported languages.`
-    );
+    throw new PolyglotError({
+      code: "UNSUPPORTED_LANGUAGE",
+      message: `Unsupported source language: "${sourceLang}".`,
+      hint: "Use the list_languages tool to see all 55 supported languages.",
+      retryable: false,
+    });
   }
 
   const target = resolveLanguage(targetLang);
   if (!target) {
-    throw new Error(
-      `Unsupported target language: "${targetLang}". Use list_languages to see supported languages.`
-    );
+    throw new PolyglotError({
+      code: "UNSUPPORTED_LANGUAGE",
+      message: `Unsupported target language: "${targetLang}".`,
+      hint: "Use the list_languages tool to see all 55 supported languages.",
+      retryable: false,
+    });
   }
 
   if (source.code === target.code) {
-    throw new Error("Source and target languages must be different.");
+    throw new PolyglotError({
+      code: "SAME_LANGUAGE",
+      message: "Source and target languages must be different.",
+      hint: "Nothing to translate — source and target are the same.",
+      retryable: false,
+    });
   }
 
   const model = options.model ?? DEFAULT_MODEL;
   const client = new OllamaClient(options.ollamaUrl);
 
   if (!(await client.ensureRunning())) {
-    throw new Error(
-      "Could not start Ollama. Install it from https://ollama.com then try again."
-    );
+    throw new PolyglotError({
+      code: "OLLAMA_UNAVAILABLE",
+      message: "Could not start Ollama.",
+      hint: "Install it from https://ollama.com then try again.",
+      retryable: true,
+    });
   }
 
   if (!(await client.ensureModel(model))) {
-    throw new Error(
-      `Could not pull model "${model}". Run manually: ollama pull ${model}`
-    );
+    throw new PolyglotError({
+      code: "MODEL_PULL_FAILED",
+      message: `Could not pull model "${model}".`,
+      hint: `Run manually: ollama pull ${model}`,
+      retryable: true,
+    });
   }
 
   const glossaryEntries: GlossaryEntry[] = [];

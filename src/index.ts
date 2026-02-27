@@ -12,6 +12,7 @@ import { translate } from "./translate.js";
 import { LANGUAGES } from "./languages.js";
 import { OllamaClient } from "./ollama.js";
 import { VERSION } from "./version.js";
+import { friendlyError } from "./errors.js";
 
 const server = new McpServer({
   name: "polyglot-mcp",
@@ -73,12 +74,11 @@ server.tool(
         ],
       };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       return {
         content: [
           {
             type: "text" as const,
-            text: friendlyError(msg),
+            text: friendlyError(err),
           },
         ],
         isError: true,
@@ -171,48 +171,6 @@ server.tool(
     };
   }
 );
-
-// --- Friendly error messages ---
-
-function friendlyError(msg: string): string {
-  // Connection errors
-  if (msg.includes("Cannot connect") || msg.includes("fetch failed")) {
-    return [
-      "Cannot reach Ollama.",
-      "",
-      "Polyglot tried to auto-start it but couldn't connect.",
-      "Make sure Ollama is installed (https://ollama.com) and try again.",
-    ].join("\n");
-  }
-
-  // Model not found
-  if (msg.includes("not found")) {
-    return [
-      msg,
-      "",
-      "The translate tool normally auto-pulls models, but the pull may have",
-      "failed. Check your internet connection and try: ollama pull translategemma:12b",
-    ].join("\n");
-  }
-
-  // Unsupported language
-  if (msg.includes("Unsupported")) {
-    return [
-      msg,
-      "",
-      "Use the list_languages tool to see all 55 supported languages.",
-      "You can use either language codes (\"en\") or names (\"English\").",
-    ].join("\n");
-  }
-
-  // Same language
-  if (msg.includes("must be different")) {
-    return "Source and target languages are the same — nothing to translate.";
-  }
-
-  // Generic fallback
-  return `Translation failed: ${msg}`;
-}
 
 // --- Start ---
 

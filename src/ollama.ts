@@ -5,6 +5,7 @@
  */
 
 import { execSync, spawn } from "node:child_process";
+import { PolyglotError } from "./errors.js";
 
 /** Default timeout for generate calls (60s — covers cold-load + inference). */
 const GENERATE_TIMEOUT_MS = 60_000;
@@ -58,33 +59,47 @@ export class OllamaClient {
     } catch (err) {
       const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
       if (err instanceof DOMException && err.name === "AbortError") {
-        throw new Error(
-          `Ollama generate timed out after ${elapsed}s (model: ${req.model}). ` +
-          `Possible causes: model still loading into VRAM, GPU under pressure, or Ollama stalled. ` +
-          `Try: restart Ollama, reduce parallelism, or use a smaller model (translategemma:4b).`
-        );
+        throw new PolyglotError({
+          code: "OLLAMA_TIMEOUT",
+          message: `Ollama generate timed out after ${elapsed}s (model: ${req.model}).`,
+          hint: "Restart Ollama, reduce parallelism, or use a smaller model (translategemma:4b).",
+          retryable: true,
+        });
       }
       if (err instanceof TypeError && String(err.message).includes("fetch")) {
-        throw new Error(
-          "Cannot connect to Ollama. Is it running? Start with: ollama serve"
-        );
+        throw new PolyglotError({
+          code: "OLLAMA_UNAVAILABLE",
+          message: "Cannot connect to Ollama.",
+          hint: "Is it running? Start with: ollama serve",
+          retryable: true,
+        });
       }
-      throw new Error(
-        `Network error reaching Ollama after ${elapsed}s: ${err instanceof Error ? err.message : String(err)}`
-      );
+      throw new PolyglotError({
+        code: "NETWORK_ERROR",
+        message: `Network error reaching Ollama after ${elapsed}s.`,
+        hint: "Check that Ollama is running and responsive.",
+        cause: err instanceof Error ? err : undefined,
+        retryable: true,
+      });
     } finally {
       clearTimeout(timer);
     }
     if (!res.ok) {
       const body = await res.text();
       if (res.status === 404 && body.includes("not found")) {
-        throw new Error(
-          `Model "${req.model}" not found. Pull it with: ollama pull ${req.model}`
-        );
+        throw new PolyglotError({
+          code: "MODEL_NOT_FOUND",
+          message: `Model "${req.model}" not found.`,
+          hint: `Pull it with: ollama pull ${req.model}`,
+          retryable: false,
+        });
       }
-      throw new Error(
-        `Ollama error (HTTP ${res.status}, model: ${req.model}): ${body.slice(0, 200)}`
-      );
+      throw new PolyglotError({
+        code: "OLLAMA_ERROR",
+        message: `Ollama error (HTTP ${res.status}, model: ${req.model}).`,
+        hint: body.slice(0, 200),
+        retryable: res.status >= 500,
+      });
     }
     return res.json() as Promise<OllamaGenerateResponse>;
   }

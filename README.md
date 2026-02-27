@@ -7,6 +7,7 @@
 <p align="center"><strong>Local GPU translation MCP server — 55 languages, zero cloud dependency.</strong></p>
 
 <p align="center">
+  <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@mcptoolshop/polyglot-mcp"><img src="https://img.shields.io/npm/v/@mcptoolshop/polyglot-mcp.svg" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-18%2B-brightgreen.svg" alt="node 18+"></a>
@@ -92,6 +93,10 @@ On an RTX 5080 (16 GB VRAM) with TranslateGemma 12B (Q4):
 | Subsequent translations | ~600ms |
 | VRAM usage | ~8.1 GB |
 | Long text (chunked) | ~600ms per chunk |
+
+## Security & Data Scope
+
+**Data touched:** text sent to local Ollama API (`localhost:11434`) for translation, `.polyglot-cache.json` segment cache. **Data NOT touched:** no files outside working directory, no browser data, no OS credentials. **Network:** HTTP to `localhost:11434` only — no external/internet egress. **No telemetry** is collected or sent.
 
 ## How it works
 
