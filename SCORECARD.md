@@ -56,3 +56,16 @@ Added 78 unit tests (5 test files), fixed CI to run tests, audit now fails on hi
 | D. Shipping Hygiene | 7/10 | 10/10 | Tests in CI, audit enforced, verify includes tests |
 | E. Identity (soft) | 10/10 | 10/10 | No change |
 | **Overall** | 47/50 | **50/50** | |
+
+## v1.4.0 Feature Release (2026-03-05)
+
+Added retry logic for transient failures, configurable default model, 36 more unit tests (translate + ollama modules), fixed hono audit vulnerabilities.
+
+| Category | Before | After | Notes |
+|----------|--------|-------|-------|
+| A. Security | 10/10 | 10/10 | hono audit vulns resolved |
+| B. Error Handling | 10/10 | 10/10 | Retry w/ exponential backoff hardens transient failures |
+| C. Operator Docs | 10/10 | 10/10 | CHANGELOG updated |
+| D. Shipping Hygiene | 10/10 | 10/10 | 114 tests across 7 files |
+| E. Identity (soft) | 10/10 | 10/10 | No change |
+| **Overall** | 50/50 | **50/50** | |

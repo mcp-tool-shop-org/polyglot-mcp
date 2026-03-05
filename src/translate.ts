@@ -13,11 +13,15 @@ import {
 import { polish } from "./polish.js";
 import { PolyglotError } from "./errors.js";
 
-const DEFAULT_MODEL = "translategemma:12b";
-const BATCH_SEPARATOR = "\n---POLYGLOT_SEP---\n";
+/** Default model — override with POLYGLOT_MODEL env var. */
+export const DEFAULT_MODEL =
+  process.env.POLYGLOT_MODEL || "translategemma:12b";
 
-/** Chunk size varies by model — bigger models handle more context. */
-function getChunkSize(model: string): number {
+/** @internal Exported for testing. */
+export const BATCH_SEPARATOR = "\n---POLYGLOT_SEP---\n";
+
+/** @internal Chunk size varies by model — bigger models handle more context. */
+export function getChunkSize(model: string): number {
   if (model.includes(":2b") || model.includes(":4b")) return 2000;
   if (model.includes(":27b")) return 6000;
   return 4000; // 12b and default
@@ -64,8 +68,8 @@ export interface TranslateBatchResult {
   durationMs: number;
 }
 
-/** Build the TranslateGemma prompt — two blank lines before text is critical. */
-function buildPrompt(
+/** @internal Build the TranslateGemma prompt — two blank lines before text is critical. */
+export function buildPrompt(
   source: Language,
   target: Language,
   text: string,
@@ -78,8 +82,8 @@ Produce only the ${target.name} translation, without any additional explanations
 ${text}`;
 }
 
-/** Build a batch prompt with separator instructions. */
-function buildBatchPrompt(
+/** @internal Build a batch prompt with separator instructions. */
+export function buildBatchPrompt(
   source: Language,
   target: Language,
   joinedText: string,
@@ -93,8 +97,8 @@ IMPORTANT: The text contains separator lines "---POLYGLOT_SEP---". Keep each sep
 ${joinedText}`;
 }
 
-/** Split text into chunks at paragraph/sentence boundaries. */
-function chunkText(text: string, maxChars: number): string[] {
+/** @internal Split text into chunks at paragraph/sentence boundaries. */
+export function chunkText(text: string, maxChars: number): string[] {
   if (text.length <= maxChars) return [text];
 
   const chunks: string[] = [];

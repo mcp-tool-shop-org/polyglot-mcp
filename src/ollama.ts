@@ -13,6 +13,10 @@ const GENERATE_TIMEOUT_MS = 60_000;
 const API_TIMEOUT_MS = 10_000;
 /** Timeout for model pulls (10 min — large models over slow connections). */
 const PULL_TIMEOUT_MS = 600_000;
+/** Max retries for retryable errors. */
+const MAX_RETRIES = 2;
+/** Base delay between retries in ms (doubles each attempt). */
+const RETRY_BASE_DELAY_MS = 1_000;
 
 export interface OllamaGenerateRequest {
   model: string;
@@ -44,7 +48,34 @@ export interface OllamaModel {
 export class OllamaClient {
   constructor(private baseUrl: string = "http://localhost:11434") {}
 
+  /**
+   * Generate a completion with automatic retry for retryable errors.
+   * Retries up to MAX_RETRIES times with exponential backoff.
+   */
   async generate(req: OllamaGenerateRequest): Promise<OllamaGenerateResponse> {
+    let lastError: PolyglotError | undefined;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await this._generate(req);
+      } catch (err) {
+        if (err instanceof PolyglotError && err.retryable && attempt < MAX_RETRIES) {
+          lastError = err;
+          const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+          process.stderr.write(
+            `Retryable error (${err.code}), retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})...\n`
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    // Should never reach here, but just in case
+    throw lastError;
+  }
+
+  /** @internal Single generate attempt — no retry. */
+  private async _generate(req: OllamaGenerateRequest): Promise<OllamaGenerateResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
     const startMs = Date.now();

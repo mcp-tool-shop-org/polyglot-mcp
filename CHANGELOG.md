@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-03-05
+
+### Added
+- Retry logic with exponential backoff for transient Ollama failures (`MAX_RETRIES=2`)
+- Configurable default model via `POLYGLOT_MODEL` environment variable
+- Unit tests for `translate` module (22 tests) and `ollama` module (14 tests)
+
+### Fixed
+- High-severity `hono` / `@hono/node-server` transitive dependency vulnerabilities
+
 ## [1.3.1] - 2026-03-05
 
 ### Added
