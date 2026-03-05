@@ -3,8 +3,7 @@ import { LANGUAGES, resolveLanguage, isSupported } from "./languages.js";
 
 describe("LANGUAGES", () => {
   it("contains all supported languages", () => {
-    // README says 55 but array includes Korean + Welsh variants = 57
-    expect(LANGUAGES.length).toBeGreaterThanOrEqual(55);
+    expect(LANGUAGES.length).toBe(57);
   });
 
   it("has unique codes", () => {

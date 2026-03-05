@@ -2,7 +2,7 @@
 
 /**
  * Polyglot MCP — Local GPU translation via TranslateGemma + Ollama.
- * Zero cloud dependency, 55 languages, runs on your GPU.
+ * Zero cloud dependency, 57 languages, runs on your GPU.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -24,7 +24,7 @@ const server = new McpServer({
 
 server.tool(
   "translate",
-  "Translate text between any of 55 supported languages using TranslateGemma running locally on your GPU via Ollama. Automatically starts Ollama and pulls the model if needed. Includes a built-in software glossary for accurate technical translations.",
+  "Translate text between any of 57 supported languages using TranslateGemma running locally on your GPU via Ollama. Automatically starts Ollama and pulls the model if needed. Includes a built-in software glossary for accurate technical translations.",
   {
     text: z.string().describe("The text to translate"),
     from: z
@@ -95,7 +95,7 @@ server.tool(
 
 server.tool(
   "list_languages",
-  "List all 55 languages supported by TranslateGemma for translation.",
+  "List all 57 languages supported by TranslateGemma for translation.",
   {},
   async () => {
     const lines = LANGUAGES.map((l) => `${l.code.padEnd(8)} ${l.name}`);

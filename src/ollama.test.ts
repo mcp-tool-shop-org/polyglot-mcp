@@ -251,4 +251,155 @@ describe("OllamaClient", () => {
       expect(await client.hasModel("translategemma:12b")).toBe(false);
     });
   });
+
+  describe("generateStream", () => {
+    /** Helper to create a ReadableStream from NDJSON lines. */
+    function makeNdjsonStream(lines: object[]): ReadableStream<Uint8Array> {
+      const encoder = new TextEncoder();
+      const chunks = lines.map((l) => encoder.encode(JSON.stringify(l) + "\n"));
+      let idx = 0;
+      return new ReadableStream({
+        pull(controller) {
+          if (idx < chunks.length) {
+            controller.enqueue(chunks[idx++]);
+          } else {
+            controller.close();
+          }
+        },
+      });
+    }
+
+    it("streams tokens and returns full response", async () => {
+      const ndjson = [
+        { model: "translategemma:12b", response: "Bon", done: false },
+        { model: "translategemma:12b", response: "jour", done: false },
+        { model: "translategemma:12b", response: "", done: true },
+      ];
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        body: makeNdjsonStream(ndjson),
+      });
+
+      const tokens: string[] = [];
+      const result = await client.generateStream(
+        { model: "translategemma:12b", prompt: "translate hello" },
+        (token) => tokens.push(token)
+      );
+      expect(tokens).toEqual(["Bon", "jour"]);
+      expect(result.response).toBe("Bonjour");
+      expect(result.done).toBe(true);
+    });
+
+    it("throws MODEL_NOT_FOUND for 404 responses", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve("model 'xyz' not found"),
+      });
+
+      const tokens: string[] = [];
+      try {
+        await client.generateStream(
+          { model: "xyz", prompt: "test" },
+          (t) => tokens.push(t)
+        );
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PolyglotError);
+        expect((err as PolyglotError).code).toBe("MODEL_NOT_FOUND");
+      }
+    });
+
+    it("retries on retryable 500 errors", async () => {
+      let callCount = 0;
+      const ndjson = [
+        { model: "translategemma:12b", response: "OK", done: true },
+      ];
+
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount <= 1) {
+          return { ok: false, status: 500, text: () => Promise.resolve("server error") };
+        }
+        return { ok: true, body: makeNdjsonStream(ndjson) };
+      });
+
+      const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const tokens: string[] = [];
+      const result = await client.generateStream(
+        { model: "translategemma:12b", prompt: "test" },
+        (t) => tokens.push(t)
+      );
+      expect(result.response).toBe("OK");
+      expect(callCount).toBe(2);
+      stderrWrite.mockRestore();
+    });
+
+    it("throws OLLAMA_UNAVAILABLE on fetch failure", async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(
+        new TypeError("fetch failed")
+      );
+
+      const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await client.generateStream(
+          { model: "translategemma:12b", prompt: "test" },
+          () => {}
+        );
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PolyglotError);
+        expect((err as PolyglotError).code).toBe("OLLAMA_UNAVAILABLE");
+      }
+      stderrWrite.mockRestore();
+    });
+
+    it("throws OLLAMA_ERROR when no response body", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        body: null,
+      });
+
+      try {
+        await client.generateStream(
+          { model: "translategemma:12b", prompt: "test" },
+          () => {}
+        );
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PolyglotError);
+        expect((err as PolyglotError).code).toBe("OLLAMA_ERROR");
+        expect((err as PolyglotError).message).toContain("no response body");
+      }
+    });
+
+    it("handles malformed NDJSON lines gracefully", async () => {
+      const encoder = new TextEncoder();
+      const chunks = [
+        encoder.encode('{"model":"m","response":"A","done":false}\n'),
+        encoder.encode('NOT JSON\n'),
+        encoder.encode('{"model":"m","response":"B","done":true}\n'),
+      ];
+      let idx = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (idx < chunks.length) controller.enqueue(chunks[idx++]);
+          else controller.close();
+        },
+      });
+
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        body: stream,
+      });
+
+      const tokens: string[] = [];
+      const result = await client.generateStream(
+        { model: "m", prompt: "test" },
+        (t) => tokens.push(t)
+      );
+      expect(tokens).toEqual(["A", "B"]);
+      expect(result.response).toBe("AB");
+    });
+  });
 });

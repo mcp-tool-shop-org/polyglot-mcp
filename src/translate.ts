@@ -151,7 +151,7 @@ async function resolveSetup(
     throw new PolyglotError({
       code: "UNSUPPORTED_LANGUAGE",
       message: `Unsupported source language: "${sourceLang}".`,
-      hint: "Use the list_languages tool to see all 55 supported languages.",
+      hint: "Use the list_languages tool to see all 57 supported languages.",
       retryable: false,
     });
   }
@@ -161,7 +161,7 @@ async function resolveSetup(
     throw new PolyglotError({
       code: "UNSUPPORTED_LANGUAGE",
       message: `Unsupported target language: "${targetLang}".`,
-      hint: "Use the list_languages tool to see all 55 supported languages.",
+      hint: "Use the list_languages tool to see all 57 supported languages.",
       retryable: false,
     });
   }

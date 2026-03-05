@@ -82,3 +82,21 @@ Core translateMarkdown API, translate_markdown MCP tool, streaming, output valid
 | D. Shipping Hygiene | 10/10 | 10/10 | 164 tests across 9 files |
 | E. Identity (soft) | 10/10 | 10/10 | No change |
 | **Overall** | 50/50 | **50/50** | |
+
+## v1.5.1 Quality Release (2026-03-05)
+
+Comprehensive test coverage expansion, security hardening, accuracy fixes.
+
+- **Testing**: 39 new tests — translate() with mocked Ollama (11), translateBatch() with fallback path (5), generateStream (6), MCP handler tests (13), MCP stdio integration smoke test (3), getCachePath test (1)
+- **Security**: Cache path traversal guard — getCachePath now validates resolved path stays within source directory
+- **Accuracy**: Fixed README language count discrepancy (55→57 — matches actual LANGUAGES array)
+- **DevEx**: Dependabot config for npm deps + GitHub Actions auto-updates
+
+| Category | Before | After | Notes |
+|----------|--------|-------|-------|
+| A. Security | 10/10 | 10/10 | Cache path traversal hardened |
+| B. Error Handling | 10/10 | 10/10 | No change |
+| C. Operator Docs | 10/10 | 10/10 | Language count corrected across all files |
+| D. Shipping Hygiene | 10/10 | 10/10 | 205 tests across 12 files, Dependabot added |
+| E. Identity (soft) | 10/10 | 10/10 | No change |
+| **Overall** | 50/50 | **50/50** | |

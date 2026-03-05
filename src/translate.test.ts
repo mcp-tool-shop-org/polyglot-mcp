@@ -167,3 +167,244 @@ describe("BATCH_SEPARATOR", () => {
     expect(BATCH_SEPARATOR).toContain("---POLYGLOT_SEP---");
   });
 });
+
+// --- translate() with mocked Ollama ---
+
+// We mock the entire ollama module so no real server is needed
+vi.mock("./ollama.js", () => {
+  const MockOllamaClient = vi.fn().mockImplementation(() => ({
+    ensureRunning: vi.fn().mockResolvedValue(true),
+    ensureModel: vi.fn().mockResolvedValue(true),
+    generate: vi.fn().mockResolvedValue({
+      model: "translategemma:12b",
+      response: "Bonjour le monde",
+      done: true,
+    }),
+    generateStream: vi.fn().mockImplementation(async (_req: unknown, onToken: (t: string) => void) => {
+      onToken("Bon");
+      onToken("jour");
+      return {
+        model: "translategemma:12b",
+        response: "Bonjour",
+        done: true,
+      };
+    }),
+  }));
+  return { OllamaClient: MockOllamaClient };
+});
+
+import { translate, translateBatch } from "./translate.js";
+import { OllamaClient } from "./ollama.js";
+
+describe("translate()", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("translates text and returns result", async () => {
+    const result = await translate("Hello world", "en", "fr");
+    expect(result.translation).toBe("Bonjour le monde");
+    expect(result.sourceLanguage.code).toBe("en");
+    expect(result.targetLanguage.code).toBe("fr");
+    expect(result.model).toBe("translategemma:12b");
+    expect(result.chunks).toBe(1);
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("throws UNSUPPORTED_LANGUAGE for bad source", async () => {
+    await expect(translate("hello", "klingon", "fr")).rejects.toThrow("Unsupported source language");
+  });
+
+  it("throws UNSUPPORTED_LANGUAGE for bad target", async () => {
+    await expect(translate("hello", "en", "klingon")).rejects.toThrow("Unsupported target language");
+  });
+
+  it("throws SAME_LANGUAGE when source equals target", async () => {
+    await expect(translate("hello", "en", "en")).rejects.toThrow("Source and target languages must be different");
+  });
+
+  it("throws SAME_LANGUAGE using names too", async () => {
+    await expect(translate("hello", "English", "english")).rejects.toThrow("Source and target languages must be different");
+  });
+
+  it("resolves language names case-insensitively", async () => {
+    const result = await translate("Hello", "english", "FRENCH");
+    expect(result.sourceLanguage.code).toBe("en");
+    expect(result.targetLanguage.code).toBe("fr");
+  });
+
+  it("throws OLLAMA_UNAVAILABLE when ensureRunning returns false", async () => {
+    const mockInstances = vi.mocked(OllamaClient).mock.results;
+    // Get the next instance that will be created
+    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+      ensureRunning: vi.fn().mockResolvedValue(false),
+      ensureModel: vi.fn().mockResolvedValue(true),
+      generate: vi.fn(),
+      generateStream: vi.fn(),
+    }) as unknown as OllamaClient);
+
+    await expect(translate("hello", "en", "fr")).rejects.toThrow("Could not start Ollama");
+  });
+
+  it("throws MODEL_PULL_FAILED when ensureModel returns false", async () => {
+    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+      ensureRunning: vi.fn().mockResolvedValue(true),
+      ensureModel: vi.fn().mockResolvedValue(false),
+      generate: vi.fn(),
+      generateStream: vi.fn(),
+    }) as unknown as OllamaClient);
+
+    await expect(translate("hello", "en", "fr")).rejects.toThrow("Could not pull model");
+  });
+
+  it("uses streaming when onToken is provided", async () => {
+    const tokens: string[] = [];
+    const result = await translate("Hello", "en", "fr", {
+      onToken: (t) => tokens.push(t),
+    });
+    expect(tokens).toEqual(["Bon", "jour"]);
+    expect(result.translation).toBe("Bonjour");
+  });
+
+  it("respects custom model option", async () => {
+    const result = await translate("hello", "en", "fr", { model: "translategemma:4b" });
+    expect(result.model).toBe("translategemma:4b");
+  });
+
+  it("adds validation warnings for echoed text", async () => {
+    // Mock generate to echo source text
+    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+      ensureRunning: vi.fn().mockResolvedValue(true),
+      ensureModel: vi.fn().mockResolvedValue(true),
+      generate: vi.fn().mockResolvedValue({
+        model: "translategemma:12b",
+        response: "This is a long sentence that should definitely be translated but was echoed",
+        done: true,
+      }),
+      generateStream: vi.fn(),
+    }) as unknown as OllamaClient);
+
+    const result = await translate(
+      "This is a long sentence that should definitely be translated but was echoed",
+      "en",
+      "fr"
+    );
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.warnings[0]).toContain("echo");
+  });
+
+  it("skips validation when validate=false", async () => {
+    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+      ensureRunning: vi.fn().mockResolvedValue(true),
+      ensureModel: vi.fn().mockResolvedValue(true),
+      generate: vi.fn().mockResolvedValue({
+        model: "translategemma:12b",
+        response: "This is a long sentence that should definitely be translated but was echoed",
+        done: true,
+      }),
+      generateStream: vi.fn(),
+    }) as unknown as OllamaClient);
+
+    const result = await translate(
+      "This is a long sentence that should definitely be translated but was echoed",
+      "en",
+      "fr",
+      { validate: false }
+    );
+    expect(result.warnings).toEqual([]);
+  });
+});
+
+// --- translateBatch() with mocked Ollama ---
+
+describe("translateBatch()", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns empty results for empty items", async () => {
+    const result = await translateBatch([], "en", "fr");
+    expect(result.translations).toEqual([]);
+    expect(result.ollamaCalls).toBe(0);
+    expect(result.durationMs).toBe(0);
+  });
+
+  it("translates a single item without separator overhead", async () => {
+    const result = await translateBatch(
+      [{ text: "Hello", kind: "text" }],
+      "en",
+      "fr"
+    );
+    expect(result.translations).toHaveLength(1);
+    expect(result.translations[0]).toBe("Bonjour le monde");
+    expect(result.ollamaCalls).toBe(1);
+  });
+
+  it("batches multiple items with separator", async () => {
+    // Mock generate to return text with separator intact
+    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+      ensureRunning: vi.fn().mockResolvedValue(true),
+      ensureModel: vi.fn().mockResolvedValue(true),
+      generate: vi.fn().mockResolvedValue({
+        model: "translategemma:12b",
+        response: "Bonjour\n---POLYGLOT_SEP---\nAu revoir",
+        done: true,
+      }),
+      generateStream: vi.fn(),
+    }) as unknown as OllamaClient);
+
+    const result = await translateBatch(
+      [{ text: "Hello" }, { text: "Goodbye" }],
+      "en",
+      "fr"
+    );
+    expect(result.translations).toHaveLength(2);
+    expect(result.translations[0]).toBe("Bonjour");
+    expect(result.translations[1]).toBe("Au revoir");
+    expect(result.ollamaCalls).toBe(1);
+  });
+
+  it("falls back to individual calls when separator is mangled", async () => {
+    let callCount = 0;
+    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+      ensureRunning: vi.fn().mockResolvedValue(true),
+      ensureModel: vi.fn().mockResolvedValue(true),
+      generate: vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: batch attempt — mangled separator (wrong number of parts)
+          return {
+            model: "translategemma:12b",
+            response: "Bonjour Au revoir merged together",
+            done: true,
+          };
+        }
+        // Subsequent calls: individual fallback
+        return {
+          model: "translategemma:12b",
+          response: callCount === 2 ? "Bonjour" : "Au revoir",
+          done: true,
+        };
+      }),
+      generateStream: vi.fn(),
+    }) as unknown as OllamaClient);
+
+    const result = await translateBatch(
+      [{ text: "Hello" }, { text: "Goodbye" }],
+      "en",
+      "fr"
+    );
+    expect(result.translations).toHaveLength(2);
+    expect(result.translations[0]).toBe("Bonjour");
+    expect(result.translations[1]).toBe("Au revoir");
+    // 1 batch attempt + 2 individual fallbacks = 3
+    expect(result.ollamaCalls).toBe(3);
+  });
+
+  it("rejects unsupported languages", async () => {
+    await expect(
+      translateBatch([{ text: "hi" }], "en", "klingon")
+    ).rejects.toThrow("Unsupported target language");
+  });
+});

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-03-05
+
+### Added
+- **MCP handler tests** — 13 tests covering all 4 tool handlers (translate, translate_markdown, list_languages, check_status), error propagation, and warning surfacing
+- **Integration smoke test** — MCP handshake over stdio: spawns the server, completes initialize, calls list_languages, lists all tools. Runs in CI without Ollama.
+- **translate/translateBatch tests** — 16 new tests for `translate()` (mocked Ollama: language validation, same-language rejection, streaming path, validation warnings, ensureRunning/ensureModel failures) and `translateBatch()` (empty input, single item, batch with separator, **fallback path when separators are mangled**)
+- **generateStream tests** — 6 tests covering success, retry on 500, MODEL_NOT_FOUND, OLLAMA_UNAVAILABLE, missing response body, malformed NDJSON tolerance
+- **Cache path traversal guard** — `getCachePath()` now validates the resolved path stays within the source file's directory; throws on traversal attempts
+- **Dependabot configuration** — `.github/dependabot.yml` for weekly npm + GitHub Actions dependency updates
+
+### Fixed
+- **Language count discrepancy** — README, package.json, MCP tool descriptions, error hints, and source comments all said "55 languages" but the `LANGUAGES` array contains 57. Corrected to 57 everywhere.
+
 ## [1.5.0] - 2026-03-05
 
 ### Added

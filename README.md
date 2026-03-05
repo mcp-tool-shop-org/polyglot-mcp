@@ -4,7 +4,7 @@
 
 <p align="center"><img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/polyglot-mcp/readme.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center"><strong>Local GPU translation MCP server — 55 languages, zero cloud dependency.</strong></p>
+<p align="center"><strong>Local GPU translation MCP server — 57 languages, zero cloud dependency.</strong></p>
 
 <p align="center">
   <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -19,7 +19,7 @@
 
 ## What it does
 
-Translates text between 55 languages using [TranslateGemma](https://ollama.com/library/translategemma) running locally on your GPU via [Ollama](https://ollama.com). No API keys, no cloud, no rate limits — everything stays on your machine.
+Translates text between 57 languages using [TranslateGemma](https://ollama.com/library/translategemma) running locally on your GPU via [Ollama](https://ollama.com). No API keys, no cloud, no rate limits — everything stays on your machine.
 
 ## Quick Start
 
@@ -100,7 +100,7 @@ Translate an entire markdown document while preserving structure. Code blocks, H
 
 ### `list_languages`
 
-List all 55 supported languages with their codes.
+List all 57 supported languages with their codes.
 
 ### `check_status`
 
@@ -182,7 +182,7 @@ MCP Client (Claude Code, etc.)
 ├──────────────────┤
 │   polish.ts      │  Post-translation artifact cleanup
 ├──────────────────┤
-│  languages.ts    │  55 language definitions
+│  languages.ts    │  57 language definitions
 ├──────────────────┤
 │   errors.ts      │  PolyglotError structured error class
 └──────────────────┘
@@ -208,7 +208,7 @@ See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy.
 ```bash
 npm install             # install deps
 npm run typecheck       # type-check without emitting
-npm test                # run 164 unit tests (vitest)
+npm test                # run 205 unit tests (vitest)
 npm run build           # compile TypeScript to dist/
 npm run verify          # typecheck + test + build + pack (full gate)
 ```

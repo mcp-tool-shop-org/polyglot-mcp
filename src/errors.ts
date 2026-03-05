@@ -95,7 +95,7 @@ export function friendlyError(err: unknown): string {
     return [
       msg,
       "",
-      'Use the list_languages tool to see all 55 supported languages.',
+      'Use the list_languages tool to see all 57 supported languages.',
       'You can use either language codes ("en") or names ("English").',
     ].join("\n");
   }

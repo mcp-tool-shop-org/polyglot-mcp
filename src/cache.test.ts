@@ -6,6 +6,7 @@ import {
   setCached,
   pruneCache,
   clearCache,
+  getCachePath,
 } from "./cache.js";
 
 describe("cacheKey", () => {
@@ -123,5 +124,18 @@ describe("clearCache", () => {
 
   it("returns 0 for empty cache", () => {
     expect(clearCache(createCache())).toBe(0);
+  });
+});
+
+describe("getCachePath", () => {
+  it("returns a path ending in .polyglot-cache.json", () => {
+    const p = getCachePath("/some/dir/README.md");
+    expect(p).toMatch(/\.polyglot-cache\.json$/);
+  });
+
+  it("places cache file in the same directory as source", () => {
+    const p = getCachePath("/some/dir/README.md");
+    expect(p).toContain("some");
+    expect(p).toContain("dir");
   });
 });

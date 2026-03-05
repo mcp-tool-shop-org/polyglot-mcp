@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 
 export interface CacheEntry {
   translation: string;
@@ -96,6 +96,19 @@ export function setCached(
   cache.entries[key] = { translation, model, timestamp: Date.now() };
 }
 
-function getCachePath(readmePath: string): string {
-  return join(dirname(readmePath), ".polyglot-cache.json");
+/** @internal Exported for testing. */
+export function getCachePath(readmePath: string): string {
+  const dir = resolve(dirname(readmePath));
+  const cachePath = join(dir, ".polyglot-cache.json");
+  const resolved = resolve(cachePath);
+
+  // Guard against path traversal — cache file must stay within the
+  // same directory as the source file.
+  if (!resolved.startsWith(dir)) {
+    throw new Error(
+      `Cache path traversal blocked: "${resolved}" escapes "${dir}".`
+    );
+  }
+
+  return resolved;
 }

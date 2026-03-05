@@ -1,5 +1,5 @@
 /**
- * TranslateGemma supported languages — 55 languages.
+ * TranslateGemma supported languages — 57 languages.
  * Codes follow ISO 639-1 (Alpha-2) with optional region codes.
  */
 

@@ -1,7 +1,7 @@
 {
   "name": "@mcptoolshop/polyglot-mcp",
-  "version": "1.5.0",
-  "description": "Local GPU translation MCP server — TranslateGemma via Ollama, 55 languages, zero cloud dependency",
+  "version": "1.5.1",
+  "description": "Local GPU translation MCP server — TranslateGemma via Ollama, 57 languages, zero cloud dependency",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

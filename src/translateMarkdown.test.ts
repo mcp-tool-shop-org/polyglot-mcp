@@ -227,8 +227,8 @@ describe("extractTaglineText", () => {
   });
 
   it("extracts text with em dash and special chars", () => {
-    const line = '<p align="center"><strong>Local GPU translation — 55 languages, zero cloud.</strong></p>';
-    expect(extractTaglineText(line)).toBe("Local GPU translation — 55 languages, zero cloud.");
+    const line = '<p align="center"><strong>Local GPU translation — 57 languages, zero cloud.</strong></p>';
+    expect(extractTaglineText(line)).toBe("Local GPU translation — 57 languages, zero cloud.");
   });
 
   it("returns null for non-tagline HTML", () => {
