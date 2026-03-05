@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-03-05
+
+### Added
+- Unit tests for all pure modules: languages, polish, glossary, errors, cache (78 tests)
+- `vitest.config.ts` configuration file
+- `npm test` step in CI workflow (runs on both Node 18 and 22)
+
+### Fixed
+- CI `npm audit` no longer swallows failures (`|| true` removed, `--audit-level=high` enforced)
+- `verify` script now includes `npm test` before build
+- SCORECARD.md updated to honestly reflect the test gap in v1.3.0 remediation
+
 ## [1.3.0] - 2026-02-27
 
 ### Added
