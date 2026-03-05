@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-03-05
+
+### Fixed
+
+- **Cross-language contamination in fuzzy cache** — `getFuzzyCached()` now filters by `targetLang`, preventing translations in one language (e.g. Japanese) from being returned for queries targeting a different language (e.g. Spanish). Added `targetLang` field to `CacheEntry`; backward compatible with pre-v1.6.1 entries.
+
+### Added
+
+- 5 new cache tests for the cross-language fix (251 total tests across 13 files)
+
 ## [1.6.0] - 2026-03-05
 
 ### Added
