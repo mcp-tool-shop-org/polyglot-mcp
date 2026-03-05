@@ -9,6 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { translate } from "./translate.js";
+import { translateMarkdown } from "./translateMarkdown.js";
 import { LANGUAGES } from "./languages.js";
 import { OllamaClient } from "./ollama.js";
 import { VERSION } from "./version.js";
@@ -61,18 +62,23 @@ server.tool(
 
       const result = await translate(text, from, to, { model, glossary: customGlossary });
       const secs = (result.durationMs / 1000).toFixed(1);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: result.translation,
-          },
-          {
-            type: "text" as const,
-            text: `\n---\n${result.sourceLanguage.name} → ${result.targetLanguage.name} | ${result.model} | ${result.chunks} chunk(s) | ${secs}s`,
-          },
-        ],
-      };
+      const content: Array<{ type: "text"; text: string }> = [
+        {
+          type: "text" as const,
+          text: result.translation,
+        },
+        {
+          type: "text" as const,
+          text: `\n---\n${result.sourceLanguage.name} → ${result.targetLanguage.name} | ${result.model} | ${result.chunks} chunk(s) | ${secs}s`,
+        },
+      ];
+      if (result.warnings.length > 0) {
+        content.push({
+          type: "text" as const,
+          text: `\n⚠ Warnings:\n${result.warnings.map(w => `  - ${w}`).join("\n")}`,
+        });
+      }
+      return { content };
     } catch (err) {
       return {
         content: [
@@ -101,6 +107,57 @@ server.tool(
         },
       ],
     };
+  }
+);
+
+server.tool(
+  "translate_markdown",
+  "Translate a markdown document while preserving its structure. Code blocks, HTML elements, URLs, badges, and table formatting are kept intact. Only prose content (headings, paragraphs, taglines, table cells) is translated. Supports segment-level caching.",
+  {
+    markdown: z.string().describe("The full markdown content to translate"),
+    from: z
+      .string()
+      .describe('Source language code or name (e.g., "en", "English")'),
+    to: z
+      .string()
+      .describe('Target language code or name (e.g., "ja", "Japanese")'),
+    model: z
+      .string()
+      .optional()
+      .describe('Ollama model (default: "translategemma:12b")'),
+  },
+  async ({ markdown, from, to, model }) => {
+    try {
+      const result = await translateMarkdown(markdown, from, to, { model, cache: false });
+      const secs = (result.durationMs / 1000).toFixed(1);
+      const content: Array<{ type: "text"; text: string }> = [
+        {
+          type: "text" as const,
+          text: result.markdown,
+        },
+        {
+          type: "text" as const,
+          text: `\n---\n${result.segments} segments | ${result.translated} translated | ${result.cached} cached | ${result.ollamaCalls} Ollama call(s) | ${secs}s`,
+        },
+      ];
+      if (result.warnings.length > 0) {
+        content.push({
+          type: "text" as const,
+          text: `\n⚠ Warnings:\n${result.warnings.map(w => `  - ${w}`).join("\n")}`,
+        });
+      }
+      return { content };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: friendlyError(err),
+          },
+        ],
+        isError: true,
+      };
+    }
   }
 );
 

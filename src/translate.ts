@@ -3,7 +3,7 @@
  * Includes glossary injection, post-translation polish, and batch mode.
  */
 
-import { OllamaClient } from "./ollama.js";
+import { OllamaClient, type StreamCallback } from "./ollama.js";
 import { resolveLanguage, type Language } from "./languages.js";
 import {
   buildGlossaryHint,
@@ -12,6 +12,7 @@ import {
 } from "./glossary.js";
 import { polish } from "./polish.js";
 import { PolyglotError } from "./errors.js";
+import { validateTranslation } from "./validate.js";
 
 /** Default model — override with POLYGLOT_MODEL env var. */
 export const DEFAULT_MODEL =
@@ -37,6 +38,10 @@ export interface TranslateOptions {
   softwareGlossary?: boolean;
   /** Set to false to skip post-translation polish. Default: true. */
   polish?: boolean;
+  /** Streaming callback — receives tokens as they arrive. */
+  onToken?: StreamCallback;
+  /** Set to false to skip output validation. Default: true. */
+  validate?: boolean;
 }
 
 export interface TranslateResult {
@@ -46,6 +51,8 @@ export interface TranslateResult {
   model: string;
   chunks: number;
   durationMs: number;
+  /** Validation warnings (empty if all checks pass). */
+  warnings: string[];
 }
 
 // --- Batch types ---
@@ -216,22 +223,43 @@ export async function translate(
   const chunks = chunkText(text.trim(), getChunkSize(model));
   const start = Date.now();
   const translations: string[] = [];
+  const warnings: string[] = [];
+  const useStream = !!options.onToken;
 
   for (const chunk of chunks) {
     const glossaryHint = buildGlossaryHint(chunk, target.code, glossaryEntries);
     const prompt = buildPrompt(source, target, chunk, glossaryHint);
-    const response = await client.generate({
-      model,
-      prompt,
-      options: {
-        temperature: options.temperature ?? 0.1,
-      },
-    });
+
+    let response;
+    if (useStream) {
+      response = await client.generateStream(
+        { model, prompt, options: { temperature: options.temperature ?? 0.1 } },
+        options.onToken!
+      );
+    } else {
+      response = await client.generate({
+        model,
+        prompt,
+        options: { temperature: options.temperature ?? 0.1 },
+      });
+    }
 
     let translated = response.response.trim();
     if (options.polish !== false) {
       translated = polish(translated);
     }
+
+    // Validate
+    if (options.validate !== false) {
+      try {
+        const validation = validateTranslation(chunk, translated, sourceLang, targetLang);
+        warnings.push(...validation.warnings);
+      } catch {
+        warnings.push(`Chunk translation returned empty output — using source text.`);
+        translated = chunk;
+      }
+    }
+
     translations.push(translated);
   }
 
@@ -242,6 +270,7 @@ export async function translate(
     model,
     chunks: chunks.length,
     durationMs: Date.now() - start,
+    warnings,
   };
 }
 

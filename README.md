@@ -71,7 +71,7 @@ That's it. Ask Claude to translate something and it will use the `translate` too
 
 ## Tools
 
-Polyglot exposes three MCP tools:
+Polyglot exposes four MCP tools:
 
 ### `translate`
 
@@ -85,7 +85,18 @@ Translate text between any supported language pair.
 | `model`     | no       | Ollama model (default: `translategemma:12b`) |
 | `glossary`  | no       | Custom term overrides as `{"source": "translation"}` — merged with the built-in software glossary |
 
-Long text is automatically split into chunks at paragraph and sentence boundaries, translated in sequence, and reassembled.
+Long text is automatically split into chunks at paragraph and sentence boundaries, translated in sequence, and reassembled. All translations are validated for quality (empty output, echo detection, truncation, garbled text).
+
+### `translate_markdown`
+
+Translate an entire markdown document while preserving structure. Code blocks, HTML elements, badges, URLs, and table formatting are kept intact — only prose content (headings, paragraphs, taglines, table cells) is translated.
+
+| Parameter   | Required | Description |
+|-------------|----------|-------------|
+| `markdown`  | yes      | The full markdown content to translate |
+| `from`      | yes      | Source language code or name |
+| `to`        | yes      | Target language code or name |
+| `model`     | no       | Ollama model (default: `translategemma:12b`) |
 
 ### `list_languages`
 
@@ -125,6 +136,12 @@ POLYGLOT_MODEL=translategemma:27b npx @mcptoolshop/polyglot-mcp
 ### Structured Errors
 All errors use `PolyglotError` with a machine-readable code (`MODEL_NOT_FOUND`, `OLLAMA_UNAVAILABLE`, `TRANSLATION_FAILED`, etc.), a human-readable message, an optional hint, and a `retryable` flag.
 
+### Output Validation
+Every translation is automatically validated: empty output throws (retryable), source-text echo is flagged, severe truncation and hallucination blowup are warned, garbled encoding and model meta-commentary are detected. Warnings appear in the MCP tool response.
+
+### Streaming
+`OllamaClient.generateStream()` yields tokens via NDJSON as Ollama produces them. The `translate()` function accepts an `onToken` callback for real-time progress display. Both streaming and non-streaming paths share retry logic.
+
 ## Supported Languages
 
 Afrikaans, Albanian, Arabic, Bengali, Bulgarian, Catalan, Chinese (Simplified), Chinese (Traditional), Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, Galician, German, Greek, Gujarati, Hebrew, Hindi, Hungarian, Indonesian, Irish, Italian, Japanese, Kannada, Korean, Latvian, Lithuanian, Macedonian, Malay, Malayalam, Maltese, Marathi, Norwegian, Persian, Polish, Portuguese, Romanian, Russian, Scottish Gaelic, Serbian, Slovak, Slovenian, Spanish, Swahili, Swedish, Tamil, Telugu, Thai, Turkish, Ukrainian, Urdu, Vietnamese, Welsh.
@@ -147,23 +164,28 @@ MCP Client (Claude Code, etc.)
       │
       │  MCP protocol (stdio)
       ▼
-┌─────────────┐
-│  index.ts   │  MCP server — registers tools, routes calls
-├─────────────┤
-│ translate.ts│  Prompt building, chunking, batch mode
-├─────────────┤
-│  ollama.ts  │  HTTP client — auto-start, auto-pull, retry
-├─────────────┤
-│  cache.ts   │  Segment cache (SHA-256 keys, 30-day TTL)
-├─────────────┤
-│ glossary.ts │  Software term dictionary
-├─────────────┤
-│  polish.ts  │  Post-translation artifact cleanup
-├─────────────┤
-│ languages.ts│  55 language definitions
-├─────────────┤
-│  errors.ts  │  PolyglotError structured error class
-└─────────────┘
+┌──────────────────┐
+│    index.ts      │  MCP server — 4 tools: translate, translate_markdown,
+│                  │  list_languages, check_status
+├──────────────────┤
+│  translate.ts    │  Prompt building, chunking, batch mode, streaming
+├──────────────────┤
+│translateMarkdown │  Markdown-aware segmentation, table parsing, reassembly
+├──────────────────┤
+│   validate.ts    │  Output validation (empty, echo, truncation, garble)
+├──────────────────┤
+│   ollama.ts      │  HTTP client — auto-start, auto-pull, retry, streaming
+├──────────────────┤
+│   cache.ts       │  Segment cache (SHA-256 keys, 30-day TTL)
+├──────────────────┤
+│  glossary.ts     │  Software term dictionary
+├──────────────────┤
+│   polish.ts      │  Post-translation artifact cleanup
+├──────────────────┤
+│  languages.ts    │  55 language definitions
+├──────────────────┤
+│   errors.ts      │  PolyglotError structured error class
+└──────────────────┘
       │
       │  HTTP (localhost:11434)
       ▼
@@ -186,7 +208,7 @@ See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy.
 ```bash
 npm install             # install deps
 npm run typecheck       # type-check without emitting
-npm test                # run 114 unit tests (vitest)
+npm test                # run 164 unit tests (vitest)
 npm run build           # compile TypeScript to dist/
 npm run verify          # typecheck + test + build + pack (full gate)
 ```

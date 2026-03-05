@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-03-05
+
+### Added
+- `translateMarkdown()` core API — markdown-aware translation engine with segmentation, table parsing, caching, and validation
+- `translate_markdown` MCP tool — translate entire markdown documents while preserving structure (code blocks, HTML, tables, URLs)
+- `generateStream()` on `OllamaClient` — streaming token generation with async NDJSON parsing and retry logic
+- `onToken` streaming callback on `translate()` — receive tokens as they arrive for progress/display
+- `validate.ts` module — catches empty output, source echo, truncation, hallucination blowup, garbled text, model meta-commentary
+- Automatic output validation in `translate()` and `translateMarkdown()` — warnings returned in results
+- 50 new unit tests: `validate.test.ts` (15), `translateMarkdown.test.ts` (35)
+
+### Fixed
+- **Tagline translation bug** — `<p><strong>text</strong></p>` lines now translate correctly instead of staying in English
+- Validation false-positive suppression for short technical strings (backtick terms, values like `~600 ms`)
+
+### Changed
+- `translate-readme.mjs` script rewritten as thin CLI wrapper over the core `translateMarkdown()` API (488 → 70 lines)
+- `TranslateResult` now includes `warnings: string[]` field
+- Package exports now include `./translateMarkdown` and `./validate`
+
 ## [1.4.0] - 2026-03-05
 
 ### Added

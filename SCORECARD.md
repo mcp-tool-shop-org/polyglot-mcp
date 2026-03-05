@@ -69,3 +69,16 @@ Added retry logic for transient failures, configurable default model, 36 more un
 | D. Shipping Hygiene | 10/10 | 10/10 | 114 tests across 7 files |
 | E. Identity (soft) | 10/10 | 10/10 | No change |
 | **Overall** | 50/50 | **50/50** | |
+
+## v1.5.0 Feature Release (2026-03-05)
+
+Core translateMarkdown API, translate_markdown MCP tool, streaming, output validation, tagline bug fix, 50 new tests.
+
+| Category | Before | After | Notes |
+|----------|--------|-------|-------|
+| A. Security | 10/10 | 10/10 | No change |
+| B. Error Handling | 10/10 | 10/10 | Output validation catches empty/echo/truncation/garble |
+| C. Operator Docs | 10/10 | 10/10 | README + CHANGELOG updated, 4 tools documented |
+| D. Shipping Hygiene | 10/10 | 10/10 | 164 tests across 9 files |
+| E. Identity (soft) | 10/10 | 10/10 | No change |
+| **Overall** | 50/50 | **50/50** | |

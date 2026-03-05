@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.md">English</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center"><img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/polyglot-mcp/readme.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center"><strong>Local GPU translation MCP server — 55 languages, zero cloud dependency.</strong></p>
+<p align="center"><strong>Servidor de traducción local con GPU — 55 idiomas, sin dependencia de la nube.</strong></p>
 
 <p align="center">
   <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -17,7 +17,7 @@
 
 ---
 
-## Lo que hace
+## ¿Qué hace?
 
 Traduce texto entre 55 idiomas utilizando [TranslateGemma](https://ollama.com/library/translategemma), que se ejecuta localmente en su GPU a través de [Ollama](https://ollama.com). No requiere claves de API, ni conexión a la nube, ni límites de uso; todo se ejecuta en su máquina.
 
@@ -25,7 +25,7 @@ Traduce texto entre 55 idiomas utilizando [TranslateGemma](https://ollama.com/li
 
 ### 1. Instale Ollama
 
-Descargue desde [ollama.com](https://ollama.com) y inícielo:
+Descargue desde [ollama.com](https://ollama.com) y ejecútelo:
 
 ```bash
 ollama serve
@@ -58,7 +58,7 @@ ollama pull translategemma:27b   # 17 GB  — highest quality
 }
 ```
 
-**Desde el código fuente:**
+**Desde la fuente:**
 
 ```bash
 git clone https://github.com/mcp-tool-shop-org/polyglot-mcp.git
@@ -80,16 +80,16 @@ Traduce texto entre cualquier par de idiomas soportados.
 | Parámetro | Requerido | Descripción |
 |-------------|----------|-------------|
 | `text`      | sí | Texto a traducir |
-| `from`      | sí | Código o nombre del idioma de origen (por ejemplo, `en`, `English`) |
-| `to`        | sí | Código o nombre del idioma de destino (por ejemplo, `ja`, `Japanese`) |
+| `from`      | sí | Código o nombre del idioma de origen (ej., `en`, `English`) |
+| `to`        | sí | Código o nombre del idioma de destino (ej., `ja`, `Japanese`) |
 | `model`     | no       | Modelo de Ollama (por defecto: `translategemma:12b`) |
 | `glossary`  | no       | Reemplazos de términos personalizados en formato `{"source": "translation"}` — se combinan con el glosario de software integrado. |
 
-El texto largo se divide automáticamente en fragmentos en los límites de párrafo y oración, se traduce secuencialmente y se vuelve a ensamblar.
+El texto largo se divide automáticamente en fragmentos en los límites de párrafo y oración, se traduce en secuencia y se vuelve a ensamblar.
 
 ### `list_languages`
 
-Lista todos los 55 idiomas soportados con sus códigos.
+Lista los 55 idiomas soportados con sus códigos.
 
 ### `check_status`
 
@@ -101,19 +101,19 @@ Verifica si Ollama está en ejecución y qué modelos TranslateGemma están inst
 Ollama se inicia automáticamente si no está en ejecución. El modelo TranslateGemma se descarga automáticamente si no está instalado. No se requiere configuración manual.
 
 ### Reintento con retroceso exponencial
-Los fallos transitorios de Ollama (problemas de red, sobrecarga temporal) se reintentan automáticamente hasta 2 veces con retroceso exponencial (1 segundo, 2 segundos). Los errores que no se pueden reintentar (nombre de modelo incorrecto, entrada inválida) fallan inmediatamente.
+Los fallos transitorios de Ollama (problemas de red, sobrecarga temporal) se reintentan automáticamente hasta 2 veces con retroceso exponencial (1 s, 2 s). Los errores que no se pueden reintentar (nombre de modelo incorrecto, entrada inválida) fallan inmediatamente.
 
 ### Fragmentación inteligente
-El texto largo se divide en límites naturales: párrafos y luego oraciones, para preservar el contexto de la traducción. El tamaño de los fragmentos se adapta al modelo: 2K caracteres para modelos de 2B/4B, 4K para 12B, 6K para 27B.
+El texto largo se divide en límites naturales: párrafos y luego oraciones, para preservar el contexto de la traducción. Los tamaños de los fragmentos se adaptan al modelo: 2K caracteres para modelos de 2B/4B, 4K para 12B, 6K para 27B.
 
 ### Caché de segmentos
-Los segmentos traducidos se almacenan en caché mediante el hash del contenido (SHA-256 del texto de origen + idioma de destino + modelo). Los segmentos sin cambios omiten la re-traducción por completo. La caché se encuentra en `.polyglot-cache.json` y tiene un tiempo de vida de 30 días.
+Los segmentos traducidos se almacenan en caché mediante el hash del contenido (SHA-256 del texto de origen + idioma de destino + modelo). Los segmentos sin cambios omiten la re-traducción por completo. La caché se encuentra en `.polyglot-cache.json` y tiene un TTL de 30 días.
 
 ### Glosario de software
-Un glosario integrado de 12 términos técnicos (API, CLI, SDK, etc.) garantiza una traducción consistente de la terminología de software. Las entradas personalizadas del glosario se pueden pasar por solicitud y se combinan con los valores predeterminados.
+Un glosario integrado de 12 términos técnicos (API, CLI, SDK, etc.) garantiza una traducción coherente de la terminología de software. Las entradas personalizadas del glosario se pueden pasar por solicitud y se combinan con los valores predeterminados.
 
 ### Traducción por lotes
-`translateBatch` agrupa múltiples segmentos en una sola solicitud siempre que sea posible, lo que reduce el número de intercambios. Si el separador del lote se corrompe, se recurre a la traducción individual.
+`translateBatch` agrupa múltiples segmentos en una sola solicitud siempre que sea posible, lo que reduce el número de viajes de ida y vuelta. Si el separador del lote se corrompe, recurre a la traducción individual.
 
 ### Modelo predeterminado configurable
 Establezca la variable de entorno `POLYGLOT_MODEL` para sobrescribir el modelo predeterminado:

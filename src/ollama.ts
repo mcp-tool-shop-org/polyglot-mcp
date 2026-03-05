@@ -39,6 +39,15 @@ export interface OllamaGenerateResponse {
   eval_duration?: number;
 }
 
+/** Callback fired for each streaming token. */
+export type StreamCallback = (token: string) => void;
+
+export interface OllamaStreamChunk {
+  model: string;
+  response: string;
+  done: boolean;
+}
+
 export interface OllamaModel {
   name: string;
   size: number;
@@ -133,6 +142,149 @@ export class OllamaClient {
       });
     }
     return res.json() as Promise<OllamaGenerateResponse>;
+  }
+
+  /**
+   * Generate a completion with streaming — yields tokens as they arrive.
+   * Collects the full response and returns it, while calling onToken for each chunk.
+   * Uses retry logic identical to generate().
+   */
+  async generateStream(
+    req: OllamaGenerateRequest,
+    onToken: StreamCallback
+  ): Promise<OllamaGenerateResponse> {
+    let lastError: PolyglotError | undefined;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await this._generateStream(req, onToken);
+      } catch (err) {
+        if (err instanceof PolyglotError && err.retryable && attempt < MAX_RETRIES) {
+          lastError = err;
+          const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+          process.stderr.write(
+            `Retryable error (${err.code}), retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})...\n`
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError;
+  }
+
+  /** @internal Single streaming generate attempt. */
+  private async _generateStream(
+    req: OllamaGenerateRequest,
+    onToken: StreamCallback
+  ): Promise<OllamaGenerateResponse> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
+    const startMs = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...req, stream: true }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new PolyglotError({
+          code: "OLLAMA_TIMEOUT",
+          message: `Ollama generate timed out after ${elapsed}s (model: ${req.model}).`,
+          hint: "Restart Ollama, reduce parallelism, or use a smaller model (translategemma:4b).",
+          retryable: true,
+        });
+      }
+      if (err instanceof TypeError && String(err.message).includes("fetch")) {
+        throw new PolyglotError({
+          code: "OLLAMA_UNAVAILABLE",
+          message: "Cannot connect to Ollama.",
+          hint: "Is it running? Start with: ollama serve",
+          retryable: true,
+        });
+      }
+      throw new PolyglotError({
+        code: "NETWORK_ERROR",
+        message: `Network error reaching Ollama after ${elapsed}s.`,
+        hint: "Check that Ollama is running and responsive.",
+        cause: err instanceof Error ? err : undefined,
+        retryable: true,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      if (res.status === 404 && body.includes("not found")) {
+        throw new PolyglotError({
+          code: "MODEL_NOT_FOUND",
+          message: `Model "${req.model}" not found.`,
+          hint: `Pull it with: ollama pull ${req.model}`,
+          retryable: false,
+        });
+      }
+      throw new PolyglotError({
+        code: "OLLAMA_ERROR",
+        message: `Ollama error (HTTP ${res.status}, model: ${req.model}).`,
+        hint: body.slice(0, 200),
+        retryable: res.status >= 500,
+      });
+    }
+
+    // Read NDJSON stream
+    const reader = res.body?.getReader();
+    if (!reader) {
+      throw new PolyglotError({
+        code: "OLLAMA_ERROR",
+        message: "Ollama returned no response body for streaming.",
+        retryable: true,
+      });
+    }
+
+    const decoder = new TextDecoder();
+    let buf = "";
+    let fullResponse = "";
+    let lastChunk: OllamaGenerateResponse | undefined;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        let nlIdx: number;
+        while ((nlIdx = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, nlIdx).trim();
+          buf = buf.slice(nlIdx + 1);
+          if (!line) continue;
+          try {
+            const chunk = JSON.parse(line) as OllamaStreamChunk;
+            if (chunk.response) {
+              fullResponse += chunk.response;
+              onToken(chunk.response);
+            }
+            if (chunk.done) {
+              // The final chunk has metadata
+              lastChunk = JSON.parse(line) as OllamaGenerateResponse;
+              lastChunk.response = fullResponse;
+            }
+          } catch { /* skip malformed NDJSON lines */ }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    return lastChunk ?? {
+      model: req.model,
+      response: fullResponse,
+      done: true,
+    };
   }
 
   async listModels(): Promise<OllamaModel[]> {
