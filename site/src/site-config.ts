@@ -15,7 +15,7 @@ export const config: SiteConfig = {
     headlineAccent: 'translate everything, locally.',
     description: 'An MCP server that translates text between 55 languages using TranslateGemma on your GPU via Ollama. No API keys, no cloud, no rate limits — everything runs on your machine.',
     primaryCta: { href: '#setup', label: 'Get started' },
-    secondaryCta: { href: '#features', label: 'Why local?' },
+    secondaryCta: { href: 'handbook/', label: 'Read the Handbook' },
     previews: [
       { label: 'Translate', code: 'translate("Hello world", "en", "ja")' },
       { label: 'Result', code: '"こんにちは世界" // ~600ms on GPU' },
