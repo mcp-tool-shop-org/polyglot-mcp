@@ -480,7 +480,7 @@ export async function translateMarkdown(
     if (useCache) {
       for (let i = 0; i < uniqueItems.length; i++) {
         const key = cacheKey(uniqueItems[i].text, targetLang, modelStr);
-        setCached(cache, key, uniqueTranslations[i], modelStr, uniqueItems[i].text);
+        setCached(cache, key, uniqueTranslations[i], modelStr, uniqueItems[i].text, targetLang);
       }
     }
 

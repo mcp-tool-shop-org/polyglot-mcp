@@ -14,6 +14,8 @@ export interface CacheEntry {
   timestamp: number;
   /** Source text — stored for fuzzy matching (added in v1.6.0). */
   source?: string;
+  /** Target language code — stored for fuzzy matching (added in v1.6.1). */
+  targetLang?: string;
 }
 
 export interface TranslationCache {
@@ -94,9 +96,10 @@ export function setCached(
   key: string,
   translation: string,
   model: string,
-  source?: string
+  source?: string,
+  targetLang?: string
 ): void {
-  cache.entries[key] = { translation, model, timestamp: Date.now(), source };
+  cache.entries[key] = { translation, model, timestamp: Date.now(), source, targetLang };
 }
 
 // ─── Fuzzy matching ───────────────────────────────────────────────
@@ -175,6 +178,8 @@ export function getFuzzyCached(
     if (now - entry.timestamp > ttlMs) continue;
     // Skip different models
     if (entry.model !== model) continue;
+    // Skip different target languages (prevents cross-language contamination)
+    if (entry.targetLang && entry.targetLang !== targetLang) continue;
 
     const sim = similarity(text, entry.source);
     if (sim > bestSim) {

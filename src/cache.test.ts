@@ -242,6 +242,36 @@ describe("getFuzzyCached", () => {
     // "Hello world!" is closer to "Hello world!!" than "Hello universe"
     expect(result!.translation).toBe("translation B");
   });
+
+  it("skips entries with different target language", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "こんにちは", "translategemma:12b", "Hello world", "ja");
+    // Querying for Spanish should NOT return the Japanese translation
+    const result = getFuzzyCached(cache, "Hello world", "es", "translategemma:12b");
+    expect(result).toBeUndefined();
+  });
+
+  it("returns match when target language matches", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "Hola mundo", "translategemma:12b", "Hello world", "es");
+    const result = getFuzzyCached(cache, "Hello world", "es", "translategemma:12b");
+    expect(result).toBeDefined();
+    expect(result!.translation).toBe("Hola mundo");
+  });
+
+  it("handles entries without targetLang (pre-v1.6.1 backward compat)", () => {
+    const cache = createCache();
+    // Simulate old cache entry without targetLang
+    cache.entries["key1"] = {
+      translation: "こんにちは",
+      model: "translategemma:12b",
+      timestamp: Date.now(),
+      source: "Hello world",
+    };
+    // Old entries without targetLang should still be returned (backward compat)
+    const result = getFuzzyCached(cache, "Hello world", "es", "translategemma:12b");
+    expect(result).toBeDefined();
+  });
 });
 
 describe("setCached with source text", () => {
@@ -255,5 +285,17 @@ describe("setCached with source text", () => {
     const cache = createCache();
     setCached(cache, "key1", "translated", "model");
     expect(cache.entries["key1"].source).toBeUndefined();
+  });
+
+  it("stores targetLang in the cache entry", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "translated", "model", "original", "ja");
+    expect(cache.entries["key1"].targetLang).toBe("ja");
+  });
+
+  it("works without targetLang (backward compat)", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "translated", "model", "original");
+    expect(cache.entries["key1"].targetLang).toBeUndefined();
   });
 });
