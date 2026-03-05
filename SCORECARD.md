@@ -100,3 +100,22 @@ Comprehensive test coverage expansion, security hardening, accuracy fixes.
 | D. Shipping Hygiene | 10/10 | 10/10 | 205 tests across 12 files, Dependabot added |
 | E. Identity (soft) | 10/10 | 10/10 | No change |
 | **Overall** | 50/50 | **50/50** | |
+
+## v1.6.0 Feature Release (2026-03-05)
+
+Four medium-impact improvements: concurrency safety, translation memory, progress reporting, multi-language tool.
+
+- **Concurrency semaphore**: `Semaphore` class guards Ollama calls to prevent GPU OOM (default 1, configurable via `POLYGLOT_CONCURRENCY`)
+- **Fuzzy cache / translation memory**: Levenshtein-based similarity matching (≥85% threshold) reuses cached translations for near-miss segments
+- **MCP progress tokens**: All 5 tool handlers report `notifications/progress` when client provides progressToken
+- **`translate_all` MCP tool**: Translates markdown into 7 languages concurrently with nav bar injection
+- **Testing**: 41 new tests — semaphore (8), fuzzy cache/similarity (16), translateAll (17). Total: 246 tests across 13 files.
+
+| Category | Before | After | Notes |
+|----------|--------|-------|-------|
+| A. Security | 10/10 | 10/10 | Concurrency semaphore prevents GPU OOM |
+| B. Error Handling | 10/10 | 10/10 | No change |
+| C. Operator Docs | 10/10 | 10/10 | CHANGELOG updated, 5 tools documented |
+| D. Shipping Hygiene | 10/10 | 10/10 | 246 tests across 13 files |
+| E. Identity (soft) | 10/10 | 10/10 | No change |
+| **Overall** | 50/50 | **50/50** | |

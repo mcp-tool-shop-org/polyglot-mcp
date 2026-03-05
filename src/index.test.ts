@@ -20,6 +20,15 @@ vi.mock("./translateMarkdown.js", () => ({
   translateMarkdown: vi.fn(),
 }));
 
+// Mock translateAll module
+vi.mock("./translateAll.js", () => ({
+  translateAll: vi.fn(),
+  TRANSLATE_ALL_LANGUAGES: [
+    { code: "ja", name: "Japanese", label: "日本語" },
+    { code: "es", name: "Spanish", label: "Español" },
+  ],
+}));
+
 // Mock ollama module
 vi.mock("./ollama.js", () => {
   const MockOllamaClient = vi.fn().mockImplementation(() => ({
@@ -100,6 +109,13 @@ describe("MCP tool handlers", () => {
     // Re-apply mocks since resetModules clears them
     vi.doMock("./translate.js", () => ({ translate: vi.fn() }));
     vi.doMock("./translateMarkdown.js", () => ({ translateMarkdown: vi.fn() }));
+    vi.doMock("./translateAll.js", () => ({
+      translateAll: vi.fn(),
+      TRANSLATE_ALL_LANGUAGES: [
+        { code: "ja", name: "Japanese", label: "日本語" },
+        { code: "es", name: "Spanish", label: "Español" },
+      ],
+    }));
     vi.doMock("./ollama.js", () => ({
       OllamaClient: vi.fn().mockImplementation(() => ({
         ensureRunning: vi.fn().mockResolvedValue(true),
@@ -128,14 +144,15 @@ describe("MCP tool handlers", () => {
   });
 
   describe("tool registration", () => {
-    it("registers exactly 4 tools", () => {
-      expect(registeredTools.length).toBe(4);
+    it("registers exactly 5 tools", () => {
+      expect(registeredTools.length).toBe(5);
     });
 
-    it("registers translate, translate_markdown, list_languages, check_status", () => {
+    it("registers translate, translate_markdown, translate_all, list_languages, check_status", () => {
       const names = registeredTools.map((t) => t.name);
       expect(names).toContain("translate");
       expect(names).toContain("translate_markdown");
+      expect(names).toContain("translate_all");
       expect(names).toContain("list_languages");
       expect(names).toContain("check_status");
     });
@@ -275,6 +292,7 @@ describe("MCP tool handlers", () => {
         cached: 1,
         translated: 2,
         deduplicated: 0,
+        fuzzyMatched: 0,
         ollamaCalls: 1,
         durationMs: 2000,
         warnings: [],

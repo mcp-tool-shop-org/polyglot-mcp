@@ -19,6 +19,7 @@ import {
   cacheKey,
   getCached,
   setCached,
+  getFuzzyCached,
   createCache,
   clearCache,
   pruneCache,
@@ -73,6 +74,8 @@ export interface TranslateMarkdownResult {
   cached: number;
   translated: number;
   deduplicated: number;
+  /** Segments matched by fuzzy cache (translation memory). */
+  fuzzyMatched: number;
   ollamaCalls: number;
   durationMs: number;
   warnings: string[];
@@ -344,6 +347,8 @@ export async function translateMarkdown(
     kind: "heading" | "text" | "cell";
     text: string;
     cacheHit?: string;
+    /** Set when this entry was matched via fuzzy cache (translation memory). */
+    fuzzyHit?: boolean;
     tableKey?: string;
   }
 
@@ -359,11 +364,14 @@ export async function translateMarkdown(
       if (innerText) {
         const key = cacheKey(innerText, targetLang, modelStr);
         const cached = useCache ? getCached(cache, key) : undefined;
+        const fuzzy = (!cached && useCache)
+          ? getFuzzyCached(cache, innerText, targetLang, modelStr)
+          : undefined;
         batchItems.push({
           segIndex: s,
           kind: "text",
           text: innerText,
-          ...(cached ? { cacheHit: cached } : {}),
+          ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
         });
       }
       continue;
@@ -372,11 +380,14 @@ export async function translateMarkdown(
     if (seg.type === "heading") {
       const key = cacheKey(seg.text, targetLang, modelStr);
       const cached = useCache ? getCached(cache, key) : undefined;
+      const fuzzy = (!cached && useCache)
+        ? getFuzzyCached(cache, seg.text, targetLang, modelStr)
+        : undefined;
       batchItems.push({
         segIndex: s,
         kind: "heading",
         text: seg.text,
-        ...(cached ? { cacheHit: cached } : {}),
+        ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
       });
       continue;
     }
@@ -385,11 +396,14 @@ export async function translateMarkdown(
       if (/^`[^`]+`$/.test(seg.text.trim())) continue; // skip bare backtick terms
       const key = cacheKey(seg.text, targetLang, modelStr);
       const cached = useCache ? getCached(cache, key) : undefined;
+      const fuzzy = (!cached && useCache)
+        ? getFuzzyCached(cache, seg.text, targetLang, modelStr)
+        : undefined;
       batchItems.push({
         segIndex: s,
         kind: "text",
         text: seg.text,
-        ...(cached ? { cacheHit: cached } : {}),
+        ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
       });
       continue;
     }
@@ -400,13 +414,16 @@ export async function translateMarkdown(
       for (const cell of translatableCells) {
         const key = cacheKey(cell.text, targetLang, modelStr);
         const cached = useCache ? getCached(cache, key) : undefined;
+        const fuzzy = (!cached && useCache)
+          ? getFuzzyCached(cache, cell.text, targetLang, modelStr)
+          : undefined;
         const tableKey = `${cell.rowIdx}:${cell.cellIdx}`;
         batchItems.push({
           segIndex: s,
           kind: "cell",
           text: cell.text,
           tableKey,
-          ...(cached ? { cacheHit: cached } : {}),
+          ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
         });
       }
       continue;
@@ -415,7 +432,8 @@ export async function translateMarkdown(
 
   // Split into hits and misses, dedup misses
   const misses = batchItems.filter((b) => !b.cacheHit);
-  const cacheHits = batchItems.length - misses.length;
+  const cacheHits = batchItems.filter((b) => b.cacheHit && !b.fuzzyHit).length;
+  const fuzzyHits = batchItems.filter((b) => b.fuzzyHit).length;
 
   const uniqueTexts = new Map<string, number>();
   const uniqueItems: BatchItem[] = [];
@@ -433,6 +451,13 @@ export async function translateMarkdown(
   }
 
   const deduplicated = misses.length - uniqueItems.length;
+
+  // Report progress for cache hits (exact + fuzzy)
+  const totalItems = batchItems.length;
+  let completedItems = cacheHits + fuzzyHits;
+  if (options.onProgress && completedItems > 0) {
+    options.onProgress(completedItems, totalItems);
+  }
 
   // Translate unique misses
   let uniqueTranslations: string[] = [];
@@ -455,8 +480,14 @@ export async function translateMarkdown(
     if (useCache) {
       for (let i = 0; i < uniqueItems.length; i++) {
         const key = cacheKey(uniqueItems[i].text, targetLang, modelStr);
-        setCached(cache, key, uniqueTranslations[i], modelStr);
+        setCached(cache, key, uniqueTranslations[i], modelStr, uniqueItems[i].text);
       }
+    }
+
+    // Report progress for translated items
+    completedItems = totalItems;
+    if (options.onProgress) {
+      options.onProgress(completedItems, totalItems);
     }
   }
 
@@ -497,11 +528,6 @@ export async function translateMarkdown(
     } else {
       translationMap.set(item.segIndex, cleaned);
     }
-  }
-
-  // Report progress
-  if (options.onProgress) {
-    options.onProgress(batchItems.length, batchItems.length);
   }
 
   // Assemble output
@@ -555,6 +581,7 @@ export async function translateMarkdown(
     cached: cacheHits,
     translated: uniqueItems.length,
     deduplicated,
+    fuzzyMatched: fuzzyHits,
     ollamaCalls,
     durationMs: Date.now() - start,
     warnings,

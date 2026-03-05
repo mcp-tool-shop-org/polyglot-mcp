@@ -12,6 +12,8 @@ export interface CacheEntry {
   translation: string;
   model: string;
   timestamp: number;
+  /** Source text — stored for fuzzy matching (added in v1.6.0). */
+  source?: string;
 }
 
 export interface TranslationCache {
@@ -91,9 +93,100 @@ export function setCached(
   cache: TranslationCache,
   key: string,
   translation: string,
-  model: string
+  model: string,
+  source?: string
 ): void {
-  cache.entries[key] = { translation, model, timestamp: Date.now() };
+  cache.entries[key] = { translation, model, timestamp: Date.now(), source };
+}
+
+// ─── Fuzzy matching ───────────────────────────────────────────────
+
+/** Minimum similarity threshold for fuzzy cache hits (0–1). */
+export const FUZZY_THRESHOLD = 0.85;
+
+/**
+ * Compute normalised similarity between two strings using Levenshtein distance.
+ * Returns a value between 0 (completely different) and 1 (identical).
+ *
+ * Uses the iterative Wagner–Fischer algorithm with a single-row optimisation
+ * (O(min(m,n)) space).
+ */
+export function similarity(a: string, b: string): number {
+  if (a === b) return 1;
+  const aN = a.toLowerCase();
+  const bN = b.toLowerCase();
+  if (aN === bN) return 1;
+
+  const m = aN.length;
+  const n = bN.length;
+  if (m === 0 || n === 0) return 0;
+
+  // Early exit: if length difference alone exceeds threshold,
+  // no way the strings are similar enough.
+  const maxLen = Math.max(m, n);
+
+  // Single-row Levenshtein
+  let prev = new Array<number>(n + 1);
+  let curr = new Array<number>(n + 1);
+
+  for (let j = 0; j <= n; j++) prev[j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = aN[i - 1] === bN[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,       // deletion
+        curr[j - 1] + 1,   // insertion
+        prev[j - 1] + cost  // substitution
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+
+  return 1 - prev[n] / maxLen;
+}
+
+/**
+ * Fuzzy cache lookup — finds the best cached entry whose source text is
+ * similar to the query above FUZZY_THRESHOLD.
+ *
+ * Only considers entries that share the same target language and model
+ * (they already live in the same cache so only model match needs checking).
+ *
+ * Returns `{ translation, similarity }` or undefined if nothing matches.
+ */
+export function getFuzzyCached(
+  cache: TranslationCache,
+  text: string,
+  targetLang: string,
+  model: string,
+  ttlMs: number = CACHE_TTL_MS,
+  threshold: number = FUZZY_THRESHOLD
+): { translation: string; similarity: number } | undefined {
+  const now = Date.now();
+  let bestSim = threshold;
+  let bestTranslation: string | undefined;
+
+  for (const entry of Object.values(cache.entries)) {
+    // Skip entries without stored source text (pre-v1.6.0 cache entries)
+    if (!entry.source) continue;
+    // Skip expired
+    if (now - entry.timestamp > ttlMs) continue;
+    // Skip different models
+    if (entry.model !== model) continue;
+
+    const sim = similarity(text, entry.source);
+    if (sim > bestSim) {
+      bestSim = sim;
+      bestTranslation = entry.translation;
+    }
+  }
+
+  if (bestTranslation !== undefined) {
+    return { translation: bestTranslation, similarity: bestSim };
+  }
+  return undefined;
 }
 
 /** @internal Exported for testing. */

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-03-05
+
+### Added
+- **Concurrency semaphore** — `Semaphore` class in `src/semaphore.ts` guards all Ollama `generate()` and `generateStream()` calls to prevent GPU OOM on systems with limited VRAM. Default limit: 1 (override via `POLYGLOT_CONCURRENCY` env var).
+- **Fuzzy cache / translation memory** — `similarity()` (normalised Levenshtein), `getFuzzyCached()` in `src/cache.ts`. Near-miss segments (≥85% similar) reuse existing translations instead of re-translating. Cache entries now store source text for fuzzy comparison.
+- **MCP progress tokens** — all 5 tool handlers now accept `extra` and send `notifications/progress` when the client provides a `progressToken`. Reports per-chunk (translate), per-segment-batch (translate_markdown), per-language (translate_all), and per-step (check_status).
+- **`translate_all` MCP tool** — translates markdown into multiple languages at once (default: 7 — ja, zh, es, fr, hi, it, pt). Runs concurrently with semaphore-safe limiting. Includes nav bar injection and per-language progress reporting.
+- **`src/translateAll.ts`** — core multi-language orchestrator extracted from `scripts/translate-all.mjs`, now a proper TypeScript module with `translateAll()`, `buildNavBar()`, `injectNavBar()` exports.
+- **41 new tests** — `semaphore.test.ts` (8), expanded `cache.test.ts` (+16 for similarity & fuzzy), `translateAll.test.ts` (17). Total: 246 tests across 13 files.
+
+### Changed
+- `OllamaClient.generate()` and `generateStream()` now acquire a semaphore permit before calling Ollama and release it when done.
+- `TranslateMarkdownResult` now includes `fuzzyMatched` field reporting fuzzy cache hits.
+- `setCached()` accepts an optional `source` parameter for translation memory.
+- `translateMarkdown` reports progress incrementally (cache hits reported immediately, translations after batch completes) instead of a single final callback.
+- Server now registers 5 tools (was 4): translate, list_languages, translate_markdown, translate_all, check_status.
+
 ## [1.5.1] - 2026-03-05
 
 ### Added

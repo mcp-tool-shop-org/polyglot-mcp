@@ -6,6 +6,7 @@
 
 import { execSync, spawn } from "node:child_process";
 import { PolyglotError } from "./errors.js";
+import { ollamaSemaphore } from "./semaphore.js";
 
 /** Default timeout for generate calls (60s — covers cold-load + inference). */
 const GENERATE_TIMEOUT_MS = 60_000;
@@ -60,8 +61,19 @@ export class OllamaClient {
   /**
    * Generate a completion with automatic retry for retryable errors.
    * Retries up to MAX_RETRIES times with exponential backoff.
+   * Guarded by the global concurrency semaphore.
    */
   async generate(req: OllamaGenerateRequest): Promise<OllamaGenerateResponse> {
+    const release = await ollamaSemaphore.acquire();
+    try {
+      return await this._generateWithRetry(req);
+    } finally {
+      release();
+    }
+  }
+
+  /** @internal Retry wrapper — called inside semaphore guard. */
+  private async _generateWithRetry(req: OllamaGenerateRequest): Promise<OllamaGenerateResponse> {
     let lastError: PolyglotError | undefined;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -148,8 +160,22 @@ export class OllamaClient {
    * Generate a completion with streaming — yields tokens as they arrive.
    * Collects the full response and returns it, while calling onToken for each chunk.
    * Uses retry logic identical to generate().
+   * Guarded by the global concurrency semaphore.
    */
   async generateStream(
+    req: OllamaGenerateRequest,
+    onToken: StreamCallback
+  ): Promise<OllamaGenerateResponse> {
+    const release = await ollamaSemaphore.acquire();
+    try {
+      return await this._generateStreamWithRetry(req, onToken);
+    } finally {
+      release();
+    }
+  }
+
+  /** @internal Retry wrapper for streaming — called inside semaphore guard. */
+  private async _generateStreamWithRetry(
     req: OllamaGenerateRequest,
     onToken: StreamCallback
   ): Promise<OllamaGenerateResponse> {

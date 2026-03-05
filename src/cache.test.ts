@@ -7,6 +7,9 @@ import {
   pruneCache,
   clearCache,
   getCachePath,
+  similarity,
+  getFuzzyCached,
+  FUZZY_THRESHOLD,
 } from "./cache.js";
 
 describe("cacheKey", () => {
@@ -137,5 +140,120 @@ describe("getCachePath", () => {
     const p = getCachePath("/some/dir/README.md");
     expect(p).toContain("some");
     expect(p).toContain("dir");
+  });
+});
+
+// ─── Fuzzy cache / translation memory ─────────────────────────────
+
+describe("similarity", () => {
+  it("returns 1 for identical strings", () => {
+    expect(similarity("hello world", "hello world")).toBe(1);
+  });
+
+  it("returns 1 for case-different strings", () => {
+    expect(similarity("Hello World", "hello world")).toBe(1);
+  });
+
+  it("returns 0 for empty vs non-empty", () => {
+    expect(similarity("", "hello")).toBe(0);
+    expect(similarity("hello", "")).toBe(0);
+  });
+
+  it("returns high similarity for minor edits", () => {
+    const sim = similarity(
+      "Install Ollama from https://ollama.com",
+      "Install Ollama from https://ollama.ai"
+    );
+    expect(sim).toBeGreaterThan(0.9);
+  });
+
+  it("returns low similarity for unrelated strings", () => {
+    const sim = similarity("hello world", "typescript is great");
+    expect(sim).toBeLessThan(0.5);
+  });
+
+  it("handles single character difference", () => {
+    const sim = similarity("cat", "bat");
+    expect(sim).toBeCloseTo(0.667, 2);
+  });
+
+  it("handles transpositions", () => {
+    const sim = similarity("abcd", "abdc");
+    expect(sim).toBeGreaterThanOrEqual(0.5);
+  });
+});
+
+describe("getFuzzyCached", () => {
+  it("returns undefined for empty cache", () => {
+    const cache = createCache();
+    expect(getFuzzyCached(cache, "hello", "ja", "model")).toBeUndefined();
+  });
+
+  it("returns undefined when entries lack source text", () => {
+    const cache = createCache();
+    // Old-style entry without source
+    cache.entries["key1"] = {
+      translation: "こんにちは",
+      model: "translategemma:12b",
+      timestamp: Date.now(),
+    };
+    expect(getFuzzyCached(cache, "hello", "ja", "translategemma:12b")).toBeUndefined();
+  });
+
+  it("finds fuzzy match above threshold", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "Excelente calidad", "translategemma:12b", "Excellent quality");
+    const result = getFuzzyCached(cache, "Excellent qualiti", "es", "translategemma:12b");
+    expect(result).toBeDefined();
+    expect(result!.translation).toBe("Excelente calidad");
+    expect(result!.similarity).toBeGreaterThan(FUZZY_THRESHOLD);
+  });
+
+  it("returns undefined for below-threshold matches", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "こんにちは", "translategemma:12b", "Hello world");
+    const result = getFuzzyCached(cache, "Completely different text", "ja", "translategemma:12b");
+    expect(result).toBeUndefined();
+  });
+
+  it("skips expired entries", () => {
+    const cache = createCache();
+    cache.entries["key1"] = {
+      translation: "expired",
+      model: "translategemma:12b",
+      timestamp: Date.now() - 31 * 24 * 60 * 60 * 1000,
+      source: "Hello world",
+    };
+    expect(getFuzzyCached(cache, "Hello world", "ja", "translategemma:12b")).toBeUndefined();
+  });
+
+  it("skips entries with different model", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "こんにちは", "translategemma:4b", "Hello world");
+    expect(getFuzzyCached(cache, "Hello world", "ja", "translategemma:12b")).toBeUndefined();
+  });
+
+  it("returns the best match when multiple candidates exist", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "translation A", "m", "Hello universe");
+    setCached(cache, "key2", "translation B", "m", "Hello world!!");
+    const result = getFuzzyCached(cache, "Hello world!", "ja", "m");
+    expect(result).toBeDefined();
+    // "Hello world!" is closer to "Hello world!!" than "Hello universe"
+    expect(result!.translation).toBe("translation B");
+  });
+});
+
+describe("setCached with source text", () => {
+  it("stores source text in the cache entry", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "translated", "model", "original");
+    expect(cache.entries["key1"].source).toBe("original");
+  });
+
+  it("works without source text (backward compat)", () => {
+    const cache = createCache();
+    setCached(cache, "key1", "translated", "model");
+    expect(cache.entries["key1"].source).toBeUndefined();
   });
 });

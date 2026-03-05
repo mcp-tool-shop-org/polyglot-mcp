@@ -71,7 +71,7 @@ That's it. Ask Claude to translate something and it will use the `translate` too
 
 ## Tools
 
-Polyglot exposes four MCP tools:
+Polyglot exposes five MCP tools:
 
 ### `translate`
 
@@ -106,6 +106,19 @@ List all 57 supported languages with their codes.
 
 Check if Ollama is running and which TranslateGemma models are installed. Attempts auto-start if Ollama isn't running.
 
+### `translate_all`
+
+Translate markdown content into multiple languages at once (default: 7 — Japanese, Chinese, Spanish, French, Hindi, Italian, Portuguese). Runs translations concurrently with GPU-safe semaphore limiting.
+
+| Parameter     | Required | Description |
+|---------------|----------|-------------|
+| `markdown`    | yes      | The full markdown content to translate |
+| `from`        | no       | Source language code (default: `en`) |
+| `languages`   | no       | Array of target language codes (default: all 7) |
+| `model`       | no       | Ollama model (default: `translategemma:12b`) |
+| `concurrency` | no       | Max concurrent translations (default: 2, max: 3) |
+| `navBar`      | no       | Inject language nav bar (default: true) |
+
 ## Features
 
 ### Auto-start & Auto-pull
@@ -119,6 +132,19 @@ Long text is split at natural boundaries — paragraphs, then sentences — so t
 
 ### Segment Cache
 Translated segments are cached by content hash (SHA-256 of source text + target language + model). Unchanged segments skip re-translation entirely. Cache lives in `.polyglot-cache.json` with a 30-day TTL.
+
+### Translation Memory (Fuzzy Cache)
+When an exact cache hit isn't found, Polyglot checks for near-miss segments using Levenshtein similarity. If a cached source is ≥85% similar to the current segment, the existing translation is reused. This dramatically speeds up retranslation after minor README edits.
+
+### Concurrency Semaphore
+All Ollama calls are guarded by a counting semaphore (default limit: 1) to prevent GPU OOM on systems with limited VRAM. Override with `POLYGLOT_CONCURRENCY`:
+
+```bash
+POLYGLOT_CONCURRENCY=2 npx @mcptoolshop/polyglot-mcp
+```
+
+### MCP Progress Tokens
+All tools report progress via MCP `notifications/progress` when the client provides a `progressToken`. Translate reports per-chunk, translate_markdown per-segment-batch, translate_all per-language, and check_status per-step.
 
 ### Software Glossary
 A built-in glossary of 12 technical terms (API, CLI, SDK, etc.) ensures consistent translation of software terminology. Custom glossary entries can be passed per-request and are merged with the defaults.
@@ -165,18 +191,22 @@ MCP Client (Claude Code, etc.)
       │  MCP protocol (stdio)
       ▼
 ┌──────────────────┐
-│    index.ts      │  MCP server — 4 tools: translate, translate_markdown,
-│                  │  list_languages, check_status
+│    index.ts      │  MCP server — 5 tools: translate, translate_markdown,
+│                  │  translate_all, list_languages, check_status
 ├──────────────────┤
 │  translate.ts    │  Prompt building, chunking, batch mode, streaming
 ├──────────────────┤
 │translateMarkdown │  Markdown-aware segmentation, table parsing, reassembly
 ├──────────────────┤
+│ translateAll.ts  │  Multi-language orchestrator with nav bar injection
+├──────────────────┤
+│  semaphore.ts    │  Counting semaphore for GPU-safe concurrency
+├──────────────────┤
 │   validate.ts    │  Output validation (empty, echo, truncation, garble)
 ├──────────────────┤
 │   ollama.ts      │  HTTP client — auto-start, auto-pull, retry, streaming
 ├──────────────────┤
-│   cache.ts       │  Segment cache (SHA-256 keys, 30-day TTL)
+│   cache.ts       │  Segment cache + fuzzy translation memory
 ├──────────────────┤
 │  glossary.ts     │  Software term dictionary
 ├──────────────────┤
@@ -208,7 +238,7 @@ See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy.
 ```bash
 npm install             # install deps
 npm run typecheck       # type-check without emitting
-npm test                # run 205 unit tests (vitest)
+npm test                # run 246 unit tests (vitest)
 npm run build           # compile TypeScript to dist/
 npm run verify          # typecheck + test + build + pack (full gate)
 ```
