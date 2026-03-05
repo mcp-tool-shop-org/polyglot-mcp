@@ -19,24 +19,33 @@
 
 ## Cosa fa
 
-Traduce testi tra 55 lingue utilizzando [TranslateGemma](https://ollama.com/library/translategemma), eseguito localmente sulla tua GPU tramite [Ollama](https://ollama.com). Non sono necessarie chiavi API, non si utilizza il cloud e non ci sono limiti di utilizzo: tutto viene eseguito sulla tua macchina.
+Traduce testi tra 55 lingue utilizzando [TranslateGemma](https://ollama.com/library/translategemma), eseguito localmente sulla tua GPU tramite [Ollama](https://ollama.com). Nessuna chiave API, nessun servizio cloud, nessun limite di utilizzo: tutto rimane sulla tua macchina.
 
-## Prerequisiti
+## Guida rapida
 
-1. **[Ollama](https://ollama.com)** installato e in esecuzione (`ollama serve`)
-2. Modello **TranslateGemma** scaricato:
+### 1. Installa Ollama
+
+Scarica da [ollama.com](https://ollama.com) e avvialo:
+
 ```bash
-ollama pull translategemma:12b   # 8.1 GB — miglior equilibrio tra qualità e velocità
-# oppure
-ollama pull translategemma:4b    # 3.3 GB — più veloce, qualità inferiore
+ollama serve
 ```
-3. **Node.js 18+**
 
-## Installazione
+### 2. Scarica un modello
 
-### Claude Code / Claude Desktop
+```bash
+ollama pull translategemma:12b   # 8.1 GB — best quality/speed balance
+# or
+ollama pull translategemma:4b    # 3.3 GB — faster, lower quality
+# or
+ollama pull translategemma:27b   # 17 GB  — highest quality
+```
 
-Aggiungi alla tua configurazione MCP (`claude_desktop_config.json` o `.mcp.json`):
+> **Suggerimento:** Puoi saltare questo passaggio: Polyglot scarica automaticamente il modello al primo utilizzo.
+
+### 3. Aggiungi al tuo client MCP
+
+**Claude Code / Claude Desktop** — aggiungi a `claude_desktop_config.json` o `.mcp.json`:
 
 ```json
 {
@@ -49,7 +58,7 @@ Aggiungi alla tua configurazione MCP (`claude_desktop_config.json` o `.mcp.json`
 }
 ```
 
-### Da sorgente
+**Da sorgente:**
 
 ```bash
 git clone https://github.com/mcp-tool-shop-org/polyglot-mcp.git
@@ -58,18 +67,25 @@ npm install && npm run build
 node dist/index.js
 ```
 
+Fatto. Chiedi a Claude di tradurre qualcosa e utilizzerà automaticamente lo strumento `translate`.
+
 ## Strumenti
+
+Polyglot espone tre strumenti MCP:
 
 ### `translate`
 
 Traduce testi tra qualsiasi coppia di lingue supportate.
 
-| Parametro | Obbligatorio | Descrizione |
-|-----------|----------|-------------|
-| `text` | sì | Testo da tradurre |
-| `from` | sì | Codice o nome della lingua di origine (es. `en`, `English`) |
-| `to` | sì | Codice o nome della lingua di destinazione (es. `ja`, `Japanese`) |
-| `model` | no | Modello Ollama (predefinito: `translategemma:12b`) |
+| Parametri | Obbligatorio | Descrizione |
+|-------------|----------|-------------|
+| `text`      | sì | Testo da tradurre |
+| `from`      | sì | Codice o nome della lingua di origine (es. `en`, `English`) |
+| `to`        | sì | Codice o nome della lingua di destinazione (es. `ja`, `Japanese`) |
+| `model`     | no       | Modello Ollama (predefinito: `translategemma:12b`) |
+| `glossary`  | no       | Sovrascritture di termini personalizzati nel formato `{"source": "translation"}` — unite al glossario software integrato |
+
+Testi lunghi vengono automaticamente suddivisi in blocchi ai confini di paragrafi e frasi, tradotti in sequenza e riassemblati.
 
 ### `list_languages`
 
@@ -77,37 +93,106 @@ Elenca tutte le 55 lingue supportate con i relativi codici.
 
 ### `check_status`
 
-Verifica se Ollama è in esecuzione e quali modelli TranslateGemma sono installati.
+Verifica se Ollama è in esecuzione e quali modelli TranslateGemma sono installati. Tenta l'avvio automatico se Ollama non è in esecuzione.
+
+## Funzionalità
+
+### Avvio e download automatici
+Ollama viene avviato automaticamente se non è in esecuzione. Il modello TranslateGemma viene scaricato automaticamente se non è installato. Non è necessaria alcuna configurazione manuale.
+
+### Riprova con backoff esponenziale
+I fallimenti temporanei di Ollama (interruzioni di rete, sovraccarico temporaneo) vengono automaticamente riprovati fino a 2 volte con un backoff esponenziale (1 s, 2 s). Gli errori non riprovabili (nome del modello non valido, input non valido) falliscono immediatamente.
+
+### Suddivisione intelligente
+I testi lunghi vengono suddivisi in base a confini naturali: paragrafi, quindi frasi, in modo da preservare il contesto della traduzione. Le dimensioni dei blocchi si adattano al modello: 2K caratteri per i modelli 2B/4B, 4K per 12B, 6K per 27B.
+
+### Cache dei segmenti
+I segmenti tradotti vengono memorizzati nella cache in base all'hash del contenuto (SHA-256 del testo di origine + lingua di destinazione + modello). I segmenti invariati saltano completamente la ritraduzione. La cache si trova in `.polyglot-cache.json` con una durata di 30 giorni.
+
+### Glossario software
+Un glossario integrato di 12 termini tecnici (API, CLI, SDK, ecc.) garantisce una traduzione coerente della terminologia software. Le voci del glossario personalizzate possono essere fornite per ogni richiesta e vengono unite ai valori predefiniti.
+
+### Traduzione in batch
+`translateBatch` raggruppa più segmenti in un'unica richiesta, ove possibile, riducendo il numero di richieste. In caso di errori nella separazione del batch, si ricorre alla traduzione individuale.
+
+### Modello predefinito configurabile
+Imposta la variabile d'ambiente `POLYGLOT_MODEL` per sovrascrivere il modello predefinito:
+
+```bash
+POLYGLOT_MODEL=translategemma:27b npx @mcptoolshop/polyglot-mcp
+```
+
+### Errori strutturati
+Tutti gli errori utilizzano `PolyglotError` con un codice leggibile dalla macchina (`MODEL_NOT_FOUND`, `OLLAMA_UNAVAILABLE`, `TRANSLATION_FAILED`, ecc.), un messaggio leggibile dall'utente, un suggerimento opzionale e un flag `retryable`.
 
 ## Lingue supportate
 
-Afrikaans, albanese, arabo, bengalese, bulgaro, catalano, cinese (semplificato), cinese (tradizionale), croato, ceco, danese, olandese, inglese, estone, finlandese, francese, galiziano, tedesco, greco, gujarati, ebraico, hindi, ungherese, indonesiano, irlandese, italiano, giapponese, kannada, coreano, lettone, lituano, macedone, malese, malayalam, maltese, marathi, norvegese, persiano, polacco, portoghese, rumeno, russo, scozzese gaelico, serbo, slovacco, sloveno, spagnolo, swahili, svedese, tamil, telugu, tailandese, turco, ucraino, urdu, vietnamita, gallese.
+Afrikaans, albanese, arabo, bengalese, bulgaro, catalano, cinese (semplificato), cinese (tradizionale), croato, ceco, danese, olandese, inglese, estone, finlandese, francese, galiziano, tedesco, greco, gujarati, ebraico, hindi, ungherese, indonesiano, irlandese, italiano, giapponese, kannada, coreano, lettone, lituano, macedone, malese, malayalam, maltese, marathi, norvegese, persiano, polacco, portoghese, rumeno, russo, scozzese (gaelico), serbo, slovacco, sloveno, spagnolo, swahili, svedese, tamil, telugu, tailandese, turco, ucraino, urdu, vietnamita, gallese.
 
 ## Prestazioni
 
-Su una RTX 5080 (16 GB di VRAM) con TranslateGemma 12B (Q4):
+Su un sistema RTX 5080 (16 GB di VRAM) con TranslateGemma 12B (Q4):
 
 | Metrica | Valore |
 |--------|-------|
-| Prima traduzione (caricamento iniziale) | ~15 secondi |
-| Traduzioni successive | ~600 ms |
+| Prima traduzione (caricamento iniziale del modello) | ~15 secondi |
+| Traduzioni successive | ~600 millisecondi |
 | Utilizzo della VRAM | ~8.1 GB |
-| Testo lungo (diviso in blocchi) | ~600 ms per blocco |
+| Testo lungo (per blocco) | ~600 millisecondi |
+
+## Architettura
+
+```
+MCP Client (Claude Code, etc.)
+      │
+      │  MCP protocol (stdio)
+      ▼
+┌─────────────┐
+│  index.ts   │  MCP server — registers tools, routes calls
+├─────────────┤
+│ translate.ts│  Prompt building, chunking, batch mode
+├─────────────┤
+│  ollama.ts  │  HTTP client — auto-start, auto-pull, retry
+├─────────────┤
+│  cache.ts   │  Segment cache (SHA-256 keys, 30-day TTL)
+├─────────────┤
+│ glossary.ts │  Software term dictionary
+├─────────────┤
+│  polish.ts  │  Post-translation artifact cleanup
+├─────────────┤
+│ languages.ts│  55 language definitions
+├─────────────┤
+│  errors.ts  │  PolyglotError structured error class
+└─────────────┘
+      │
+      │  HTTP (localhost:11434)
+      ▼
+   Ollama + TranslateGemma (GPU)
+```
 
 ## Sicurezza e ambito dei dati
 
-**Dati utilizzati:** testo inviato all'API locale di Ollama (`localhost:11434`) per la traduzione, cache di segmenti `.polyglot-cache.json`. **Dati NON utilizzati:** nessun file al di fuori della directory di lavoro, nessun dato del browser, nessuna credenziale del sistema operativo. **Rete:** connessioni HTTP solo a `localhost:11434` — nessuna connessione esterna o internet. **Non vengono raccolti o inviati dati di telemetria**.
+| Aspetto | Dettaglio |
+|--------|--------|
+| **Data touched** | Testo inviato all'API locale di Ollama (`localhost:11434`), cache segmentata in `.polyglot-cache.json` |
+| **Data NOT touched** | Nessun file al di fuori della directory di lavoro, nessun dato del browser, nessuna credenziale del sistema operativo |
+| **Network** | Solo connessioni HTTP a `localhost:11434` — nessun traffico esterno/internet |
+| **Telemetry** | Nessun dato raccolto o trasmesso |
 
-## Come funziona
+Consultare [SECURITY.md](SECURITY.md) per la politica di segnalazione delle vulnerabilità.
 
-1. Il client MCP (Claude Code, ecc.) chiama lo strumento `translate`.
-2. Polyglot crea un prompt per TranslateGemma con la coppia di lingue di origine/destinazione.
-3. Il prompt viene inviato all'API HTTP locale di Ollama.
-4. Ollama esegue TranslateGemma sulla tua GPU e restituisce la traduzione.
-5. Per testi lunghi, il contenuto viene suddiviso in blocchi ai confini di paragrafi/frasi.
+## Sviluppo
+
+```bash
+npm install             # install deps
+npm run typecheck       # type-check without emitting
+npm test                # run 114 unit tests (vitest)
+npm run build           # compile TypeScript to dist/
+npm run verify          # typecheck + test + build + pack (full gate)
+```
 
 ## Licenza
 
-Licenza MIT — consulta [LICENSE](LICENSE) per i dettagli.
+MIT — vedere [LICENSE](LICENSE).
 
 > Creato da [MCP Tool Shop](https://mcp-tool-shop.github.io/)
