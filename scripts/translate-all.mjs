@@ -13,10 +13,7 @@
  * --no-nav-bar      Skip language nav bar injection
  */
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { spawn } from "node:child_process";
 import { existsSync, renameSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,30 +60,74 @@ let completed = 0;
 
 const passFlags = flags.filter((f) => !f.startsWith("--concurrency") && f !== "--no-nav-bar");
 
-console.log(`Translating ${basename(absReadmePath)} → ${LANGUAGES.length} languages (concurrency=${concurrency})`);
+console.log(`Translating ${basename(absReadmePath)} → ${LANGUAGES.length} languages (concurrency=${concurrency})\n`);
 
-/** Translate a single language (async). Returns a result object. */
+const spinner = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+let spinIdx = 0;
+
+/** Per-language segment tracking: { code: { done, total } } */
+const segProgress = {};
+
+/** Render a progress bar to stderr with segment-level detail. */
+function renderProgress() {
+  const elapsed = ((Date.now() - totalStart) / 1000).toFixed(0);
+  const tick = completed < LANGUAGES.length ? spinner[spinIdx++ % spinner.length] : "✓";
+
+  // Build per-language status: "ja 12/40  zh 3/40"
+  const active = Object.entries(segProgress)
+    .map(([code, v]) => v.total > 0 ? `${code} ${v.done}/${v.total}` : `${code} starting…`)
+    .join("  ");
+  const doneMsg = completed < LANGUAGES.length ? (active || "loading model…") : "done!";
+
+  process.stderr.write(`\r  ${tick} ${completed}/${LANGUAGES.length} langs done | ${doneMsg} | ${elapsed}s  `);
+}
+
+renderProgress();
+const progressInterval = setInterval(renderProgress, 500);
+
+/** Translate a single language using spawn for streaming progress. */
 async function translateLang(lang) {
   const langStart = Date.now();
-  console.log(`  [start] ${lang.name} (${lang.code})`);
-  try {
-    const { stdout, stderr } = await execFileAsync("node", [translateScript, absReadmePath, lang.code, ...passFlags], {
-      timeout: 180_000,
+  segProgress[lang.code] = { done: 0, total: 0 };
+
+  return new Promise((resolve_) => {
+    const child = spawn("node", [translateScript, absReadmePath, lang.code, ...passFlags], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 300_000,
     });
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(stderr);
-    const result = finishLang(lang, langStart);
-    completed++;
-    console.log(`  [done]  ${lang.name} — ${result.time}s (${completed}/${LANGUAGES.length})`);
-    return result;
-  } catch (err) {
-    if (err.stdout) process.stdout.write(err.stdout);
-    if (err.stderr) process.stderr.write(err.stderr);
-    const elapsed = ((Date.now() - langStart) / 1000).toFixed(1);
-    completed++;
-    console.error(`  [FAIL]  ${lang.name} after ${elapsed}s — ${err.message.split("\n")[0]}`);
-    return { lang: lang.code, name: lang.name, status: "error", time: elapsed, error: err.message };
-  }
+
+    let killed = false;
+    const timer = setTimeout(() => { killed = true; child.kill(); }, 300_000);
+
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      // Parse segment progress lines: "  PROGRESS:12/40"
+      const match = text.match(/PROGRESS:(\d+)\/(\d+)/);
+      if (match) {
+        segProgress[lang.code] = { done: parseInt(match[1]), total: parseInt(match[2]) };
+      }
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const elapsed = ((Date.now() - langStart) / 1000).toFixed(1);
+      delete segProgress[lang.code];
+
+      if (code === 0 && !killed) {
+        const result = finishLang(lang, langStart);
+        completed++;
+        renderProgress();
+        process.stderr.write(`\n  ✓ ${lang.name} — ${result.time}s\n`);
+        resolve_(result);
+      } else {
+        completed++;
+        renderProgress();
+        const reason = killed ? "timeout (300s)" : `exit code ${code}`;
+        process.stderr.write(`\n  ✗ ${lang.name} — FAILED after ${elapsed}s (${reason})\n`);
+        resolve_({ lang: lang.code, name: lang.name, status: "error", time: elapsed, error: reason });
+      }
+    });
+  });
 }
 
 /** Common post-translation handling (rename, result). */
@@ -205,6 +246,9 @@ if (!noNavBar) {
   }
 }
 
+clearInterval(progressInterval);
+renderProgress();
+process.stderr.write("\n");
 const totalElapsed = ((Date.now() - totalStart) / 1000).toFixed(1);
 
 // Emit structured summary

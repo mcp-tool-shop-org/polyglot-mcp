@@ -45,7 +45,8 @@ const result = await translateMarkdown(readme, "en", targetCode, {
   cacheClear: doCacheClear,
   filePath: absReadmePath,
   onProgress: (completed, total) => {
-    process.stdout.write(".");
+    const pct = Math.round((completed / total) * 100);
+    process.stderr.write(`\r  PROGRESS:${completed}/${total} (${pct}%) segments`);
   },
 });
 
