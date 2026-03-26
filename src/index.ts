@@ -359,6 +359,14 @@ server.tool(
   }
 );
 
+// --- CLI flags ---
+
+const arg = process.argv[2];
+if (arg === "--version" || arg === "-V") {
+  process.stdout.write(`polyglot-mcp ${VERSION}\n`);
+  process.exit(0);
+}
+
 // --- Start ---
 
 async function main() {

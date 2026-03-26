@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-03-25
+
+### Added
+
+- `--version` / `-V` flag on CLI entry point
+- 5 version consistency tests (semver, >= 1.0.0, package.json match, CHANGELOG, --version flag)
+
 ## [1.7.0] - 2026-03-05
 
 ### Fixed
