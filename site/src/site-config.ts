@@ -2,7 +2,7 @@ import type { SiteConfig } from '@mcptoolshop/site-theme';
 
 export const config: SiteConfig = {
   title: '@mcptoolshop/polyglot-mcp',
-  description: 'Local GPU translation MCP server — TranslateGemma via Ollama, 55 languages, zero cloud dependency.',
+  description: 'Local GPU translation MCP server — TranslateGemma via Ollama, 57 languages, zero cloud dependency.',
   logoBadge: 'PG',
   brandName: 'Polyglot MCP',
   repoUrl: 'https://github.com/mcp-tool-shop-org/polyglot-mcp',
@@ -10,10 +10,10 @@ export const config: SiteConfig = {
   footerText: 'MIT Licensed — built by <a href="https://mcp-tool-shop.github.io/" style="color:var(--color-muted);text-decoration:underline">MCP Tool Shop</a>',
 
   hero: {
-    badge: '55 languages · local GPU · zero cloud',
+    badge: '57 languages · local GPU · zero cloud',
     headline: 'Polyglot MCP',
     headlineAccent: 'translate everything, locally.',
-    description: 'An MCP server that translates text between 55 languages using TranslateGemma on your GPU via Ollama. No API keys, no cloud, no rate limits — everything runs on your machine.',
+    description: 'An MCP server that translates text between 57 languages using TranslateGemma on your GPU via Ollama. No API keys, no cloud, no rate limits — everything runs on your machine.',
     primaryCta: { href: '#setup', label: 'Get started' },
     secondaryCta: { href: 'handbook/', label: 'Read the Handbook' },
     previews: [
@@ -40,7 +40,7 @@ export const config: SiteConfig = {
       id: 'capabilities',
       title: 'Capabilities',
       features: [
-        { title: '55 Languages', desc: 'From Afrikaans to Vietnamese — including CJK, Arabic, Hindi, and all major European languages.' },
+        { title: '57 Languages', desc: 'From Afrikaans to Vietnamese — including CJK, Arabic, Hindi, and all major European languages.' },
         { title: 'Smart Chunking', desc: 'Long text is split at paragraph and sentence boundaries, preserving context across chunks.' },
         { title: 'Model Choice', desc: 'Default to 12B for quality, switch to 4B for speed, or 27B for maximum accuracy.' },
       ],
@@ -71,10 +71,12 @@ ollama serve` },
       kind: 'data-table',
       id: 'tools',
       title: 'MCP Tools',
-      subtitle: 'Three tools exposed to your LLM agent.',
+      subtitle: 'Five tools exposed to your LLM agent.',
       columns: ['Tool', 'Description'],
       rows: [
-        ['translate', 'Translate text between any two of 55 supported languages'],
+        ['translate', 'Translate text between any two of 57 supported languages'],
+        ['translate_markdown', 'Translate a full markdown document while preserving structure'],
+        ['translate_all', 'Translate markdown into multiple languages concurrently'],
         ['list_languages', 'List all supported language codes and names'],
         ['check_status', 'Verify Ollama is running and TranslateGemma is installed'],
       ],
@@ -95,7 +97,7 @@ ollama serve` },
       kind: 'data-table',
       id: 'languages',
       title: 'Supported Languages',
-      subtitle: '55 languages powered by Google TranslateGemma.',
+      subtitle: '57 languages powered by Google TranslateGemma.',
       columns: ['Region', 'Languages'],
       rows: [
         ['Europe', 'English, French, German, Spanish, Portuguese, Italian, Dutch, Danish, Swedish, Norwegian, Finnish, Polish, Czech, Slovak, Slovenian, Croatian, Serbian, Albanian, Bulgarian, Romanian, Hungarian, Estonian, Latvian, Lithuanian, Macedonian, Maltese, Greek, Irish, Scottish Gaelic, Galician, Catalan, Welsh'],
