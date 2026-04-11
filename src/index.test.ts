@@ -117,15 +117,15 @@ describe("MCP tool handlers", () => {
       ],
     }));
     vi.doMock("./ollama.js", () => ({
-      OllamaClient: vi.fn().mockImplementation(() => ({
+      OllamaClient: vi.fn().mockImplementation(function() { return {
         ensureRunning: vi.fn().mockResolvedValue(true),
         listModels: vi.fn().mockResolvedValue([
           { name: "translategemma:12b", size: 8.1e9, digest: "abc" },
         ]),
-      })),
+      };}),
     }));
     vi.doMock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
-      McpServer: vi.fn().mockImplementation(() => ({
+      McpServer: vi.fn().mockImplementation(function() { return {
         tool: (name: string, description: string, schema: unknown, handler: unknown) => {
           registeredTools.push({
             name,
@@ -135,7 +135,7 @@ describe("MCP tool handlers", () => {
           });
         },
         connect: vi.fn().mockResolvedValue(undefined),
-      })),
+      };}),
     }));
     vi.doMock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
       StdioServerTransport: vi.fn(),
