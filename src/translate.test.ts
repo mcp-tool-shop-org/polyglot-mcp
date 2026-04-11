@@ -172,7 +172,7 @@ describe("BATCH_SEPARATOR", () => {
 
 // We mock the entire ollama module so no real server is needed
 vi.mock("./ollama.js", () => {
-  const MockOllamaClient = vi.fn().mockImplementation(() => ({
+  const MockOllamaClient = vi.fn().mockImplementation(function() { return ({
     ensureRunning: vi.fn().mockResolvedValue(true),
     ensureModel: vi.fn().mockResolvedValue(true),
     generate: vi.fn().mockResolvedValue({
@@ -189,7 +189,7 @@ vi.mock("./ollama.js", () => {
         done: true,
       };
     }),
-  }));
+  });});
   return { OllamaClient: MockOllamaClient };
 });
 

@@ -31,12 +31,12 @@ vi.mock("./translateAll.js", () => ({
 
 // Mock ollama module
 vi.mock("./ollama.js", () => {
-  const MockOllamaClient = vi.fn().mockImplementation(() => ({
+  const MockOllamaClient = vi.fn().mockImplementation(function() { return {
     ensureRunning: vi.fn().mockResolvedValue(true),
     listModels: vi.fn().mockResolvedValue([
       { name: "translategemma:12b", size: 8.1e9, digest: "abc" },
     ]),
-  }));
+  };});
   return { OllamaClient: MockOllamaClient };
 });
 
@@ -66,7 +66,7 @@ const registeredTools: ToolRegistration[] = [];
 
 vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => {
   return {
-    McpServer: vi.fn().mockImplementation(() => ({
+    McpServer: vi.fn().mockImplementation(function() { return {
       tool: (name: string, description: string, schema: unknown, handler: unknown) => {
         registeredTools.push({
           name,
@@ -76,7 +76,7 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => {
         });
       },
       connect: vi.fn().mockResolvedValue(undefined),
-    })),
+    };}),
   };
 });
 
@@ -355,11 +355,12 @@ describe("MCP tool handlers", () => {
       // mock the next instantiation to return unavailable.
       const { OllamaClient: MockClient } = await import("./ollama.js");
       vi.mocked(MockClient).mockImplementationOnce(
-        () =>
-          ({
+        function() {
+          return ({
             ensureRunning: vi.fn().mockResolvedValue(false),
             listModels: vi.fn(),
-          }) as unknown as OllamaClient
+          }) as unknown as OllamaClient;
+        }
       );
 
       const result = (await handler({})) as {
@@ -375,13 +376,14 @@ describe("MCP tool handlers", () => {
       const handler = getToolHandler("check_status");
       const { OllamaClient: MockClient } = await import("./ollama.js");
       vi.mocked(MockClient).mockImplementationOnce(
-        () =>
-          ({
+        function() {
+          return ({
             ensureRunning: vi.fn().mockResolvedValue(true),
             listModels: vi.fn().mockResolvedValue([
               { name: "llama3:8b", size: 4e9, digest: "xyz" },
             ]),
-          }) as unknown as OllamaClient
+          }) as unknown as OllamaClient;
+        }
       );
 
       const result = (await handler({})) as {
