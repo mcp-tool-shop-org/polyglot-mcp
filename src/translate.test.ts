@@ -172,7 +172,7 @@ describe("BATCH_SEPARATOR", () => {
 
 // We mock the entire ollama module so no real server is needed
 vi.mock("./ollama.js", () => {
-  const MockOllamaClient = vi.fn().mockImplementation(() => ({
+  const MockOllamaClient = vi.fn().mockImplementation(function() { return ({
     ensureRunning: vi.fn().mockResolvedValue(true),
     ensureModel: vi.fn().mockResolvedValue(true),
     generate: vi.fn().mockResolvedValue({
@@ -189,7 +189,7 @@ vi.mock("./ollama.js", () => {
         done: true,
       };
     }),
-  }));
+  });});
   return { OllamaClient: MockOllamaClient };
 });
 
@@ -237,23 +237,23 @@ describe("translate()", () => {
   it("throws OLLAMA_UNAVAILABLE when ensureRunning returns false", async () => {
     const mockInstances = vi.mocked(OllamaClient).mock.results;
     // Get the next instance that will be created
-    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+    vi.mocked(OllamaClient).mockImplementationOnce(function() { return ({
       ensureRunning: vi.fn().mockResolvedValue(false),
       ensureModel: vi.fn().mockResolvedValue(true),
       generate: vi.fn(),
       generateStream: vi.fn(),
-    }) as unknown as OllamaClient);
+    }) as unknown as OllamaClient;});
 
     await expect(translate("hello", "en", "fr")).rejects.toThrow("Could not start Ollama");
   });
 
   it("throws MODEL_PULL_FAILED when ensureModel returns false", async () => {
-    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+    vi.mocked(OllamaClient).mockImplementationOnce(function() { return ({
       ensureRunning: vi.fn().mockResolvedValue(true),
       ensureModel: vi.fn().mockResolvedValue(false),
       generate: vi.fn(),
       generateStream: vi.fn(),
-    }) as unknown as OllamaClient);
+    }) as unknown as OllamaClient;});
 
     await expect(translate("hello", "en", "fr")).rejects.toThrow("Could not pull model");
   });
@@ -274,7 +274,7 @@ describe("translate()", () => {
 
   it("adds validation warnings for echoed text", async () => {
     // Mock generate to echo source text
-    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+    vi.mocked(OllamaClient).mockImplementationOnce(function() { return ({
       ensureRunning: vi.fn().mockResolvedValue(true),
       ensureModel: vi.fn().mockResolvedValue(true),
       generate: vi.fn().mockResolvedValue({
@@ -283,7 +283,7 @@ describe("translate()", () => {
         done: true,
       }),
       generateStream: vi.fn(),
-    }) as unknown as OllamaClient);
+    }) as unknown as OllamaClient;});
 
     const result = await translate(
       "This is a long sentence that should definitely be translated but was echoed",
@@ -295,7 +295,7 @@ describe("translate()", () => {
   });
 
   it("skips validation when validate=false", async () => {
-    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+    vi.mocked(OllamaClient).mockImplementationOnce(function() { return ({
       ensureRunning: vi.fn().mockResolvedValue(true),
       ensureModel: vi.fn().mockResolvedValue(true),
       generate: vi.fn().mockResolvedValue({
@@ -304,7 +304,7 @@ describe("translate()", () => {
         done: true,
       }),
       generateStream: vi.fn(),
-    }) as unknown as OllamaClient);
+    }) as unknown as OllamaClient;});
 
     const result = await translate(
       "This is a long sentence that should definitely be translated but was echoed",
@@ -343,7 +343,7 @@ describe("translateBatch()", () => {
 
   it("batches multiple items with separator", async () => {
     // Mock generate to return text with separator intact
-    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+    vi.mocked(OllamaClient).mockImplementationOnce(function() { return ({
       ensureRunning: vi.fn().mockResolvedValue(true),
       ensureModel: vi.fn().mockResolvedValue(true),
       generate: vi.fn().mockResolvedValue({
@@ -352,7 +352,7 @@ describe("translateBatch()", () => {
         done: true,
       }),
       generateStream: vi.fn(),
-    }) as unknown as OllamaClient);
+    }) as unknown as OllamaClient;});
 
     const result = await translateBatch(
       [{ text: "Hello" }, { text: "Goodbye" }],
@@ -367,7 +367,7 @@ describe("translateBatch()", () => {
 
   it("falls back to individual calls when separator is mangled", async () => {
     let callCount = 0;
-    vi.mocked(OllamaClient).mockImplementationOnce(() => ({
+    vi.mocked(OllamaClient).mockImplementationOnce(function() { return ({
       ensureRunning: vi.fn().mockResolvedValue(true),
       ensureModel: vi.fn().mockResolvedValue(true),
       generate: vi.fn().mockImplementation(async () => {
@@ -388,7 +388,7 @@ describe("translateBatch()", () => {
         };
       }),
       generateStream: vi.fn(),
-    }) as unknown as OllamaClient);
+    }) as unknown as OllamaClient;});
 
     const result = await translateBatch(
       [{ text: "Hello" }, { text: "Goodbye" }],
