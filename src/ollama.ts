@@ -8,8 +8,8 @@ import { execSync, spawn } from "node:child_process";
 import { PolyglotError } from "./errors.js";
 import { ollamaSemaphore } from "./semaphore.js";
 
-/** Default timeout for generate calls (60s — covers cold-load + inference). */
-const GENERATE_TIMEOUT_MS = 60_000;
+/** Default timeout for generate calls (300s — covers cold-load + inference on large READMEs). */
+const GENERATE_TIMEOUT_MS = 300_000;
 /** Timeout for lightweight API calls (list, tags). */
 const API_TIMEOUT_MS = 10_000;
 /** Timeout for model pulls (10 min — large models over slow connections). */

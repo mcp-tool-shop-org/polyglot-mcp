@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-05-14
+
+### Fixed
+
+- **Stale version tokens preserved through the fuzzy cache** — `getFuzzyCached()` in `src/cache.ts` now compares SemVer-style version tokens between the query and the candidate cache entry, and rejects the fuzzy match when the tokens disagree. Failure mode caught on the testing-os v1.2.2 release 2026-05-14: every translation pass produced README.{ja,zh,es,fr,hi,it,pt-BR}.md with the `<!-- version:start -->` marker block stamped at the *previous* release's version, because the marker-block segment had ~0.99 Levenshtein similarity to the previous release's cached segment (only the version number changed). The fuzzy cache returned the prior translation verbatim — old version token and all. The new check forces a fresh translation when version tokens differ, restoring correctness at the cost of ~7 extra Ollama calls per release (one per language). Added 4 new tests in the `getFuzzyCached` describe block + 5 in `extractInvariantTokens` + 4 in `hasSameInvariantTokens` (269 total tests across 14 files, up from 256).
+
+### Changed
+
+- **Ollama `generate()` timeout raised from 60 s to 300 s** in `src/ollama.ts`. The 60 s ceiling caught large README segments that legitimately need more time on the cold-load path of `translategemma:12b`. 5 minutes is the new ceiling — generous enough for long prose with cold-cache inference, still bounded so a real hang surfaces.
+
 ## [1.7.1] - 2026-03-25
 
 ### Added

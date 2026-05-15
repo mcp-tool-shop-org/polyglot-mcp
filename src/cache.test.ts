@@ -9,6 +9,8 @@ import {
   getCachePath,
   similarity,
   getFuzzyCached,
+  extractInvariantTokens,
+  hasSameInvariantTokens,
   FUZZY_THRESHOLD,
 } from "./cache.js";
 
@@ -271,6 +273,112 @@ describe("getFuzzyCached", () => {
     // Old entries without targetLang should still be returned (backward compat)
     const result = getFuzzyCached(cache, "Hello world", "es", "translategemma:12b");
     expect(result).toBeDefined();
+  });
+
+  // ─── Invariant-token guard (v1.7.2) ─────────────────────────────
+  //
+  // Fuzzy similarity is high (~0.99) between text that differs only by a
+  // SemVer version token. Before v1.7.2, the cache returned the wrong-
+  // version translation for the testing-os README's `<!-- version:start -->`
+  // marker block on every release.
+
+  it("rejects fuzzy match when source contains a different version token", () => {
+    const cache = createCache();
+    setCached(
+      cache,
+      cacheKey("**v1.2.1** — 7 packages.", "ja", "translategemma:12b"),
+      "**v1.2.1** — 7パッケージ。",
+      "translategemma:12b",
+      "**v1.2.1** — 7 packages.",
+      "ja"
+    );
+    const result = getFuzzyCached(cache, "**v1.2.2** — 7 packages.", "ja", "translategemma:12b");
+    expect(result).toBeUndefined();
+  });
+
+  it("accepts fuzzy match when both texts share the same version token", () => {
+    const cache = createCache();
+    setCached(
+      cache,
+      cacheKey("**v1.2.1** — 7 packages.", "ja", "translategemma:12b"),
+      "**v1.2.1** — 7パッケージ。",
+      "translategemma:12b",
+      "**v1.2.1** — 7 packages.",
+      "ja"
+    );
+    // Version unchanged; prose tweaked slightly — fuzzy match should still hit.
+    const result = getFuzzyCached(cache, "**v1.2.1** — 7 packagez.", "ja", "translategemma:12b");
+    expect(result).toBeDefined();
+    expect(result!.translation).toBe("**v1.2.1** — 7パッケージ。");
+  });
+
+  it("accepts fuzzy match when neither text contains a version token", () => {
+    const cache = createCache();
+    setCached(
+      cache,
+      cacheKey("Hello world", "ja", "translategemma:12b"),
+      "こんにちは世界",
+      "translategemma:12b",
+      "Hello world",
+      "ja"
+    );
+    const result = getFuzzyCached(cache, "Hello world!", "ja", "translategemma:12b");
+    expect(result).toBeDefined();
+  });
+
+  it("rejects fuzzy match when version-token counts differ", () => {
+    const cache = createCache();
+    setCached(
+      cache,
+      cacheKey("Upgrade from v1.2.0 to v1.2.1.", "ja", "translategemma:12b"),
+      "v1.2.0からv1.2.1へアップグレード。",
+      "translategemma:12b",
+      "Upgrade from v1.2.0 to v1.2.1.",
+      "ja"
+    );
+    // Same Levenshtein-near source but only one version mentioned now.
+    const result = getFuzzyCached(cache, "Upgrade to v1.2.1.", "ja", "translategemma:12b");
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("extractInvariantTokens", () => {
+  it("returns empty array for text with no version tokens", () => {
+    expect(extractInvariantTokens("Hello world")).toEqual([]);
+  });
+
+  it("extracts a single version token", () => {
+    expect(extractInvariantTokens("**v1.2.2** — release")).toEqual(["v1.2.2"]);
+  });
+
+  it("extracts multiple version tokens sorted for order-independent compare", () => {
+    expect(extractInvariantTokens("Upgrade from v1.2.0 to v1.2.1")).toEqual(["v1.2.0", "v1.2.1"]);
+  });
+
+  it("extracts pre-release version tokens", () => {
+    expect(extractInvariantTokens("Pre-release v2.0.0-rc.1 lands today")).toEqual(["v2.0.0-rc.1"]);
+  });
+
+  it("does not match version-like prose (no leading 'v')", () => {
+    expect(extractInvariantTokens("3 packages, 1.2.3 not a real semver here")).toEqual([]);
+  });
+});
+
+describe("hasSameInvariantTokens", () => {
+  it("returns true for two strings without any version tokens", () => {
+    expect(hasSameInvariantTokens("Hello", "Hello world")).toBe(true);
+  });
+
+  it("returns true for two strings with the same version token", () => {
+    expect(hasSameInvariantTokens("v1.2.2 release", "release of v1.2.2")).toBe(true);
+  });
+
+  it("returns false when version tokens differ", () => {
+    expect(hasSameInvariantTokens("**v1.2.1** ships", "**v1.2.2** ships")).toBe(false);
+  });
+
+  it("returns false when one string has a version token and the other doesn't", () => {
+    expect(hasSameInvariantTokens("**v1.2.1** ships", "ships today")).toBe(false);
   });
 });
 

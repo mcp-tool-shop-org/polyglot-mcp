@@ -108,6 +108,57 @@ export function setCached(
 export const FUZZY_THRESHOLD = 0.85;
 
 /**
+ * Invariant tokens that must NOT differ between a fuzzy-match candidate and
+ * the query — they're identifiers, not prose, so a difference here changes
+ * the meaning of the segment even when Levenshtein similarity is high.
+ *
+ * Current set: SemVer-style version tokens (`v1.2.3`, `v1.2.3-rc.1`).
+ *
+ * Why: when a README's `<!-- version:start -->` block ships
+ * `**v1.2.1** — 7 packages...` in one release and `**v1.2.2** — 7 packages...`
+ * in the next, the Levenshtein similarity is ~0.99. Without an invariant
+ * check, the fuzzy cache returns the v1.2.1 translation for the v1.2.2
+ * source, and the translated README ends up with the previous version
+ * stamped inside the marker block. Caught on the testing-os v1.2.2 release
+ * 2026-05-14 — all 7 translations regenerated with stale marker versions.
+ *
+ * The check rejects a fuzzy match whenever the candidate and the query
+ * disagree on version tokens, forcing a fresh translation. ~7 extra Ollama
+ * calls per release (one per language); ~0 ms overhead at lookup time
+ * since the regex runs only against entries that already passed the
+ * Levenshtein similarity check.
+ */
+const VERSION_TOKEN_RE = /v\d+\.\d+\.\d+(?:-[\w.]+)?/g;
+
+/**
+ * Extract the multiset of invariant tokens (currently SemVer version
+ * tokens) from a text, sorted for order-independent comparison.
+ *
+ * @internal Exported for testing.
+ */
+export function extractInvariantTokens(text: string): string[] {
+  const matches = text.match(VERSION_TOKEN_RE);
+  if (!matches) return [];
+  return [...matches].sort();
+}
+
+/**
+ * Returns true when two texts share the exact same multiset of invariant
+ * tokens (both empty counts as a match).
+ *
+ * @internal Exported for testing.
+ */
+export function hasSameInvariantTokens(a: string, b: string): boolean {
+  const aTokens = extractInvariantTokens(a);
+  const bTokens = extractInvariantTokens(b);
+  if (aTokens.length !== bTokens.length) return false;
+  for (let i = 0; i < aTokens.length; i++) {
+    if (aTokens[i] !== bTokens[i]) return false;
+  }
+  return true;
+}
+
+/**
  * Compute normalised similarity between two strings using Levenshtein distance.
  * Returns a value between 0 (completely different) and 1 (identical).
  *
@@ -183,6 +234,11 @@ export function getFuzzyCached(
 
     const sim = similarity(text, entry.source);
     if (sim > bestSim) {
+      // Invariant-token guard: reject fuzzy matches whose source text
+      // disagrees with the query on identifier tokens (version numbers,
+      // etc.). See VERSION_TOKEN_RE above for the failure mode this
+      // catches.
+      if (!hasSameInvariantTokens(text, entry.source)) continue;
       bestSim = sim;
       bestTranslation = entry.translation;
     }
