@@ -99,6 +99,36 @@ describe("segmentMarkdown", () => {
     expect(types).toContain("text");
     expect(types).toContain("protected");
   });
+
+  it("protects single-line HTML comments (generated markers)", () => {
+    const marker = "<!-- BEGIN curriculum:auto readme-table -->";
+    const segs = segmentMarkdown(`# Title\n\n${marker}\n\nSome prose.`);
+    const comment = segs.find((s) => s.text === marker);
+    expect(comment).toBeDefined();
+    expect(comment!.type).toBe("protected");
+    // Prose is still translatable; only the marker is protected.
+    expect(segs.some((s) => s.type === "text" && s.text === "Some prose.")).toBe(true);
+  });
+
+  it("protects multi-line HTML comment blocks verbatim", () => {
+    const block = "<!-- multi-line\ngenerated block — do not hand-edit\n-->";
+    const segs = segmentMarkdown(`intro\n\n${block}\n\noutro`);
+    const comment = segs.find((s) => s.type === "protected" && s.text.includes("do not hand-edit"));
+    expect(comment).toBeDefined();
+    expect(comment!.text).toBe(block);
+  });
+
+  it("does not merge an HTML comment into an adjacent paragraph", () => {
+    // No blank line between the prose and the marker — the paragraph collector
+    // must still stop at the comment rather than swallowing it into translatable text.
+    const segs = segmentMarkdown("A prose line.\n<!-- END marker -->\nAnother prose line.");
+    const marker = segs.find((s) => s.text.includes("<!-- END marker -->"));
+    expect(marker).toBeDefined();
+    expect(marker!.type).toBe("protected");
+    expect(marker!.text).toBe("<!-- END marker -->");
+    // No text segment should ever contain the comment.
+    expect(segs.some((s) => s.type === "text" && s.text.includes("<!--"))).toBe(false);
+  });
 });
 
 // ─── isTranslatableCell ────────────────────────────────────────────

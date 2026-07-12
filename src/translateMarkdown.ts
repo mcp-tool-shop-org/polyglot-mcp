@@ -108,6 +108,26 @@ export function segmentMarkdown(md: string): Segment[] {
       continue;
     }
 
+    // HTML comment (single line or multi-line block) — protect verbatim.
+    // Generated markers such as `<!-- BEGIN curriculum:auto readme-table -->`
+    // are document structure, not prose. Like the language nav bar, they must
+    // round-trip byte-for-byte and are never sent through translation —
+    // otherwise the model translates or drops them (INICIO/FIN, missing markers).
+    if (/^<!--/.test(line.trim())) {
+      const block = [line];
+      i++;
+      // Multi-line comment: keep collecting until the line with the closing `-->`.
+      if (!line.includes("-->")) {
+        while (i < lines.length && !lines[i].includes("-->")) {
+          block.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length) block.push(lines[i++]); // include the closing line
+      }
+      segments.push({ type: "protected", text: block.join("\n") });
+      continue;
+    }
+
     // HTML tagline: <p ...><strong>translatable text</strong></p>
     if (/^<p[^>]*><strong>[^<]+<\/strong><\/p>/.test(line.trim())) {
       segments.push({ type: "html-tagline", text: line });
@@ -184,7 +204,7 @@ export function segmentMarkdown(md: string): Segment[] {
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&
-      !/^(```|<[a-z]|---|#{1,6}\s|\||>\s)/i.test(lines[i])
+      !/^(```|<!--|<[a-z]|---|#{1,6}\s|\||>\s)/i.test(lines[i])
     ) {
       para.push(lines[i]);
       i++;
