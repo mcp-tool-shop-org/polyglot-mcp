@@ -9,6 +9,7 @@
     ".": "./dist/index.js",
     "./translate": "./dist/translate.js",
     "./translateMarkdown": "./dist/translateMarkdown.js",
+    "./codeSpans": "./dist/codeSpans.js",
     "./translateAll": "./dist/translateAll.js",
     "./validate": "./dist/validate.js",
     "./ollama": "./dist/ollama.js",
@@ -25,6 +26,9 @@
       ],
       "translateMarkdown": [
         "./dist/translateMarkdown.d.ts"
+      ],
+      "codeSpans": [
+        "./dist/codeSpans.d.ts"
       ],
       "validate": [
         "./dist/validate.d.ts"

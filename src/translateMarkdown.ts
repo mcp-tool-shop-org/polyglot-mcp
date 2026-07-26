@@ -13,6 +13,7 @@
 import { translateBatch, type TranslateBatchOptions, type BatchItem } from "./translate.js";
 import { resolveLanguage, type Language } from "./languages.js";
 import { validateTranslation } from "./validate.js";
+import { maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
 import {
   loadCache,
   saveCache,
@@ -365,7 +366,12 @@ export async function translateMarkdown(
   interface BatchEntry {
     segIndex: number;
     kind: "heading" | "text" | "cell";
+    /** Masked text — what the model sees, and what the cache is keyed on. */
     text: string;
+    /** Source text with its inline code spans still inline. */
+    original: string;
+    /** Code spans lifted out of `original`, indexed by placeholder number. */
+    spans: string[];
     cacheHit?: string;
     /** Set when this entry was matched via fuzzy cache (translation memory). */
     fuzzyHit?: boolean;
@@ -374,6 +380,40 @@ export async function translateMarkdown(
 
   const batchItems: BatchEntry[] = [];
 
+  /**
+   * Mask a translatable string's inline code spans, look it up in the cache by
+   * its MASKED form, and queue it.
+   *
+   * Keying the cache on the masked text is deliberate and does two jobs at
+   * once. It invalidates entries written before this protection existed (their
+   * keys carried the raw spans), so a stale cache cannot replay a transliterated
+   * identifier. And it widens dedup: two sentences differing only in which
+   * identifier they name collapse to one translation, then each entry restores
+   * its own spans.
+   */
+  const enqueue = (
+    segIndex: number,
+    kind: "heading" | "text" | "cell",
+    raw: string,
+    tableKey?: string,
+  ) => {
+    const { text: masked, spans } = maskCodeSpans(raw);
+    const key = cacheKey(masked, targetLang, modelStr);
+    const cached = useCache ? getCached(cache, key) : undefined;
+    const fuzzy = (!cached && useCache)
+      ? getFuzzyCached(cache, masked, targetLang, modelStr)
+      : undefined;
+    batchItems.push({
+      segIndex,
+      kind,
+      text: masked,
+      original: raw,
+      spans,
+      ...(tableKey !== undefined ? { tableKey } : {}),
+      ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
+    });
+  };
+
   for (let s = 0; s < segments.length; s++) {
     const seg = segments[s];
 
@@ -381,50 +421,18 @@ export async function translateMarkdown(
 
     if (seg.type === "html-tagline") {
       const innerText = extractTaglineText(seg.text);
-      if (innerText) {
-        const key = cacheKey(innerText, targetLang, modelStr);
-        const cached = useCache ? getCached(cache, key) : undefined;
-        const fuzzy = (!cached && useCache)
-          ? getFuzzyCached(cache, innerText, targetLang, modelStr)
-          : undefined;
-        batchItems.push({
-          segIndex: s,
-          kind: "text",
-          text: innerText,
-          ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
-        });
-      }
+      if (innerText) enqueue(s, "text", innerText);
       continue;
     }
 
     if (seg.type === "heading") {
-      const key = cacheKey(seg.text, targetLang, modelStr);
-      const cached = useCache ? getCached(cache, key) : undefined;
-      const fuzzy = (!cached && useCache)
-        ? getFuzzyCached(cache, seg.text, targetLang, modelStr)
-        : undefined;
-      batchItems.push({
-        segIndex: s,
-        kind: "heading",
-        text: seg.text,
-        ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
-      });
+      enqueue(s, "heading", seg.text);
       continue;
     }
 
     if (seg.type === "text") {
       if (/^`[^`]+`$/.test(seg.text.trim())) continue; // skip bare backtick terms
-      const key = cacheKey(seg.text, targetLang, modelStr);
-      const cached = useCache ? getCached(cache, key) : undefined;
-      const fuzzy = (!cached && useCache)
-        ? getFuzzyCached(cache, seg.text, targetLang, modelStr)
-        : undefined;
-      batchItems.push({
-        segIndex: s,
-        kind: "text",
-        text: seg.text,
-        ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
-      });
+      enqueue(s, "text", seg.text);
       continue;
     }
 
@@ -432,19 +440,7 @@ export async function translateMarkdown(
       const { parsed, translatableCells } = parseTable(seg.text);
       seg._parsed = parsed;
       for (const cell of translatableCells) {
-        const key = cacheKey(cell.text, targetLang, modelStr);
-        const cached = useCache ? getCached(cache, key) : undefined;
-        const fuzzy = (!cached && useCache)
-          ? getFuzzyCached(cache, cell.text, targetLang, modelStr)
-          : undefined;
-        const tableKey = `${cell.rowIdx}:${cell.cellIdx}`;
-        batchItems.push({
-          segIndex: s,
-          kind: "cell",
-          text: cell.text,
-          tableKey,
-          ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
-        });
+        enqueue(s, "cell", cell.text, `${cell.rowIdx}:${cell.cellIdx}`);
       }
       continue;
     }
@@ -529,16 +525,32 @@ export async function translateMarkdown(
       const validation = validateTranslation(item.text, translated, sourceLang, targetLang);
       if (!validation.valid) {
         for (const w of validation.warnings) {
-          warnings.push(`[segment "${item.text.slice(0, 40)}…"]: ${w}`);
+          warnings.push(`[segment "${item.original.slice(0, 40)}…"]: ${w}`);
         }
       }
     } catch {
       // validateTranslation threw — empty output. Use source as fallback.
-      warnings.push(`[segment "${item.text.slice(0, 40)}…"]: Empty translation, using source text as fallback.`);
+      warnings.push(`[segment "${item.original.slice(0, 40)}…"]: Empty translation, using source text as fallback.`);
       translated = item.text;
     }
 
-    const cleaned = cleanTranslation(translated, item.kind === "heading");
+    let cleaned = cleanTranslation(translated, item.kind === "heading");
+
+    // Put the inline code spans back. If the placeholders did not survive the
+    // round trip the translation has silently lost or doubled an identifier, so
+    // fall back to the source text: untranslated prose is a visible, reportable
+    // cost, whereas a mangled `npm install` line reads as correct and is not.
+    if (item.spans.length > 0) {
+      const restored = restoreCodeSpans(cleaned, item.spans);
+      if (restored.intact) {
+        cleaned = restored.text;
+      } else {
+        warnings.push(
+          `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
+        );
+        cleaned = item.original;
+      }
+    }
 
     if (item.tableKey !== undefined) {
       if (!tableTranslationMaps.has(item.segIndex)) {
