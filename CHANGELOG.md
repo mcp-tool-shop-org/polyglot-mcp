@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Per-language timeout in `scripts/translate-all.mjs` raised 300 s → 900 s. 27b on a long README legitimately exceeds five minutes; the old ceiling killed real work and reported it as a timeout.
 - A code-placeholder preservation instruction is appended to the translation prompts **only when the text actually carries placeholders**, so protecting code spans does not churn the translation of every placeholder-free paragraph in the corpus.
 
+### Security
+
+- Closed 7 transitive advisories that landed after 2026-07-12 by extending the `overrides` block: `fast-uri` → ^4.1.1 (high — host confusion via backslash authority delimiter and failed IDN canonicalization), plus `@hono/node-server` ^2.0.12, `body-parser` ^2.3.0, `ip-address` ^10.3.1, and `qs` ^6.15.3. All arrive under `@modelcontextprotocol/sdk`. `npm audit --omit=dev --audit-level=high` (the CI gate) reports 0. The `fast-uri` bump crosses a major version, so it was smoke-tested beyond the suite: the built server completes a real MCP stdio `initialize` handshake and lists all 6 tools, exercising the ajv schema path `fast-uri` actually serves. The remaining `postcss`/`vite` advisories are dev-only, reached through `vitest`, and excluded by the gate's `--omit=dev` by design.
+
 ## [1.7.2] - 2026-05-14
 
 ### Fixed
