@@ -93,11 +93,11 @@ async function translateLang(lang) {
   return new Promise((resolve_) => {
     const child = spawn("node", [translateScript, absReadmePath, lang.code, ...passFlags], {
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: 300_000,
+      timeout: 900_000,
     });
 
     let killed = false;
-    const timer = setTimeout(() => { killed = true; child.kill(); }, 300_000);
+    const timer = setTimeout(() => { killed = true; child.kill(); }, 900_000);
 
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();

@@ -9,9 +9,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { basename } from "node:path";
 import { translate } from "./translate.js";
 import { translateMarkdown } from "./translateMarkdown.js";
 import { translateAll, TRANSLATE_ALL_LANGUAGES } from "./translateAll.js";
+import { translateReadme } from "./translateReadme.js";
 import { LANGUAGES } from "./languages.js";
 import { OllamaClient } from "./ollama.js";
 import { VERSION } from "./version.js";
@@ -69,7 +71,7 @@ server.tool(
       .string()
       .optional()
       .describe(
-        'Ollama model (default: "translategemma:12b"). Use "translategemma:4b" for speed or "translategemma:27b" for max quality.'
+        'Ollama model (default: "translategemma:27b"). Use "translategemma:12b" or "translategemma:4b" for faster, lower-quality output.'
       ),
     glossary: z
       .record(z.string(), z.string())
@@ -156,7 +158,7 @@ server.tool(
     model: z
       .string()
       .optional()
-      .describe('Ollama model (default: "translategemma:12b")'),
+      .describe('Ollama model (default: "translategemma:27b")'),
   },
   async ({ markdown, from, to, model }, extra) => {
     try {
@@ -220,7 +222,7 @@ server.tool(
     model: z
       .string()
       .optional()
-      .describe('Ollama model (default: "translategemma:12b")'),
+      .describe('Ollama model (default: "translategemma:27b")'),
     concurrency: z
       .number()
       .optional()
@@ -279,6 +281,98 @@ server.tool(
             text: friendlyError(err),
           },
         ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Model tiers for translate_readme — the ergonomic "bulk vs quality" knob.
+const TIER_MODELS: Record<"quality" | "bulk" | "draft", string> = {
+  quality: "translategemma:27b",
+  bulk: "translategemma:12b",
+  draft: "translategemma:2b",
+};
+
+server.tool(
+  "translate_readme",
+  "Translate a README.md FILE into all 7 supported languages and WRITE the README.<lang>.md files to disk (ja, zh, es, fr, hi, it, pt-BR), refreshing the language nav bar in the source and each translation. Runs entirely locally on the GPU via Ollama. Returns a STATUS SUMMARY — per-language ok/fail, timings, and the files written — not the translated text. Use this to localize a repo README; use translate_markdown instead when you want translated content returned to you.",
+  {
+    readmePath: z
+      .string()
+      .describe("Absolute path to the source README.md file to translate."),
+    tier: z
+      .enum(["quality", "bulk", "draft"])
+      .optional()
+      .describe(
+        'Model tier (default "quality"): "quality" = translategemma:27b (best, slower), "bulk" = translategemma:12b (faster — use for many files / bulk runs), "draft" = translategemma:2b (fastest, lowest quality). Ignored when `model` is set.'
+      ),
+    model: z
+      .string()
+      .optional()
+      .describe(
+        'Explicit Ollama model — overrides `tier` (e.g. "translategemma:27b").'
+      ),
+    languages: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Subset of target language codes (default: all 7 — ["ja","zh","es","fr","hi","it","pt"]).'
+      ),
+    concurrency: z
+      .number()
+      .optional()
+      .describe("Max concurrent language translations (default: 2, max: 3)."),
+    navBar: z
+      .boolean()
+      .optional()
+      .describe(
+        "Inject/refresh the language nav bar in the source + translated READMEs (default: true)."
+      ),
+  },
+  async ({ readmePath, tier, model, languages, concurrency, navBar }, extra) => {
+    try {
+      const { report } = makeProgress(extra as Extra);
+      const resolvedModel = model ?? TIER_MODELS[tier ?? "quality"];
+      const total = languages?.length ?? TRANSLATE_ALL_LANGUAGES.length;
+      report(0, total, `Translating ${basename(readmePath)} with ${resolvedModel}…`);
+
+      const result = await translateReadme(readmePath, {
+        model: resolvedModel,
+        targetLangs: languages,
+        concurrency,
+        navBar,
+        onProgress: (completed, t, lang) =>
+          report(completed, t, `Translated ${lang} (${completed}/${t})`),
+      });
+
+      const secs = (result.durationMs / 1000).toFixed(1);
+      const rows = result.results.map((r) =>
+        r.status === "ok"
+          ? `  ✓ ${r.file.padEnd(18)} ${(r.durationMs / 1000).toFixed(1)}s`
+          : `  ✗ ${r.file.padEnd(18)} FAILED — ${r.error ?? "unknown error"}`
+      );
+      const lines: string[] = [
+        `${basename(result.readme)} → ${result.succeeded}/${result.languages} languages · model ${result.model}`,
+      ];
+      if (result.sourceNavBarUpdated) {
+        lines.push(`  ✎ refreshed nav bar in ${basename(result.readme)}`);
+      }
+      lines.push(
+        "",
+        ...rows,
+        "",
+        `${result.succeeded} succeeded · ${result.failed} failed · ${secs}s total`
+      );
+
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+        // Only a TOTAL failure is a tool error; partial success still wrote files.
+        ...(result.succeeded === 0 ? { isError: true } : {}),
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: friendlyError(err) }],
         isError: true,
       };
     }

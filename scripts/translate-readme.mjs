@@ -29,7 +29,7 @@ if (!readmePath || !targetCode) {
 const useFast = flags.has("--fast");
 const useCache = !flags.has("--no-cache");
 const doCacheClear = flags.has("--cache-clear");
-const model = useFast ? "translategemma:2b" : "translategemma:12b";
+const model = useFast ? "translategemma:2b" : (process.env.POLYGLOT_MODEL || "translategemma:27b");
 const absReadmePath = resolve(readmePath);
 
 const readme = readFileSync(absReadmePath, "utf-8");
