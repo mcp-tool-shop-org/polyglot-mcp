@@ -403,3 +403,128 @@ describe("OllamaClient", () => {
     });
   });
 });
+
+// ─── Cloud auth ────────────────────────────────────────────────────
+//
+// The client attaches an OLLAMA_API_KEY Bearer header only when the host is
+// NOT loopback. Both halves matter and neither is cosmetic: a local Ollama
+// 403s when it receives an auth header, and an API key is a credential that
+// must never leave for a host the operator did not point us at. These pin the
+// routing decision rather than trusting the regex by eye.
+
+describe("OllamaClient — cloud auth", () => {
+  const originalFetch = globalThis.fetch;
+  const originalHost = process.env.OLLAMA_HOST;
+  const originalKey = process.env.OLLAMA_API_KEY;
+
+  /** Capture the headers of the next fetch, answering with an empty model list. */
+  const captureHeaders = () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ models: [] }),
+    });
+    globalThis.fetch = spy;
+    return spy;
+  };
+
+  const setEnv = (host?: string, key?: string) => {
+    if (host === undefined) delete process.env.OLLAMA_HOST;
+    else process.env.OLLAMA_HOST = host;
+    if (key === undefined) delete process.env.OLLAMA_API_KEY;
+    else process.env.OLLAMA_API_KEY = key;
+  };
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    setEnv(originalHost, originalKey);
+    vi.restoreAllMocks();
+  });
+
+  it("does NOT authenticate to a loopback host even when a key is set", () => {
+    setEnv(undefined, "sk-secret");
+    for (const host of [
+      "http://localhost:11434",
+      "http://127.0.0.1:11434",
+      "http://0.0.0.0:11434",
+      "http://[::1]:11434",
+      "http://localhost",
+      "HTTP://LOCALHOST:11434",
+    ]) {
+      expect(new OllamaClient(host).cloud, `${host} must stay local`).toBe(false);
+    }
+  });
+
+  it("authenticates to a remote host when a key is set", () => {
+    setEnv(undefined, "sk-secret");
+    expect(new OllamaClient("https://ollama.com").cloud).toBe(true);
+  });
+
+  it("does NOT authenticate to a remote host when no key is set", () => {
+    setEnv(undefined, undefined);
+    expect(new OllamaClient("https://ollama.com").cloud).toBe(false);
+  });
+
+  it("treats a blank or whitespace-only key as no key", () => {
+    setEnv(undefined, "   ");
+    expect(new OllamaClient("https://ollama.com").cloud).toBe(false);
+  });
+
+  it("sends the Bearer header on a cloud request and none on a local one", async () => {
+    setEnv(undefined, "sk-secret");
+
+    const cloudFetch = captureHeaders();
+    await new OllamaClient("https://ollama.com").listModels();
+    const cloudHeaders = cloudFetch.mock.calls[0][1].headers as Record<string, string>;
+    expect(cloudHeaders.Authorization).toBe("Bearer sk-secret");
+
+    const localFetch = captureHeaders();
+    await new OllamaClient("http://localhost:11434").listModels();
+    const localHeaders = (localFetch.mock.calls[0][1].headers ?? {}) as Record<string, string>;
+    expect(localHeaders.Authorization).toBeUndefined();
+  });
+
+  it("does not treat a hostname that merely starts with 'localhost' as loopback", () => {
+    // http://localhost.example.com is a remote host. Matching it as loopback
+    // would silently drop auth; the operator set OLLAMA_HOST to it on purpose.
+    setEnv(undefined, "sk-secret");
+    expect(new OllamaClient("http://localhost.example.com").cloud).toBe(true);
+  });
+
+  it("strips trailing slashes before deciding, so a slashed loopback URL stays local", () => {
+    setEnv(undefined, "sk-secret");
+    expect(new OllamaClient("http://127.0.0.1:11434/").cloud).toBe(false);
+  });
+
+  it("defaults its base URL to OLLAMA_HOST", async () => {
+    setEnv("https://ollama.example", "sk-secret");
+    const spy = captureHeaders();
+    const client = new OllamaClient();
+    expect(client.cloud).toBe(true);
+    await client.listModels();
+    expect(spy.mock.calls[0][0]).toBe("https://ollama.example/api/tags");
+  });
+
+  it("skips the has-model/pull dance on a cloud host", async () => {
+    // Cloud models are served on demand — there is nothing to pull, and probing
+    // /api/tags would just cost a round trip before every translation.
+    setEnv(undefined, "sk-secret");
+    const spy = captureHeaders();
+    await expect(new OllamaClient("https://ollama.com").ensureModel("translategemma:27b")).resolves.toBe(
+      true,
+    );
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("still probes locally before pulling on a loopback host", async () => {
+    setEnv(undefined, "sk-secret");
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ models: [{ name: "translategemma:27b" }] }),
+    });
+    globalThis.fetch = spy;
+    await expect(
+      new OllamaClient("http://localhost:11434").ensureModel("translategemma:27b"),
+    ).resolves.toBe(true);
+    expect(spy).toHaveBeenCalled();
+  });
+});
