@@ -13,10 +13,11 @@ import {
 import { polish } from "./polish.js";
 import { PolyglotError } from "./errors.js";
 import { validateTranslation } from "./validate.js";
+import { containsCodePlaceholder } from "./codeSpans.js";
 
 /** Default model — override with POLYGLOT_MODEL env var. */
 export const DEFAULT_MODEL =
-  process.env.POLYGLOT_MODEL || "translategemma:12b";
+  process.env.POLYGLOT_MODEL || "translategemma:27b";
 
 /** @internal Exported for testing. */
 export const BATCH_SEPARATOR = "\n---POLYGLOT_SEP---\n";
@@ -75,6 +76,18 @@ export interface TranslateBatchResult {
   durationMs: number;
 }
 
+/**
+ * @internal Instruction appended when the text carries code placeholders.
+ *
+ * Added conditionally, not unconditionally: text with no placeholders keeps the
+ * exact prompt it had before this existed, so protecting code spans does not
+ * churn the translation of every placeholder-free paragraph in the corpus.
+ * Restore is tolerant and fails closed regardless — this instruction just makes
+ * the round trip succeed more often, so fewer segments fall back to source.
+ */
+export const PLACEHOLDER_INSTRUCTION =
+  '\nIMPORTANT: The text contains placeholders like "⟦0⟧" that stand for code. Keep each one exactly as-is in your output, in the position the meaning requires. Do NOT translate, transliterate, renumber, drop, or duplicate them.';
+
 /** @internal Build the TranslateGemma prompt — two blank lines before text is critical. */
 export function buildPrompt(
   source: Language,
@@ -82,8 +95,9 @@ export function buildPrompt(
   text: string,
   glossaryHint: string
 ): string {
+  const placeholderHint = containsCodePlaceholder(text) ? PLACEHOLDER_INSTRUCTION : "";
   return `You are a professional ${source.name} (${source.code}) to ${target.name} (${target.code}) translator. Your goal is to accurately convey the meaning and nuances of the original ${source.name} text while adhering to ${target.name} grammar, vocabulary, and cultural sensitivities.
-Produce only the ${target.name} translation, without any additional explanations or commentary.${glossaryHint} Please translate the following ${source.name} text into ${target.name}:
+Produce only the ${target.name} translation, without any additional explanations or commentary.${placeholderHint}${glossaryHint} Please translate the following ${source.name} text into ${target.name}:
 
 
 ${text}`;
@@ -96,9 +110,10 @@ export function buildBatchPrompt(
   joinedText: string,
   glossaryHint: string
 ): string {
+  const placeholderHint = containsCodePlaceholder(joinedText) ? PLACEHOLDER_INSTRUCTION : "";
   return `You are a professional ${source.name} (${source.code}) to ${target.name} (${target.code}) translator. Your goal is to accurately convey the meaning and nuances of the original ${source.name} text while adhering to ${target.name} grammar, vocabulary, and cultural sensitivities.
 Produce only the ${target.name} translation, without any additional explanations or commentary.
-IMPORTANT: The text contains separator lines "---POLYGLOT_SEP---". Keep each separator exactly as-is in your output. Do NOT translate, remove, or modify the separators.${glossaryHint} Please translate the following ${source.name} text into ${target.name}:
+IMPORTANT: The text contains separator lines "---POLYGLOT_SEP---". Keep each separator exactly as-is in your output. Do NOT translate, remove, or modify the separators.${placeholderHint}${glossaryHint} Please translate the following ${source.name} text into ${target.name}:
 
 
 ${joinedText}`;

@@ -56,7 +56,29 @@ export interface OllamaModel {
 }
 
 export class OllamaClient {
-  constructor(private baseUrl: string = "http://localhost:11434") {}
+  private baseUrl: string;
+  private apiKey?: string;
+  /** True when authenticating to a remote (cloud) host with a Bearer key. */
+  readonly cloud: boolean;
+  constructor(baseUrl: string = process.env.OLLAMA_HOST || "http://localhost:11434") {
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
+    const key = process.env.OLLAMA_API_KEY?.trim();
+    // Attach the Bearer key only to a NON-loopback host — local Ollama 403s on
+    // an auth header. This enables Ollama Cloud (https://ollama.com) when both
+    // OLLAMA_HOST and OLLAMA_API_KEY are set, with zero change to local use.
+    this.cloud =
+      Boolean(key) &&
+      !/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(this.baseUrl);
+    this.apiKey = this.cloud ? key : undefined;
+  }
+
+  /** Request headers, adding cloud Bearer auth when configured. */
+  private headers(extra?: Record<string, string>): Record<string, string> {
+    return {
+      ...(extra ?? {}),
+      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+    };
+  }
 
   /**
    * Generate a completion with automatic retry for retryable errors.
@@ -104,7 +126,7 @@ export class OllamaClient {
     try {
       res = await fetch(`${this.baseUrl}/api/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.headers({ "Content-Type": "application/json" }),
         body: JSON.stringify({ ...req, stream: false }),
         signal: controller.signal,
       });
@@ -211,7 +233,7 @@ export class OllamaClient {
     try {
       res = await fetch(`${this.baseUrl}/api/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.headers({ "Content-Type": "application/json" }),
         body: JSON.stringify({ ...req, stream: true }),
         signal: controller.signal,
       });
@@ -318,6 +340,7 @@ export class OllamaClient {
     const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
     try {
       const res = await fetch(`${this.baseUrl}/api/tags`, {
+        headers: this.headers(),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -335,6 +358,7 @@ export class OllamaClient {
     const timer = setTimeout(() => controller.abort(), 3_000);
     try {
       const res = await fetch(`${this.baseUrl}/api/tags`, {
+        headers: this.headers(),
         signal: controller.signal,
       });
       return res.ok;
@@ -399,6 +423,10 @@ export class OllamaClient {
 
   /** Pull a model if not already present. Streams progress to stderr. */
   async ensureModel(name: string): Promise<boolean> {
+    // Cloud models are served on demand — there is no local pull, and a wrong
+    // model name surfaces at generate time. Skip the has-model/pull dance when
+    // talking to a cloud host so the translation proceeds straight to generate.
+    if (this.cloud) return true;
     if (await this.hasModel(name)) return true;
 
     process.stderr.write(`Pulling ${name} (may be several GB)...\n`);
@@ -407,7 +435,7 @@ export class OllamaClient {
     try {
       const res = await fetch(`${this.baseUrl}/api/pull`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.headers({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name, stream: true }),
         signal: controller.signal,
       });

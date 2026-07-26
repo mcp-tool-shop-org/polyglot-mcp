@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`translate_readme` MCP tool** — translates a README.md *file* into all 7 languages and writes the `README.<lang>.md` files to disk, refreshing the language nav bar in the source and each translation. Returns a per-language status summary (ok/fail, timings, files written) rather than translated text; use `translate_markdown` when you want content returned. Carries a `tier` knob — `quality` (translategemma:27b), `bulk` (12b), `draft` (2b) — with an explicit `model` override. Partial success is not a tool error: only a total failure sets `isError`, since a partial run still wrote files. New `src/translateReadme.ts` + 5 tests; tool count 5 → 6.
+- **Ollama Cloud support** — `OllamaClient` reads `OLLAMA_HOST` for its base URL and attaches an `OLLAMA_API_KEY` Bearer header, so translation can run against https://ollama.com with no change to local use. The header is attached only to a **non-loopback** host: a local Ollama 403s when it receives one, and an API key must not leave for a host the operator did not point us at. `ensureModel()` short-circuits on a cloud host — cloud models are served on demand, so the has-model/pull probe is a wasted round trip. 10 tests pin the routing decision, including the loopback forms (`localhost`, `127.0.0.1`, `0.0.0.0`, `[::1]`, port-less, uppercase), trailing-slash stripping, blank-key handling, and that a hostname merely *starting* with `localhost` is correctly treated as remote.
+
+### Fixed
+
+- **Inline code spans were transliterated into the target script** — `segmentMarkdown` protected fenced code blocks but not inline spans, so a span embedded in a prose sentence reached the model unguarded. Caught in ai-rpg-engine's shipped `README.hi.md`: 105 of 182 spans came back in Devanagari, plus 17 more across two package READMEs — `run <path>` as `रन <पथ>`, `--checkpoint` as `--चेकपॉइंट`, `@ai-rpg-engine/core` as `@ai-rpg-इंजन/कोर`, `buildCombatStack` as `बिल्डकॉम्बैटस्टैक`. A CLI command, a flag, an npm package name, and a function, none of which work when copied out of the docs; it had shipped for at least one release. Every inline span is now masked to a `⟦0⟧` placeholder before translation and restored after (new `src/codeSpans.ts`). The placeholder is a bracket pair around a digit run and nothing else — it carries no letters, so a transliterating model has nothing in it to convert; a word-shaped token like `POLYGLOT_SEP` would itself be transliterable. Restore **fails closed**: if the placeholders do not come back exactly once each, the segment reverts to source text with a warning, because untranslated prose is visible and reportable whereas a sentence that quietly lost its `npm install` target reads as correct.
+- Keying the segment cache on the *masked* text invalidates entries written before this protection existed, so a stale cache cannot replay a transliterated identifier — and it widens dedup, collapsing sentences that differ only in which identifier they name.
+
+### Changed
+
+- **`translategemma:27b` is the default model** across the CLI scripts and the MCP tool descriptions (was 12b), matching the blessed studio default. `scripts/translate-readme.mjs` honours `POLYGLOT_MODEL`; `--fast` still selects 2b.
+- Per-language timeout in `scripts/translate-all.mjs` raised 300 s → 900 s. 27b on a long README legitimately exceeds five minutes; the old ceiling killed real work and reported it as a timeout.
+- A code-placeholder preservation instruction is appended to the translation prompts **only when the text actually carries placeholders**, so protecting code spans does not churn the translation of every placeholder-free paragraph in the corpus.
+
+### Security
+
+- Closed 7 transitive advisories that landed after 2026-07-12 by extending the `overrides` block: `fast-uri` → ^4.1.1 (high — host confusion via backslash authority delimiter and failed IDN canonicalization), plus `@hono/node-server` ^2.0.12, `body-parser` ^2.3.0, `ip-address` ^10.3.1, and `qs` ^6.15.3. All arrive under `@modelcontextprotocol/sdk`. `npm audit --omit=dev --audit-level=high` (the CI gate) reports 0. The `fast-uri` bump crosses a major version, so it was smoke-tested beyond the suite: the built server completes a real MCP stdio `initialize` handshake and lists all 6 tools, exercising the ajv schema path `fast-uri` actually serves. The remaining `postcss`/`vite` advisories are dev-only, reached through `vitest`, and excluded by the gate's `--omit=dev` by design.
+
 ## [1.7.2] - 2026-05-14
 
 ### Fixed
