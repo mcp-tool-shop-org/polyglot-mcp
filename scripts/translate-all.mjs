@@ -166,7 +166,6 @@ if (!noNavBar) {
         const file = `README.${lang.file ?? lang.code}.md`;
         return `<a href="${file}">${lang.label}</a>`;
       });
-    const navBar = `<p align="center">\n  ${links.join(" | ")}\n</p>`;
 
     /**
      * Check if a block starting at line index i is a language nav bar.
@@ -214,7 +213,15 @@ if (!noNavBar) {
       // Build the nav bar for this file
       let thisNav;
       if (isSource) {
-        thisNav = navBar;
+        // The source README must list English too. LANGUAGES holds only the
+        // translation targets, so without this the English README's nav bar
+        // starts at the first target language and reads as though the page
+        // were in that language. Translated files get English by swapping
+        // out their own self-link (see the else branch); the source has no
+        // self-link to swap, so it is prepended explicitly.
+        thisNav = `<p align="center">
+  <a href="README.md">English</a> | ${links.join(" | ")}
+</p>`;
       } else {
         const thisFile = basename(filePath);
         const thisLinks = LANGUAGES
