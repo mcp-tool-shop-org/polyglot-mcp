@@ -144,15 +144,16 @@ describe("MCP tool handlers", () => {
   });
 
   describe("tool registration", () => {
-    it("registers exactly 5 tools", () => {
-      expect(registeredTools.length).toBe(5);
+    it("registers exactly 6 tools", () => {
+      expect(registeredTools.length).toBe(6);
     });
 
-    it("registers translate, translate_markdown, translate_all, list_languages, check_status", () => {
+    it("registers translate, translate_markdown, translate_all, translate_readme, list_languages, check_status", () => {
       const names = registeredTools.map((t) => t.name);
       expect(names).toContain("translate");
       expect(names).toContain("translate_markdown");
       expect(names).toContain("translate_all");
+      expect(names).toContain("translate_readme");
       expect(names).toContain("list_languages");
       expect(names).toContain("check_status");
     });

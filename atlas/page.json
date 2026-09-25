@@ -1,0 +1,138 @@
+{
+  "authored": [
+    ".claude/",
+    ".github/",
+    "assets/",
+    "root"
+  ],
+  "breaks": [
+    {
+      "doors": 2,
+      "importedBy": [
+        "scripts"
+      ],
+      "importedByTests": [],
+      "kind": "part",
+      "name": "src"
+    }
+  ],
+  "changes": {
+    "first": true
+  },
+  "changesTogether": [],
+  "changesTogetherNote": [
+    "Window: 180 days; a pair counts from 3 shared commits."
+  ],
+  "changesTogetherWithTests": 0,
+  "commit": "a91c112ba6b81824d51b5d7d62cc585b5f9965dc",
+  "doors": [
+    {
+      "file": ".github/workflows/ci.yml",
+      "landings": [],
+      "name": "CI",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "src",
+          "depth": 0,
+          "files": 33
+        }
+      ],
+      "runs": [
+        "src/"
+      ],
+      "runsCount": 1,
+      "sends": [],
+      "stages": [],
+      "triggers": [
+        "on a pull request touching 9 paths",
+        "on a push to main touching 9 paths",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/publish.yml",
+      "landings": [],
+      "name": "Publish to npm",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "src",
+          "depth": 0,
+          "files": 33
+        }
+      ],
+      "runs": [
+        "src/"
+      ],
+      "runsCount": 1,
+      "sends": [
+        "publishes to npm"
+      ],
+      "stages": [],
+      "triggers": [
+        "when a release is published",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/pages.yml",
+      "landings": [],
+      "name": "Deploy site to GitHub Pages",
+      "pushes": false,
+      "reach": [],
+      "runs": [],
+      "runsCount": 0,
+      "sends": [
+        "deploys the site"
+      ],
+      "stages": [],
+      "triggers": [
+        "on a push to main touching 2 paths",
+        "or by hand"
+      ]
+    }
+  ],
+  "duplicates": [],
+  "duplicatesLead": null,
+  "duplicatesNote": [],
+  "generated": [],
+  "generatedAt": "2026-09-23T17:42:44.255Z",
+  "limits": [
+    "4 writes and 6 reads use paths built at run time and are not named here.",
+    "Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 20 source files reach 10 revisions."
+  ],
+  "mainDoor": ".github/workflows/ci.yml",
+  "parts": 7,
+  "readers": [],
+  "repo": "mcp-tool-shop-org/polyglot-mcp",
+  "sequences": [],
+  "startHere": [
+    ".github/workflows/ci.yml",
+    "src/"
+  ],
+  "summary": null,
+  "summaryFrom": null,
+  "testFiles": 18,
+  "testedBy": {
+    "scripts": 0,
+    "site": 0,
+    "src": 17
+  },
+  "unread": [],
+  "unreadNote": [],
+  "untested": [
+    {
+      "part": "scripts",
+      "partLabel": "scripts",
+      "testedBy": 0
+    },
+    {
+      "part": "site",
+      "partLabel": "site",
+      "testedBy": 0
+    }
+  ],
+  "untestedNote": [],
+  "written": 0
+}

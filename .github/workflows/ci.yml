@@ -9,6 +9,10 @@ on:
       - 'package-lock.json'
       - 'tsconfig.json'
       - '.github/workflows/**'
+      - 'atlas/**'
+      - 'site/package.json'
+      - 'site/package-lock.json'
+      - 'site/astro.config.mjs'
   pull_request:
     branches: [main]
     paths:
@@ -17,10 +21,14 @@ on:
       - 'package-lock.json'
       - 'tsconfig.json'
       - '.github/workflows/**'
+      - 'atlas/**'
+      - 'site/package.json'
+      - 'site/package-lock.json'
+      - 'site/astro.config.mjs'
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,13 +38,18 @@ jobs:
       matrix:
         node-version: ['20', '22']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
+
+      # Atlas requires Node 22 or later, so the check runs on the 22 cell only.
+      - name: Atlas check
+        if: matrix.node-version == '22'
+        run: npx --yes @dogfood-lab/atlas@1.14.0 check
 
       - name: Install dependencies
         run: npm ci
@@ -57,10 +70,10 @@ jobs:
   dep-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'

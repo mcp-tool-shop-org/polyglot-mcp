@@ -8,7 +8,7 @@
  *
  * --fast            Use translategemma:2b for speed (lower quality)
  * --no-cache        Skip the segment-level cache
- * --cache-clear     Clear all cached translations before translating
+ * --cache-clear     Clear the cached translations of each language before translating it
  * --concurrency=N   Run N languages in parallel (default 2, max 3)
  * --no-nav-bar      Skip language nav bar injection
  */
@@ -93,11 +93,11 @@ async function translateLang(lang) {
   return new Promise((resolve_) => {
     const child = spawn("node", [translateScript, absReadmePath, lang.code, ...passFlags], {
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: 300_000,
+      timeout: 900_000,
     });
 
     let killed = false;
-    const timer = setTimeout(() => { killed = true; child.kill(); }, 300_000);
+    const timer = setTimeout(() => { killed = true; child.kill(); }, 900_000);
 
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
@@ -166,7 +166,6 @@ if (!noNavBar) {
         const file = `README.${lang.file ?? lang.code}.md`;
         return `<a href="${file}">${lang.label}</a>`;
       });
-    const navBar = `<p align="center">\n  ${links.join(" | ")}\n</p>`;
 
     /**
      * Check if a block starting at line index i is a language nav bar.
@@ -214,7 +213,15 @@ if (!noNavBar) {
       // Build the nav bar for this file
       let thisNav;
       if (isSource) {
-        thisNav = navBar;
+        // The source README must list English too. LANGUAGES holds only the
+        // translation targets, so without this the English README's nav bar
+        // starts at the first target language and reads as though the page
+        // were in that language. Translated files get English by swapping
+        // out their own self-link (see the else branch); the source has no
+        // self-link to swap, so it is prepended explicitly.
+        thisNav = `<p align="center">
+  <a href="README.md">English</a> | ${links.join(" | ")}
+</p>`;
       } else {
         const thisFile = basename(filePath);
         const thisLinks = LANGUAGES

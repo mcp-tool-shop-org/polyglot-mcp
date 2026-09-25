@@ -6,6 +6,7 @@ import {
   chunkText,
   DEFAULT_MODEL,
   BATCH_SEPARATOR,
+  PLACEHOLDER_INSTRUCTION,
 } from "./translate.js";
 import type { Language } from "./languages.js";
 
@@ -36,10 +37,10 @@ describe("getChunkSize", () => {
 // --- DEFAULT_MODEL ---
 
 describe("DEFAULT_MODEL", () => {
-  it("defaults to translategemma:12b when POLYGLOT_MODEL is not set", () => {
+  it("defaults to translategemma:27b when POLYGLOT_MODEL is not set", () => {
     // The env var is not set in test environment, so default should apply
     if (!process.env.POLYGLOT_MODEL) {
-      expect(DEFAULT_MODEL).toBe("translategemma:12b");
+      expect(DEFAULT_MODEL).toBe("translategemma:27b");
     }
   });
 });
@@ -95,6 +96,42 @@ describe("buildBatchPrompt", () => {
     const prompt = buildBatchPrompt(en, fr, "text", "");
     expect(prompt).toContain("English (en)");
     expect(prompt).toContain("French (fr)");
+  });
+});
+
+// --- code-placeholder instruction ---
+//
+// The instruction is conditional on purpose. Adding it unconditionally would
+// change the prompt for every placeholder-free paragraph in the corpus, so
+// protecting code spans would churn translations that have nothing to do with
+// code. These tests pin that boundary in both prompt builders.
+
+describe("code-placeholder instruction", () => {
+  const en: Language = { code: "en", name: "English" };
+  const hi: Language = { code: "hi", name: "Hindi" };
+
+  it("is added when the text carries placeholders", () => {
+    const prompt = buildPrompt(en, hi, "Run ⟦0⟧ to start.", "");
+    expect(prompt).toContain(PLACEHOLDER_INSTRUCTION.trim());
+    expect(prompt).toContain("Do NOT translate, transliterate, renumber, drop, or duplicate them.");
+  });
+
+  it("is absent when the text carries none", () => {
+    const prompt = buildPrompt(en, hi, "Run the engine to start.", "");
+    expect(prompt).not.toContain("⟦0⟧");
+    expect(prompt).not.toContain("renumber");
+  });
+
+  it("is added to the batch prompt alongside the separator instruction", () => {
+    const prompt = buildBatchPrompt(en, hi, "Run ⟦0⟧\n---POLYGLOT_SEP---\nStop ⟦1⟧", "");
+    expect(prompt).toContain("Keep each separator exactly as-is");
+    expect(prompt).toContain("renumber");
+  });
+
+  it("leaves the batch prompt free of the instruction when unused", () => {
+    const prompt = buildBatchPrompt(en, hi, "A\n---POLYGLOT_SEP---\nB", "");
+    expect(prompt).not.toContain("renumber");
+    expect(prompt).toContain("Keep each separator exactly as-is");
   });
 });
 
@@ -206,7 +243,7 @@ describe("translate()", () => {
     expect(result.translation).toBe("Bonjour le monde");
     expect(result.sourceLanguage.code).toBe("en");
     expect(result.targetLanguage.code).toBe("fr");
-    expect(result.model).toBe("translategemma:12b");
+    expect(result.model).toBe("translategemma:27b");
     expect(result.chunks).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.warnings).toEqual([]);
