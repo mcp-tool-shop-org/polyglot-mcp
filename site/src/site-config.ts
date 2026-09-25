@@ -13,13 +13,13 @@ export const config: SiteConfig = {
     badge: '57 languages · local GPU · zero cloud',
     headline: 'Polyglot MCP',
     headlineAccent: 'translate everything, locally.',
-    description: 'An MCP server that translates text between 57 languages using TranslateGemma on your GPU via Ollama. No API keys, no cloud, no rate limits — everything runs on your machine.',
+    description: 'An MCP server that translates text between 57 languages using TranslateGemma on your GPU via Ollama. No API keys, no cloud, no rate limits — by default everything runs on your machine.',
     primaryCta: { href: '#setup', label: 'Get started' },
     secondaryCta: { href: 'handbook/', label: 'Read the Handbook' },
     previews: [
       { label: 'Translate', code: 'translate("Hello world", "en", "ja")' },
-      { label: 'Result', code: '"こんにちは世界" // ~600ms on GPU' },
-      { label: 'Setup', code: 'ollama pull translategemma:12b' },
+      { label: 'Result', code: '"こんにちは世界" // ~1s on GPU' },
+      { label: 'Setup', code: 'ollama pull translategemma:27b' },
     ],
   },
 
@@ -28,10 +28,10 @@ export const config: SiteConfig = {
       kind: 'features',
       id: 'features',
       title: 'Why Local Translation',
-      subtitle: 'Your data never leaves your machine.',
+      subtitle: 'By default, your data never leaves your machine.',
       features: [
-        { title: 'Private', desc: 'Translations run entirely on your GPU. No text is sent to any cloud service — ever.' },
-        { title: 'Fast', desc: '~600ms per translation after cold load. TranslateGemma 12B runs at full speed on consumer GPUs.' },
+        { title: 'Private', desc: 'Translations run on your GPU. No text leaves your machine unless you point Polyglot at a remote Ollama yourself.' },
+        { title: 'Fast', desc: 'About a second per translation once the default 27B model is loaded, and ~600ms with 12B on a 16 GB GPU.' },
         { title: 'Free', desc: 'No API keys, no subscriptions, no rate limits. Ollama + TranslateGemma are fully open source (Apache 2.0).' },
       ],
     },
@@ -42,7 +42,7 @@ export const config: SiteConfig = {
       features: [
         { title: '57 Languages', desc: 'From Afrikaans to Vietnamese — including CJK, Arabic, Hindi, and all major European languages.' },
         { title: 'Smart Chunking', desc: 'Long text is split at paragraph and sentence boundaries, preserving context across chunks.' },
-        { title: 'Model Choice', desc: 'Default to 12B for quality, switch to 4B for speed, or 27B for maximum accuracy.' },
+        { title: 'Model Choice', desc: 'Defaults to 27B for maximum accuracy; switch to 12B or 4B for smaller GPUs or more speed.' },
       ],
     },
     {
@@ -61,7 +61,7 @@ export const config: SiteConfig = {
 }` },
         { title: 'Prerequisites', code: `# 1. Install Ollama (ollama.com)
 # 2. Pull the translation model:
-ollama pull translategemma:12b  # 8.1 GB
+ollama pull translategemma:27b  # 17 GB (or :12b, 8.1 GB, on smaller GPUs)
 
 # 3. Start Ollama:
 ollama serve` },
@@ -71,12 +71,13 @@ ollama serve` },
       kind: 'data-table',
       id: 'tools',
       title: 'MCP Tools',
-      subtitle: 'Five tools exposed to your LLM agent.',
+      subtitle: 'Six tools exposed to your LLM agent.',
       columns: ['Tool', 'Description'],
       rows: [
         ['translate', 'Translate text between any two of 57 supported languages'],
         ['translate_markdown', 'Translate a full markdown document while preserving structure'],
         ['translate_all', 'Translate markdown into multiple languages concurrently'],
+        ['translate_readme', 'Translate a README file into 7 languages and write README.<lang>.md next to it'],
         ['list_languages', 'List all supported language codes and names'],
         ['check_status', 'Verify Ollama is running and TranslateGemma is installed'],
       ],
@@ -89,8 +90,8 @@ ollama serve` },
       columns: ['Model', 'Size', 'Speed', 'Quality'],
       rows: [
         ['translategemma:4b', '3.3 GB', '~300ms', 'Good'],
-        ['translategemma:12b', '8.1 GB', '~600ms', 'Great (default)'],
-        ['translategemma:27b', '17 GB', '~1.5s', 'Best'],
+        ['translategemma:12b', '8.1 GB', '~600ms', 'Great'],
+        ['translategemma:27b', '17 GB', '~1.5s', 'Best (default)'],
       ],
     },
     {

@@ -20,17 +20,16 @@ Language resolution is case-insensitive and accepts both codes (`en`, `ja`, `zh-
 | Model | Size | Speed | Quality |
 |-------|------|-------|---------|
 | `translategemma:4b` | 3.3 GB | ~300ms | Good |
-| `translategemma:12b` | 8.1 GB | ~600ms | Great (default) |
-| `translategemma:27b` | 17 GB | ~1.5s | Best |
+| `translategemma:12b` | 8.1 GB | ~600ms | Great |
+| `translategemma:27b` | 17 GB | ~1.5s | Best (default) |
 
-## Performance (RTX 5080, 16 GB VRAM)
+## Performance
 
-| Metric | Value |
-|--------|-------|
-| First translation (cold model load) | ~15s |
-| Subsequent translations | ~600ms |
-| VRAM usage | ~8.1 GB |
-| Long text (per chunk) | ~600ms |
+| Metric | 27B (default), RTX 5090 32 GB | 12B (Q4), RTX 5080 16 GB |
+|--------|-------------------------------|--------------------------|
+| First translation (cold model load) | ~30s | ~15s |
+| Subsequent translations | ~1-2s per batch of README segments | ~600ms |
+| Model memory | 17 GB, fully on GPU (as reported by `ollama ps`) | ~8.1 GB |
 
 ## Architecture
 
@@ -40,14 +39,19 @@ MCP Client (Claude Code, etc.)
       |  MCP protocol (stdio)
       v
 +--------------------+
-|    index.ts        |  MCP server -- 5 tools: translate, translate_markdown,
-|                    |  translate_all, list_languages, check_status
+|    index.ts        |  MCP server -- 6 tools: translate, translate_markdown,
+|                    |  translate_all, translate_readme, list_languages,
+|                    |  check_status
 +--------------------+
 |  translate.ts      |  Prompt building, chunking, batch mode, streaming
 +--------------------+
 | translateMarkdown  |  Markdown-aware segmentation, table parsing, reassembly
 +--------------------+
+|  codeSpans.ts      |  Inline code-span masking and fail-closed restore
++--------------------+
 | translateAll.ts    |  Multi-language orchestrator with nav bar injection
++--------------------+
+| translateReadme.ts |  README file translation -- writes README.<lang>.md
 +--------------------+
 |  semaphore.ts      |  Counting semaphore for GPU-safe concurrency
 +--------------------+
@@ -55,7 +59,7 @@ MCP Client (Claude Code, etc.)
 +--------------------+
 |   ollama.ts        |  HTTP client -- auto-start, auto-pull, retry, streaming
 +--------------------+
-|   cache.ts         |  Segment cache + fuzzy translation memory
+|   cache.ts         |  Segment cache, translation memory, locked merge on save
 +--------------------+
 |  glossary.ts       |  Software term dictionary
 +--------------------+
@@ -66,7 +70,7 @@ MCP Client (Claude Code, etc.)
 |   errors.ts        |  PolyglotError structured error class
 +--------------------+
       |
-      |  HTTP (localhost:11434)
+      |  HTTP (localhost:11434, or OLLAMA_HOST)
       v
    Ollama + TranslateGemma (GPU)
 ```
@@ -75,8 +79,10 @@ MCP Client (Claude Code, etc.)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `POLYGLOT_MODEL` | `translategemma:12b` | Default Ollama model for all translations |
+| `POLYGLOT_MODEL` | `translategemma:27b` | Default Ollama model for all translations |
 | `POLYGLOT_CONCURRENCY` | `1` | Maximum concurrent Ollama requests (prevents GPU OOM) |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server to use, e.g. `https://ollama.com` for Ollama Cloud |
+| `OLLAMA_API_KEY` | unset | API key for a remote Ollama; sent as a Bearer token, only to a non-loopback `OLLAMA_HOST` |
 
 ## CLI flags
 
@@ -88,9 +94,11 @@ MCP Client (Claude Code, etc.)
 
 | Aspect | Detail |
 |--------|--------|
-| **Data touched** | Text sent to local Ollama API (`localhost:11434`), `.polyglot-cache.json` segment cache |
-| **Data NOT touched** | No files outside working directory, no browser data, no OS credentials |
-| **Network** | HTTP to `localhost:11434` only -- zero external/internet egress |
+| **Data touched** | Text sent to the Ollama API -- local (`localhost:11434`) by default, or the host in `OLLAMA_HOST` if you set one. `.polyglot-cache.json` segment cache next to a translated file (library and CLI use only) |
+| **Files written** | `translate_readme` writes `README.<lang>.md` next to the README you pass it and refreshes that README's language nav bar |
+| **Data NOT touched** | No browser data, no OS credentials, nothing outside the directories above |
+| **Network** | HTTP to `localhost:11434` only by default -- zero external egress. Remote only when `OLLAMA_HOST` points elsewhere |
+| **Secrets** | `OLLAMA_API_KEY`, if set, is read from the environment and sent only as a Bearer token to a non-loopback `OLLAMA_HOST`; never written to disk or logged |
 | **Telemetry** | None collected or sent |
 | **Cache safety** | Cache path traversal is blocked -- the cache file must stay within the same directory as the source file |
 
@@ -99,7 +107,7 @@ MCP Client (Claude Code, etc.)
 ```bash
 npm install             # install deps
 npm run typecheck       # type-check without emitting
-npm test                # run 256 unit tests (vitest)
+npm test                # run 362 tests (vitest)
 npm run build           # compile TypeScript to dist/
 npm run verify          # typecheck + test + build + pack (full gate)
 ```
@@ -113,11 +121,12 @@ The package exposes individual module exports for programmatic use:
 | `@mcptoolshop/polyglot-mcp` | Main MCP server entry point |
 | `@mcptoolshop/polyglot-mcp/translate` | Core translate + translateBatch |
 | `@mcptoolshop/polyglot-mcp/translateMarkdown` | Markdown-aware translation |
+| `@mcptoolshop/polyglot-mcp/codeSpans` | Inline code-span masking and restore |
 | `@mcptoolshop/polyglot-mcp/translateAll` | Multi-language orchestrator |
 | `@mcptoolshop/polyglot-mcp/validate` | Output validation |
 | `@mcptoolshop/polyglot-mcp/ollama` | Ollama HTTP client |
 | `@mcptoolshop/polyglot-mcp/languages` | Language definitions + resolver |
 | `@mcptoolshop/polyglot-mcp/glossary` | Software glossary |
 | `@mcptoolshop/polyglot-mcp/polish` | Post-translation cleanup |
-| `@mcptoolshop/polyglot-mcp/cache` | Segment cache + fuzzy matching |
+| `@mcptoolshop/polyglot-mcp/cache` | Segment cache and translation memory |
 | `@mcptoolshop/polyglot-mcp/semaphore` | Counting semaphore |

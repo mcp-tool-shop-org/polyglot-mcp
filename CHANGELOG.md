@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.8.0] - 2026-09-25
 
 ### Added
 
@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **`translategemma:27b` is the default model** across the CLI scripts and the MCP tool descriptions (was 12b), matching the blessed studio default. `scripts/translate-readme.mjs` honours `POLYGLOT_MODEL`; `--fast` still selects 2b.
 - Per-language timeout in `scripts/translate-all.mjs` raised 300 s → 900 s. 27b on a long README legitimately exceeds five minutes; the old ceiling killed real work and reported it as a timeout.
 - A code-placeholder preservation instruction is appended to the translation prompts **only when the text actually carries placeholders**, so protecting code spans does not churn the translation of every placeholder-free paragraph in the corpus.
+- **npm releases publish through Trusted Publishing (OIDC)**, with provenance and no token. The previous workflow read an `NPM_TOKEN` secret that no longer exists and ran with `continue-on-error`, so a release went green without publishing; 1.7.2 was published from a local machine. The publish job now installs a current npm (≥ 11.5.1, which OIDC needs) into a sandbox rather than upgrading Node 22's bundled npm in place, and publishes only from the `v<version>` tag that matches `package.json`.
+- **Docs brought up to date with this release.** The README, handbook, landing page, and `SECURITY.md` now cover the sixth tool (`translate_readme`), the 27B default with guidance for smaller GPUs, Ollama Cloud, inline code-span protection, the Node 20 minimum, and the cache behaviour above. The security scope now names the one optional secret (`OLLAMA_API_KEY`), the remote host it may be sent to, and the files `translate_readme` writes. The earlier text said the server handled no secrets and made no network calls beyond localhost, which this release made untrue.
 
 ### Security
 
