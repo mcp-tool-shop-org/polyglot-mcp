@@ -4,8 +4,8 @@
  * Cache file lives alongside the README as .polyglot-cache.json.
  */
 
-import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 
 export interface CacheEntry {
@@ -36,25 +36,217 @@ export function createCache(): TranslationCache {
   return { version: 1, entries: {} };
 }
 
+/**
+ * What each cache object held when it was last read from or written to disk,
+ * so that a save writes back only what changed since then (see saveCache).
+ */
+const baselines = new WeakMap<TranslationCache, Map<string, CacheEntry>>();
+
+const snapshot = (entries: Record<string, CacheEntry>): Map<string, CacheEntry> =>
+  new Map(Object.entries(entries).map(([key, entry]) => [key, { ...entry }]));
+
+type CacheFile = { entries: Record<string, CacheEntry> } | "missing" | "corrupt";
+
+/**
+ * Read a cache file. A read that fails for any reason other than the file not
+ * existing throws: guessing at its contents is how a save would clobber them.
+ */
+function readCacheFile(cachePath: string): CacheFile {
+  let raw: string;
+  try {
+    raw = retryOnWindows(() => readFileSync(cachePath, "utf-8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw err;
+  }
+  try {
+    const data = JSON.parse(raw);
+    if (data.version === 1 && data.entries) return { entries: data.entries };
+  } catch {
+    // Falls through to corrupt.
+  }
+  return "corrupt";
+}
+
 /** Load cache from disk. Returns empty cache if file doesn't exist or is invalid. */
 export function loadCache(readmePath: string): TranslationCache {
   const cachePath = getCachePath(readmePath);
-  if (!existsSync(cachePath)) return createCache();
+  let file: CacheFile;
   try {
-    const raw = readFileSync(cachePath, "utf-8");
-    const data = JSON.parse(raw);
-    if (data.version === 1 && data.entries) return data as TranslationCache;
-    return createCache();
+    file = readCacheFile(cachePath);
   } catch {
-    return createCache();
+    file = "corrupt"; // Unreadable: start empty. The save merges with the file.
+  }
+  const cache: TranslationCache = typeof file === "object" ? { version: 1, entries: file.entries } : createCache();
+  baselines.set(cache, snapshot(cache.entries));
+  return cache;
+}
+
+/**
+ * Save cache to disk next to the README, merged with what the file holds now.
+ *
+ * Several processes share one cache file: translate-all.mjs translates two or
+ * three languages at once, each in its own child, and each child loads the file
+ * when it starts and saves it when it finishes. Overwriting the file with one
+ * child's copy dropped every entry another child had saved in between, so the
+ * last language to finish in each pair kept its entries and the others lost
+ * theirs. facet's cache, for one, held ja, fr, it and pt, and nothing for zh,
+ * es or hi.
+ *
+ * So a save is a three-way merge done under a lock (see mergeCacheEntries): it
+ * re-reads the file and applies only what this cache object changed since it
+ * was loaded or last saved. The result is written to a temporary file and
+ * renamed over the cache, so a reader never sees half a file.
+ */
+export function saveCache(readmePath: string, cache: TranslationCache): void {
+  const cachePath = getCachePath(readmePath);
+  const base = baselines.get(cache) ?? new Map<string, CacheEntry>();
+  withLock(`${cachePath}.lock`, () => {
+    const file = readCacheFile(cachePath);
+    // A missing file has nothing to keep. A corrupt one is rebuilt from this copy.
+    const theirs = file === "missing" ? {} : file === "corrupt" ? Object.fromEntries(base) : file.entries;
+    const entries = mergeCacheEntries(base, cache.entries, theirs);
+    writeFileAtomic(cachePath, JSON.stringify({ version: 1, entries }, null, 2));
+  });
+  baselines.set(cache, snapshot(cache.entries));
+}
+
+// ─── Sharing the cache file ───────────────────────────────────────
+
+/**
+ * Three-way merge of cache entries. `base` is what this cache held when it was
+ * last read or written, `ours` is what it holds now, and `theirs` is the file
+ * as it stands.
+ *
+ * Our additions and replacements win. Our removals — by clearCache, pruneCache
+ * or expiry — apply only to entries nobody has rewritten since `base`. Every
+ * entry we did not touch comes from `theirs`, so other writers' additions,
+ * replacements and removals all stand.
+ *
+ * @internal Exported for testing.
+ */
+export function mergeCacheEntries(
+  base: ReadonlyMap<string, CacheEntry>,
+  ours: Record<string, CacheEntry>,
+  theirs: Record<string, CacheEntry>,
+): Record<string, CacheEntry> {
+  const merged = { ...theirs };
+  for (const [key, entry] of Object.entries(ours)) {
+    const before = base.get(key);
+    if (!before || !sameEntry(before, entry)) merged[key] = entry;
+  }
+  for (const [key, before] of base) {
+    if (Object.hasOwn(ours, key)) continue;
+    const now = theirs[key];
+    if (now && sameEntry(now, before)) delete merged[key];
+  }
+  return merged;
+}
+
+const sameEntry = (a: CacheEntry, b: CacheEntry): boolean =>
+  a.translation === b.translation &&
+  a.model === b.model &&
+  a.timestamp === b.timestamp &&
+  a.source === b.source &&
+  a.targetLang === b.targetLang;
+
+/** A lock this old belongs to a process that died holding it. */
+const LOCK_STALE_MS = 10_000;
+
+/** Past this, save without the lock rather than fail a finished translation. */
+const LOCK_WAIT_MS = 15_000;
+
+/**
+ * Errors that mean another process holds the lock. On Windows a lock file
+ * that is being deleted refuses to be created with EPERM or EACCES, not EEXIST.
+ */
+const LOCK_HELD = new Set(process.platform === "win32" ? ["EEXIST", "EPERM", "EACCES", "EBUSY"] : ["EEXIST"]);
+
+/**
+ * Run `fn` holding an exclusive lock file. A save's read, merge and write take
+ * milliseconds, so a lock older than LOCK_STALE_MS belongs to a process that
+ * died holding it, and is broken.
+ *
+ * The merge alone is not enough. Unlocked, two saves can read the same file
+ * and the later rename drops the earlier one's entries. Measured on Windows,
+ * with 4 processes each saving 40 entries, as few as 36 of the 160 survived.
+ *
+ * Still best effort: a lock file that cannot be created at all (a read-only
+ * directory), or not within LOCK_WAIT_MS, is done without, and `fn` finds out
+ * for itself whether the cache file can be written.
+ */
+function withLock(lockPath: string, fn: () => void): void {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let held = false;
+  for (let delayMs = 5; !held && Date.now() < deadline; delayMs = Math.min(delayMs * 2, 100)) {
+    try {
+      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+      held = true;
+    } catch (err) {
+      if (!LOCK_HELD.has((err as NodeJS.ErrnoException).code ?? "")) break;
+      if (fileAgeMs(lockPath) > LOCK_STALE_MS) removeFile(lockPath);
+      sleepSync(delayMs);
+    }
+  }
+  try {
+    fn();
+  } finally {
+    if (held) removeFile(lockPath);
   }
 }
 
-/** Save cache to disk next to the README. */
-export function saveCache(readmePath: string, cache: TranslationCache): void {
-  const cachePath = getCachePath(readmePath);
-  writeFileSync(cachePath, JSON.stringify(cache, null, 2), "utf-8");
+/**
+ * Write `content` to a temporary file beside `path`, then rename it over
+ * `path`, so a reader sees either the old file or the new one.
+ */
+function writeFileAtomic(path: string, content: string): void {
+  const tmp = `${path}.${process.pid}-${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, content, "utf-8");
+  try {
+    retryOnWindows(() => renameSync(tmp, path));
+  } catch (err) {
+    removeFile(tmp);
+    throw err;
+  }
 }
+
+/**
+ * Run a file operation, retrying for about a second on Windows. There, a virus
+ * scanner, an indexer or another process's rename can hold a file for a moment
+ * and make the operation fail with EPERM, EACCES or EBUSY.
+ */
+function retryOnWindows<T>(op: () => T): T {
+  for (let delayMs = 10; ; delayMs *= 2) {
+    try {
+      return op();
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      const transient = process.platform === "win32" && ["EPERM", "EACCES", "EBUSY"].includes(code);
+      if (!transient || delayMs > 640) throw err;
+      sleepSync(delayMs);
+    }
+  }
+}
+
+function fileAgeMs(path: string): number {
+  try {
+    return Date.now() - statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function removeFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone, or still held open; neither needs handling here.
+  }
+}
+
+const sleepSync = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
 
 /** Default cache TTL: 30 days in milliseconds. */
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -83,11 +275,21 @@ export function pruneCache(cache: TranslationCache, ttlMs: number = CACHE_TTL_MS
   return pruned;
 }
 
-/** Clear all entries from the cache. Returns number of entries cleared. */
-export function clearCache(cache: TranslationCache): number {
-  const count = Object.keys(cache.entries).length;
-  cache.entries = {};
-  return count;
+/**
+ * Clear entries from the cache. Returns number of entries cleared.
+ *
+ * With `targetLang`, only that language's entries go, along with any entry
+ * that carries no language (written before entries were tagged). Such an entry
+ * could be for any language, and a lookup for this one may still return it.
+ * Without `targetLang`, every entry goes.
+ */
+export function clearCache(cache: TranslationCache, targetLang?: string): number {
+  const cleared = Object.keys(cache.entries).filter((key) => {
+    const lang = cache.entries[key].targetLang;
+    return targetLang === undefined || lang === undefined || lang === targetLang;
+  });
+  for (const key of cleared) delete cache.entries[key];
+  return cleared.length;
 }
 
 /** Store a translation in the cache. */

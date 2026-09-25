@@ -61,7 +61,7 @@ export interface TranslatableCell {
 export interface TranslateMarkdownOptions extends TranslateBatchOptions {
   /** Use segment cache. Default: true. */
   cache?: boolean;
-  /** Clear all cached entries before translating. */
+  /** Clear the target language's cached entries before translating. Other languages' entries are kept. */
   cacheClear?: boolean;
   /** Path to the source file (for cache file location). Required if cache=true. */
   filePath?: string;
@@ -349,7 +349,9 @@ export async function translateMarkdown(
   if (useCache && options.filePath) {
     cache = loadCache(options.filePath);
     if (options.cacheClear) {
-      clearCache(cache);
+      // This language only. Every translate-all child clears on start, so
+      // clearing everything wiped the languages earlier children had finished.
+      clearCache(cache, targetLang);
       saveCache(options.filePath, cache);
     } else {
       pruneCache(cache);

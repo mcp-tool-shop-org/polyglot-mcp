@@ -7,7 +7,7 @@
  *
  * --fast        Use translategemma:2b for speed (lower quality)
  * --no-cache    Skip the segment-level cache
- * --cache-clear Clear all cached translations before translating
+ * --cache-clear Clear this language's cached translations before translating
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
