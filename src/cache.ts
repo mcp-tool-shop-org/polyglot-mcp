@@ -104,47 +104,47 @@ export function setCached(
 
 // ─── Fuzzy matching ───────────────────────────────────────────────
 
-/** Minimum similarity threshold for fuzzy cache hits (0–1). */
+/**
+ * Minimum Levenshtein similarity (0–1) a fuzzy candidate must reach. It narrows
+ * and ranks candidates but never makes one safe to reuse — see getFuzzyCached.
+ */
 export const FUZZY_THRESHOLD = 0.85;
 
 /**
- * Invariant tokens that must NOT differ between a fuzzy-match candidate and
- * the query — they're identifiers, not prose, so a difference here changes
- * the meaning of the segment even when Levenshtein similarity is high.
+ * Invariant tokens: identifiers and quantities that must match exactly, in
+ * order, between a fuzzy candidate and the query. A difference in any of them
+ * changes what the segment says, however similar the rest of the text is.
  *
- * Current set: SemVer-style version tokens (`v1.2.3`, `v1.2.3-rc.1`).
+ * - SemVer version tokens (`v1.2.3`, `v1.2.3-rc.1`). The testing-os v1.2.2
+ *   release (2026-05-14) had a version-marker block ~0.99 similar to the
+ *   previous release's, and all 7 translations came out stamped v1.2.1.
+ * - Code-span placeholders (`⟦0⟧`). The cache sees masked text, so a sentence
+ *   that gained or lost an inline code span differs only by a placeholder, and
+ *   a reused translation then fails the restore step and falls back to source.
+ * - Every other run of digits, with its decimal and grouping separators
+ *   (`174`, `1,000`, `0.2105`). In si-rpg-engine (2026-09-25) "174 tests, …"
+ *   became "197 tests, …" (0.987 similar) and 4 of 7 translations kept 174.
  *
- * Why: when a README's `<!-- version:start -->` block ships
- * `**v1.2.1** — 7 packages...` in one release and `**v1.2.2** — 7 packages...`
- * in the next, the Levenshtein similarity is ~0.99. Without an invariant
- * check, the fuzzy cache returns the v1.2.1 translation for the v1.2.2
- * source, and the translated README ends up with the previous version
- * stamped inside the marker block. Caught on the testing-os v1.2.2 release
- * 2026-05-14 — all 7 translations regenerated with stale marker versions.
- *
- * The check rejects a fuzzy match whenever the candidate and the query
- * disagree on version tokens, forcing a fresh translation. ~7 extra Ollama
- * calls per release (one per language); ~0 ms overhead at lookup time
- * since the regex runs only against entries that already passed the
- * Levenshtein similarity check.
+ * One alternation, so tokens come out in source order and a version's or a
+ * placeholder's digits are not counted again as a bare number. Tokens are
+ * compared source against source in their written form, never against a
+ * translation: a target locale may legitimately write 1,000 as 1.000 or 1 000.
  */
-const VERSION_TOKEN_RE = /v\d+\.\d+\.\d+(?:-[\w.]+)?/g;
+const INVARIANT_TOKEN_RE = /v\d+\.\d+\.\d+(?:-[\w.]+)?|⟦\d+⟧|\p{Nd}+(?:[.,]\p{Nd}+)*/gu;
 
 /**
- * Extract the multiset of invariant tokens (currently SemVer version
- * tokens) from a text, sorted for order-independent comparison.
+ * Extract the invariant tokens (version tokens, code-span placeholders and
+ * numbers) from a text, in the order they appear.
  *
  * @internal Exported for testing.
  */
 export function extractInvariantTokens(text: string): string[] {
-  const matches = text.match(VERSION_TOKEN_RE);
-  if (!matches) return [];
-  return [...matches].sort();
+  return text.match(INVARIANT_TOKEN_RE) ?? [];
 }
 
 /**
- * Returns true when two texts share the exact same multiset of invariant
- * tokens (both empty counts as a match).
+ * Returns true when two texts carry the same invariant tokens in the same
+ * order (both empty counts as a match).
  *
  * @internal Exported for testing.
  */
@@ -156,6 +156,31 @@ export function hasSameInvariantTokens(a: string, b: string): boolean {
     if (aTokens[i] !== bTokens[i]) return false;
   }
   return true;
+}
+
+/**
+ * The segment with its whitespace laid out canonically. Layout is the one kind
+ * of edit a cached translation survives unchanged.
+ *
+ * Runs of spaces and tabs within a line collapse to one space, CRLF becomes LF,
+ * and whitespace at the start and end of the segment is dropped. Whitespace
+ * that Markdown gives meaning to is kept: each line break, the indentation
+ * after it (list nesting), and two or more spaces before it (a hard line
+ * break). So a reflowed paragraph does not match, and neither does a
+ * non-breaking space, which is content rather than layout.
+ *
+ * @internal Exported for testing.
+ */
+export function canonicalWhitespace(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/^[ \t\n]+|[ \t\n]+$/g, "")
+    .replace(/[ \t\n]+/g, (run) => {
+      if (!run.includes("\n")) return " ";
+      const lines = run.split("\n");
+      const hardBreak = / {2,}$/.test(lines[0]) ? "  " : "";
+      return hardBreak + "\n".repeat(lines.length - 1) + lines[lines.length - 1];
+    });
 }
 
 /**
@@ -202,11 +227,20 @@ export function similarity(a: string, b: string): number {
 }
 
 /**
- * Fuzzy cache lookup — finds the best cached entry whose source text is
- * similar to the query above FUZZY_THRESHOLD.
+ * Fuzzy cache lookup — finds a cached translation whose source differs from the
+ * query only in whitespace layout (see canonicalWhitespace), preferring the
+ * candidate most similar to the query above `threshold`.
  *
- * Only considers entries that share the same target language and model
- * (they already live in the same cache so only model match needs checking).
+ * A cached translation is the translation of its own source and nothing else,
+ * so any other edit — a word, a number, a punctuation mark, a change of case —
+ * sends the segment back to the model. Similarity cannot make that call: in
+ * si-rpg-engine (2026-09-25) a table cell that went from "NaN refused" to "NaN
+ * and infinities refused" was 0.894 similar to its old source, and 4 of 7
+ * translations kept the old cell. Punctuation is not layout either: text
+ * struck through with ~~, a ✓ that became ✗, or a flipped sign reverses what a
+ * line says.
+ *
+ * Only considers entries that share the same target language and model.
  *
  * Returns `{ translation, similarity }` or undefined if nothing matches.
  */
@@ -219,6 +253,7 @@ export function getFuzzyCached(
   threshold: number = FUZZY_THRESHOLD
 ): { translation: string; similarity: number } | undefined {
   const now = Date.now();
+  const canonical = canonicalWhitespace(text);
   let bestSim = threshold;
   let bestTranslation: string | undefined;
 
@@ -231,14 +266,14 @@ export function getFuzzyCached(
     if (entry.model !== model) continue;
     // Skip different target languages (prevents cross-language contamination)
     if (entry.targetLang && entry.targetLang !== targetLang) continue;
+    // Skip sources that differ from the query in more than whitespace layout
+    if (canonicalWhitespace(entry.source) !== canonical) continue;
+    // Implied by the check above today, and kept so that loosening that check
+    // can never let a changed number, version or code span through.
+    if (!hasSameInvariantTokens(text, entry.source)) continue;
 
     const sim = similarity(text, entry.source);
     if (sim > bestSim) {
-      // Invariant-token guard: reject fuzzy matches whose source text
-      // disagrees with the query on identifier tokens (version numbers,
-      // etc.). See VERSION_TOKEN_RE above for the failure mode this
-      // catches.
-      if (!hasSameInvariantTokens(text, entry.source)) continue;
       bestSim = sim;
       bestTranslation = entry.translation;
     }

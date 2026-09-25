@@ -75,7 +75,7 @@ export interface TranslateMarkdownResult {
   cached: number;
   translated: number;
   deduplicated: number;
-  /** Segments matched by fuzzy cache (translation memory). */
+  /** Segments reused from a cached source that differs only in whitespace layout. */
   fuzzyMatched: number;
   ollamaCalls: number;
   durationMs: number;
