@@ -8,7 +8,7 @@
  *
  * --fast            Use translategemma:2b for speed (lower quality)
  * --no-cache        Skip the segment-level cache
- * --cache-clear     Clear all cached translations before translating
+ * --cache-clear     Clear the cached translations of each language before translating it
  * --concurrency=N   Run N languages in parallel (default 2, max 3)
  * --no-nav-bar      Skip language nav bar injection
  */
