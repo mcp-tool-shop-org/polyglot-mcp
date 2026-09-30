@@ -7,27 +7,132 @@
   ],
   "breaks": [
     {
-      "doors": 2,
+      "doors": 4,
       "importedBy": [
         "scripts"
       ],
       "importedByTests": [],
       "kind": "part",
-      "name": "src"
+      "name": "src",
+      "partLabel": "src"
     }
   ],
   "changes": {
-    "first": true
+    "fileCounts": {
+      "added": 4,
+      "changed": 127,
+      "moved": 0,
+      "parts": 6,
+      "removed": 0
+    },
+    "items": [
+      {
+        "kind": "door",
+        "sentence": "CI's pull request trigger now also names `codecov.yml`.",
+        "subjects": [
+          ".github/workflows/ci.yml"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "CI's push trigger now also names `codecov.yml`.",
+        "subjects": [
+          ".github/workflows/ci.yml"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "CI now also runs src/cache.concurrency.test.ts, src/cache.test.ts, src/codeSpans.test.ts and 18 more.",
+        "subjects": [
+          ".github/workflows/ci.yml",
+          "src/cache.concurrency.test.ts",
+          "src/cache.test.ts",
+          "src/codeSpans.test.ts",
+          "src/errors.test.ts",
+          "src/glossary.test.ts",
+          "src/index.test.ts",
+          "src/integration.test.ts",
+          "src/languages.test.ts",
+          "src/ollama.test.ts",
+          "src/polish.test.ts",
+          "src/semaphore.test.ts",
+          "src/translate.test.ts",
+          "src/translateAll.test.ts",
+          "src/translateMarkdown.cache.test.ts",
+          "src/translateMarkdown.codespans.test.ts",
+          "src/translateMarkdown.concurrency.test.ts",
+          "src/translateMarkdown.roundtrip.test.ts",
+          "src/translateMarkdown.test.ts",
+          "src/translateReadme.test.ts",
+          "src/validate.test.ts",
+          "src/version.test.ts"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "And 4 more changes to doors.",
+        "subjects": []
+      },
+      {
+        "kind": "landing",
+        "sentence": "CHANGELOG.md is now read by src/version.test.ts.",
+        "subjects": [
+          "CHANGELOG.md",
+          "src/version.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "README.ja.md is now also read by src/translateAll.test.ts and src/translateReadme.test.ts.",
+        "subjects": [
+          "README.ja.md",
+          "src/translateAll.test.ts",
+          "src/translateReadme.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "README.md is now also read by src/translateReadme.test.ts.",
+        "subjects": [
+          "README.md",
+          "src/translateReadme.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "And 6 more new writers and readers of places.",
+        "subjects": []
+      },
+      {
+        "kind": "counts",
+        "sentence": "4 files added and 127 changed content, across 6 parts.",
+        "subjects": []
+      }
+    ],
+    "since": {
+      "commit": "a91c112ba6b81824d51b5d7d62cc585b5f9965dc",
+      "generatedAt": "2026-09-23T17:42:44.255Z"
+    },
+    "unchanged": false
   },
   "changesTogether": [],
   "changesTogetherNote": [
-    "Window: 180 days; a pair counts from 3 shared commits."
+    "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "a91c112ba6b81824d51b5d7d62cc585b5f9965dc",
+  "commit": "c3305f2f8dbf38151adbf61c4437be0bf0ab5235",
+  "defaultBranch": "main",
+  "derived": "7 parts, mostly Markdown (71 files); code in TypeScript (39), JavaScript (4), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because a pull request goes through it. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
     {
+      "builds": [
+        "src/"
+      ],
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
       "file": ".github/workflows/ci.yml",
+      "id": ".github/workflows/ci.yml",
       "landings": [],
       "name": "CI",
       "pushes": false,
@@ -35,23 +140,84 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 33
+          "files": 36
         }
       ],
       "runs": [
-        "src/"
+        "src/cache.concurrency.test.ts",
+        "src/cache.test.ts",
+        "src/codeSpans.test.ts",
+        "src/errors.test.ts",
+        "src/glossary.test.ts",
+        "src/index.test.ts",
+        "src/integration.test.ts",
+        "src/languages.test.ts",
+        "src/ollama.test.ts",
+        "src/polish.test.ts",
+        "src/semaphore.test.ts",
+        "src/translate.test.ts",
+        "src/translateAll.test.ts",
+        "src/translateMarkdown.cache.test.ts",
+        "src/translateMarkdown.codespans.test.ts",
+        "src/translateMarkdown.concurrency.test.ts",
+        "src/translateMarkdown.roundtrip.test.ts",
+        "src/translateMarkdown.test.ts",
+        "src/translateReadme.test.ts",
+        "src/validate.test.ts",
+        "src/version.test.ts"
       ],
-      "runsCount": 1,
-      "sends": [],
+      "runsCount": 21,
+      "runsMore": 18,
+      "sends": [
+        "uploads coverage to Codecov"
+      ],
       "stages": [],
       "triggers": [
-        "on a pull request touching 9 paths",
-        "on a push to main touching 9 paths",
+        "on a pull request to main touching 10 paths",
+        "on a push to main touching 10 paths",
         "or by hand"
       ]
     },
     {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": ".github/workflows/pages.yml",
+      "id": ".github/workflows/pages.yml",
+      "landings": [],
+      "name": "Deploy site to GitHub Pages",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "site",
+          "depth": 0,
+          "files": 5
+        }
+      ],
+      "runs": [
+        "site/astro.config.mjs",
+        "site/src/"
+      ],
+      "runsCount": 2,
+      "runsMore": 0,
+      "sends": [
+        "deploys the site"
+      ],
+      "stages": [],
+      "triggers": [
+        "on a push to main touching 2 paths",
+        "or by hand"
+      ]
+    },
+    {
+      "builds": [
+        "src/"
+      ],
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
       "file": ".github/workflows/publish.yml",
+      "id": ".github/workflows/publish.yml",
       "landings": [],
       "name": "Publish to npm",
       "pushes": false,
@@ -59,13 +225,34 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 33
+          "files": 36
         }
       ],
       "runs": [
-        "src/"
+        "src/cache.concurrency.test.ts",
+        "src/cache.test.ts",
+        "src/codeSpans.test.ts",
+        "src/errors.test.ts",
+        "src/glossary.test.ts",
+        "src/index.test.ts",
+        "src/integration.test.ts",
+        "src/languages.test.ts",
+        "src/ollama.test.ts",
+        "src/polish.test.ts",
+        "src/semaphore.test.ts",
+        "src/translate.test.ts",
+        "src/translateAll.test.ts",
+        "src/translateMarkdown.cache.test.ts",
+        "src/translateMarkdown.codespans.test.ts",
+        "src/translateMarkdown.concurrency.test.ts",
+        "src/translateMarkdown.roundtrip.test.ts",
+        "src/translateMarkdown.test.ts",
+        "src/translateReadme.test.ts",
+        "src/validate.test.ts",
+        "src/version.test.ts"
       ],
-      "runsCount": 1,
+      "runsCount": 21,
+      "runsMore": 18,
       "sends": [
         "publishes to npm"
       ],
@@ -76,50 +263,118 @@
       ]
     },
     {
-      "file": ".github/workflows/pages.yml",
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": "package.json",
+      "id": "package.json#@mcptoolshop/polyglot-mcp",
+      "kind": "package",
       "landings": [],
-      "name": "Deploy site to GitHub Pages",
+      "name": "@mcptoolshop/polyglot-mcp",
       "pushes": false,
-      "reach": [],
-      "runs": [],
-      "runsCount": 0,
-      "sends": [
-        "deploys the site"
+      "reach": [
+        {
+          "boundary": "src",
+          "depth": 0,
+          "files": 15
+        }
       ],
+      "runs": [
+        "src/index.ts",
+        "src/cache.ts",
+        "src/codeSpans.ts",
+        "src/glossary.ts",
+        "src/languages.ts",
+        "src/ollama.ts",
+        "src/polish.ts",
+        "src/semaphore.ts",
+        "src/translate.ts",
+        "src/translateAll.ts",
+        "src/translateMarkdown.ts",
+        "src/validate.ts"
+      ],
+      "runsCount": 12,
+      "runsMore": 9,
+      "sends": [],
       "stages": [],
-      "triggers": [
-        "on a push to main touching 2 paths",
-        "or by hand"
-      ]
+      "triggers": []
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": "package.json",
+      "id": "package.json#polyglot-mcp",
+      "kind": "command",
+      "landings": [],
+      "name": "polyglot-mcp",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "src",
+          "depth": 0,
+          "files": 15
+        }
+      ],
+      "runs": [
+        "src/index.ts"
+      ],
+      "runsCount": 1,
+      "runsMore": 0,
+      "sends": [],
+      "stages": [],
+      "triggers": []
     }
   ],
   "duplicates": [],
   "duplicatesLead": null,
   "duplicatesNote": [],
+  "edges": [],
+  "engine": "1.24.0",
   "generated": [],
-  "generatedAt": "2026-09-23T17:42:44.255Z",
+  "generatedAt": "2026-09-30T20:11:27.616Z",
   "limits": [
-    "4 writes and 6 reads use paths built at run time and are not named here.",
-    "Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 20 source files reach 10 revisions."
+    "3 writes and 5 reads use paths built at run time and are not named here.",
+    "5 writes and 6 reads go to a path their caller passes, not to this repository.",
+    "4 commands are built at run time and not followed, 2 of them in tests.",
+    "Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions."
   ],
   "mainDoor": ".github/workflows/ci.yml",
+  "partLabels": {
+    ".claude": ".claude",
+    ".github": ".github",
+    "assets": "assets",
+    "root": "the repository root",
+    "scripts": "scripts",
+    "site": "site",
+    "src": "src"
+  },
   "parts": 7,
   "readers": [],
   "repo": "mcp-tool-shop-org/polyglot-mcp",
   "sequences": [],
+  "startDoor": ".github/workflows/ci.yml",
   "startHere": [
     ".github/workflows/ci.yml",
-    "src/"
+    "src/index.ts",
+    "src/translate.ts",
+    "src/languages.ts",
+    "src/ollama.ts",
+    "src/glossary.ts",
+    "src/codeSpans.ts",
+    "src/polish.ts"
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 18,
+  "testFiles": 21,
   "testedBy": {
     "scripts": 0,
     "site": 0,
-    "src": 17
+    "src": 20
   },
+  "unnamedWrites": 3,
   "unread": [],
+  "unreadFiles": 0,
   "unreadNote": [],
   "untested": [
     {
