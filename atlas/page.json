@@ -19,99 +19,36 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 4,
-      "changed": 127,
+      "added": 0,
+      "changed": 3,
       "moved": 0,
-      "parts": 6,
+      "parts": 2,
       "removed": 0
     },
     "items": [
       {
         "kind": "door",
-        "sentence": "CI's pull request trigger now also names `codecov.yml`.",
+        "sentence": "CI's pull request trigger no longer names `.github/workflows/**`, `atlas/**`, `codecov.yml`, `package-lock.json`, `package.json`, `site/astro.config.mjs`, `site/package-lock.json`, `site/package.json`, `src/**` and `tsconfig.json`.",
         "subjects": [
           ".github/workflows/ci.yml"
         ]
       },
       {
         "kind": "door",
-        "sentence": "CI's push trigger now also names `codecov.yml`.",
+        "sentence": "Deploy site to GitHub Pages now also starts on a pull request to main touching 2 paths.",
         "subjects": [
-          ".github/workflows/ci.yml"
+          ".github/workflows/pages.yml"
         ]
-      },
-      {
-        "kind": "door",
-        "sentence": "CI now also runs src/cache.concurrency.test.ts, src/cache.test.ts, src/codeSpans.test.ts and 18 more.",
-        "subjects": [
-          ".github/workflows/ci.yml",
-          "src/cache.concurrency.test.ts",
-          "src/cache.test.ts",
-          "src/codeSpans.test.ts",
-          "src/errors.test.ts",
-          "src/glossary.test.ts",
-          "src/index.test.ts",
-          "src/integration.test.ts",
-          "src/languages.test.ts",
-          "src/ollama.test.ts",
-          "src/polish.test.ts",
-          "src/semaphore.test.ts",
-          "src/translate.test.ts",
-          "src/translateAll.test.ts",
-          "src/translateMarkdown.cache.test.ts",
-          "src/translateMarkdown.codespans.test.ts",
-          "src/translateMarkdown.concurrency.test.ts",
-          "src/translateMarkdown.roundtrip.test.ts",
-          "src/translateMarkdown.test.ts",
-          "src/translateReadme.test.ts",
-          "src/validate.test.ts",
-          "src/version.test.ts"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "And 4 more changes to doors.",
-        "subjects": []
-      },
-      {
-        "kind": "landing",
-        "sentence": "CHANGELOG.md is now read by src/version.test.ts.",
-        "subjects": [
-          "CHANGELOG.md",
-          "src/version.test.ts"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "README.ja.md is now also read by src/translateAll.test.ts and src/translateReadme.test.ts.",
-        "subjects": [
-          "README.ja.md",
-          "src/translateAll.test.ts",
-          "src/translateReadme.test.ts"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "README.md is now also read by src/translateReadme.test.ts.",
-        "subjects": [
-          "README.md",
-          "src/translateReadme.test.ts"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "And 6 more new writers and readers of places.",
-        "subjects": []
       },
       {
         "kind": "counts",
-        "sentence": "4 files added and 127 changed content, across 6 parts.",
+        "sentence": "3 files changed content, across 2 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "a91c112ba6b81824d51b5d7d62cc585b5f9965dc",
-      "generatedAt": "2026-09-23T17:42:44.255Z"
+      "commit": "c3305f2f8dbf38151adbf61c4437be0bf0ab5235",
+      "generatedAt": "2026-09-30T20:11:27.616Z"
     },
     "unchanged": false
   },
@@ -120,9 +57,9 @@
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "c3305f2f8dbf38151adbf61c4437be0bf0ab5235",
+  "commit": "e0fd93e1984754317e96214bd4f4723c28406d4f",
   "defaultBranch": "main",
-  "derived": "7 parts, mostly Markdown (71 files); code in TypeScript (39), JavaScript (4), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because a pull request goes through it. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
+  "derived": "7 parts, mostly Markdown (71 files); code in TypeScript (39), JavaScript (4), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
     {
       "builds": [
@@ -173,7 +110,7 @@
       ],
       "stages": [],
       "triggers": [
-        "on a pull request to main touching 10 paths",
+        "on a pull request to main",
         "on a push to main touching 10 paths",
         "or by hand"
       ]
@@ -201,10 +138,11 @@
       "runsCount": 2,
       "runsMore": 0,
       "sends": [
-        "deploys the site"
+        "deploys the site on a push to main or by hand"
       ],
       "stages": [],
       "triggers": [
+        "on a pull request to main touching 2 paths",
         "on a push to main touching 2 paths",
         "or by hand"
       ]
@@ -332,7 +270,7 @@
   "edges": [],
   "engine": "1.24.0",
   "generated": [],
-  "generatedAt": "2026-09-30T20:11:27.616Z",
+  "generatedAt": "2026-10-01T02:13:34.298Z",
   "limits": [
     "3 writes and 5 reads use paths built at run time and are not named here.",
     "5 writes and 6 reads go to a path their caller passes, not to this repository.",

@@ -244,11 +244,11 @@
           "path": ".github/dependabot.yml"
         },
         {
-          "hash": "e644c7764e47dae7bcec200f9af264eb32e7bfa42c809fc7039061c2bb924258",
+          "hash": "c445ab914765fa364600faf999ad14b5b722521d70c8291140c5d6bcd5c737a7",
           "path": ".github/workflows/ci.yml"
         },
         {
-          "hash": "3d5bb4e5e7614d7116c95bd59ed0a74c9876ad323efe43e0abd121ed535a4de0",
+          "hash": "8caf7234bc27751a1e7ef13c0520ecd94c741fb4287fc2c62622ad5d418cb0be",
           "path": ".github/workflows/pages.yml"
         },
         {
@@ -366,7 +366,7 @@
           "path": "logo.png"
         },
         {
-          "hash": "f2a49864232afada28555ddb8da9416eab0c2bcd5e3f97d8c41e60c6adf93191",
+          "hash": "82a93ac7880103304f5e53367431d414fff069c71962663d15af3f6d4d9039ae",
           "path": "package-lock.json"
         },
         {
@@ -2184,19 +2184,7 @@
           "branches": [
             "main"
           ],
-          "event": "pull_request",
-          "paths": [
-            ".github/workflows/**",
-            "atlas/**",
-            "codecov.yml",
-            "package-lock.json",
-            "package.json",
-            "site/astro.config.mjs",
-            "site/package-lock.json",
-            "site/package.json",
-            "src/**",
-            "tsconfig.json"
-          ]
+          "event": "pull_request"
         },
         {
           "branches": [
@@ -2251,6 +2239,26 @@
       ],
       "elsewhere": [],
       "file": ".github/workflows/pages.yml",
+      "gated": [
+        {
+          "jobs": [
+            "build",
+            "deploy"
+          ],
+          "pushes": false,
+          "sends": [
+            "deploysPages"
+          ],
+          "stages": [],
+          "when": {
+            "branches": [
+              "main"
+            ],
+            "byHand": true,
+            "event": "push"
+          }
+        }
+      ],
       "jobs": [
         {
           "basis": "declared",
@@ -2338,7 +2346,7 @@
       "runsCount": 2,
       "secrets": [],
       "sends": {
-        "deploysPages": true,
+        "deploysPages": false,
         "dispatchesTo": [],
         "opensIssues": false,
         "opensIssuesOnFailure": false,
@@ -2349,6 +2357,16 @@
       },
       "stages": [],
       "triggers": [
+        {
+          "branches": [
+            "main"
+          ],
+          "event": "pull_request",
+          "paths": [
+            ".github/workflows/pages.yml",
+            "site/**"
+          ]
+        },
         {
           "branches": [
             "main"
@@ -2833,7 +2851,7 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "c3305f2f8dbf38151adbf61c4437be0bf0ab5235",
+    "commit": "e0fd93e1984754317e96214bd4f4723c28406d4f",
     "tracked": 133
   },
   "landings": [
