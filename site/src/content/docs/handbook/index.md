@@ -5,12 +5,12 @@ sidebar:
   order: 0
 ---
 
-Welcome to the Polyglot MCP handbook. Polyglot MCP is a local GPU translation server that translates text between 57 languages using TranslateGemma via Ollama. No cloud services, no API keys, no rate limits -- everything runs on your machine.
+Welcome to the Polyglot MCP handbook. Polyglot MCP is a local GPU translation server that translates text between 57 languages using TranslateGemma via Ollama. No cloud services, no API keys, no rate limits -- by default everything runs on your machine, and a remote Ollama such as Ollama Cloud is opt-in.
 
 ## What's inside
 
 - **[Getting Started](/polyglot-mcp/handbook/getting-started/)** -- Install Ollama, pull a model, add to your MCP client
-- **[Tools](/polyglot-mcp/handbook/tools/)** -- All 5 MCP tools in detail
+- **[Tools](/polyglot-mcp/handbook/tools/)** -- All 6 MCP tools in detail
 - **[Features](/polyglot-mcp/handbook/features/)** -- Auto-start, chunking, caching, validation, and more
 - **[Reference](/polyglot-mcp/handbook/reference/)** -- Supported languages, performance, architecture, environment variables
 - **[For Beginners](/polyglot-mcp/handbook/beginners/)** -- New to Polyglot MCP? Start here for a gentle introduction

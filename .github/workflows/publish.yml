@@ -35,14 +35,29 @@ jobs:
 
       - run: npm test --if-present
 
-      - name: Publish to npm
-        continue-on-error: true
+      - name: Verify the tag matches package.json
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::warning::NPM_TOKEN secret not set — skipping npm publish"
-            exit 0
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_TYPE" != "tag" ] || [ "$GITHUB_REF_NAME" != "v$PKG_VERSION" ]; then
+            echo "::error::Refusing to publish $PKG_VERSION from $GITHUB_REF_TYPE $GITHUB_REF_NAME; run it from the v$PKG_VERSION tag."
+            exit 1
           fi
-          npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # OIDC trusted publishing requires npm >= 11.5.1, and Node 22 bundles
+      # npm 10.9. Upgrading that npm in place (npm install -g npm@latest) can
+      # break it mid-install (MODULE_NOT_FOUND: promise-retry), so install a
+      # current npm into a sandbox and put it first on PATH instead.
+      - name: Install npm >= 11.5.1 for OIDC trusted publishing
+        run: |
+          SANDBOX="$HOME/.npm-cli-sandbox"
+          mkdir -p "$SANDBOX"
+          cd "$SANDBOX"
+          echo '{"name":"npm-cli-sandbox","version":"0.0.0","private":true}' > package.json
+          npm install --no-save --no-audit --no-fund --silent npm@latest
+          echo "$SANDBOX/node_modules/.bin" >> "$GITHUB_PATH"
+          "$SANDBOX/node_modules/.bin/npm" --version
+
+      - name: Publish to npm with Sigstore provenance
+        # Auth via npm Trusted Publishing (OIDC) - intentionally NO NODE_AUTH_TOKEN.
+        run: npm publish --provenance --access public
 

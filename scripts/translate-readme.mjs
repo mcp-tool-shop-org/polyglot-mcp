@@ -7,7 +7,7 @@
  *
  * --fast        Use translategemma:2b for speed (lower quality)
  * --no-cache    Skip the segment-level cache
- * --cache-clear Clear all cached translations before translating
+ * --cache-clear Clear this language's cached translations before translating
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -53,7 +53,7 @@ const result = await translateMarkdown(readme, "en", targetCode, {
 const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
 console.log(
-  `\n${result.segments} translatable segments (${result.cached} cached, ${result.translated} to translate${result.deduplicated > 0 ? `, ${result.deduplicated} deduplicated` : ""})`
+  `\n${result.segments} translatable segments (${result.cached} cached${result.fuzzyMatched > 0 ? `, ${result.fuzzyMatched} fuzzy` : ""}, ${result.translated} to translate${result.deduplicated > 0 ? `, ${result.deduplicated} deduplicated` : ""})`
 );
 console.log(`${result.ollamaCalls} Ollama call(s) for ${result.translated} unique segments`);
 

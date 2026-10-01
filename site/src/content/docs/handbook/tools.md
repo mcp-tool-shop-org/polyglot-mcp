@@ -1,11 +1,11 @@
 ---
 title: Tools
-description: All 5 MCP tools exposed by Polyglot MCP.
+description: All 6 MCP tools exposed by Polyglot MCP.
 sidebar:
   order: 2
 ---
 
-Polyglot MCP exposes five tools to any MCP-compatible client (Claude Code, Claude Desktop, etc.).
+Polyglot MCP exposes six tools to any MCP-compatible client (Claude Code, Claude Desktop, etc.).
 
 ## translate
 
@@ -16,7 +16,7 @@ Translate text between any supported language pair.
 | `text`     | yes      | Text to translate |
 | `from`     | yes      | Source language code or name (e.g., `en`, `English`) |
 | `to`       | yes      | Target language code or name (e.g., `ja`, `Japanese`) |
-| `model`    | no       | Ollama model (default: `translategemma:12b`) |
+| `model`    | no       | Ollama model (default: `translategemma:27b`) |
 | `glossary` | no       | Custom term overrides as `{"source": "translation"}` -- merged with the built-in software glossary |
 
 Long text is automatically split into chunks at paragraph and sentence boundaries, translated in sequence, and reassembled. All translations are validated for quality (empty output, echo detection, truncation, garbled text).
@@ -25,14 +25,14 @@ The response includes the translated text, language pair info, model used, chunk
 
 ## translate_markdown
 
-Translate an entire markdown document while preserving structure. Code blocks, HTML elements, badges, URLs, and table formatting are kept intact -- only prose content (headings, paragraphs, taglines, table cells) is translated.
+Translate an entire markdown document while preserving structure. Code blocks, HTML elements, badges, URLs, and table formatting are kept intact -- only prose content (headings, paragraphs, taglines, table cells) is translated. Inline code spans are swapped for placeholders before translation and restored after, so commands, flags, package names, and identifiers come back exactly as written.
 
 | Parameter  | Required | Description |
 |------------|----------|-------------|
 | `markdown` | yes      | The full markdown content to translate |
 | `from`     | yes      | Source language code or name |
 | `to`       | yes      | Target language code or name |
-| `model`    | no       | Ollama model (default: `translategemma:12b`) |
+| `model`    | no       | Ollama model (default: `translategemma:27b`) |
 
 The markdown segmenter identifies six segment types: protected (code blocks, HTML, rules), HTML taglines, headings, plain text, block quotes, and tables. Only translatable segments are sent through the pipeline. Table cells are individually classified -- backtick terms, version numbers, links, and short bold labels are left untranslated.
 
@@ -47,11 +47,26 @@ Translate markdown content into multiple languages at once. By default it target
 | `markdown`    | yes      | The full markdown content to translate |
 | `from`        | no       | Source language code (default: `en`) |
 | `languages`   | no       | Array of target language codes (default: all 7) |
-| `model`       | no       | Ollama model (default: `translategemma:12b`) |
+| `model`       | no       | Ollama model (default: `translategemma:27b`) |
 | `concurrency` | no       | Max concurrent translations (default: 2, max: 3) |
 | `navBar`      | no       | Inject language nav bar at the top of each output (default: true) |
 
 Each language result is returned as a separate text block with its filename suffix (e.g., `README.ja.md`). The nav bar links each translation to the others and back to the English README.
+
+## translate_readme
+
+Translate a README.md **file** into the same 7 languages and write the `README.<lang>.md` files next to it, refreshing the language nav bar in the source README and in each translation. Returns a per-language status summary (ok/fail, timings, files written) rather than the translated text; use `translate_markdown` when you want the content back.
+
+| Parameter     | Required | Description |
+|---------------|----------|-------------|
+| `readmePath`  | yes      | Absolute path to the source README.md |
+| `tier`        | no       | `quality` (`translategemma:27b`, default), `bulk` (`12b`), or `draft` (`2b`); ignored when `model` is set |
+| `model`       | no       | Explicit Ollama model; overrides `tier` |
+| `languages`   | no       | Subset of target language codes (default: all 7) |
+| `concurrency` | no       | Max concurrent translations (default: 2, max: 3) |
+| `navBar`      | no       | Inject or refresh the language nav bar (default: true) |
+
+A partial success is not a tool error: languages that succeed are written even when others fail, and only a run in which every language fails is reported as an error.
 
 ## list_languages
 

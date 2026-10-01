@@ -1,0 +1,30 @@
+summary: ""
+boundaries:
+  - name: .claude
+    globs:
+      - .claude/**
+    role: docs
+  - name: .github
+    globs:
+      - .github/**
+    role: config
+  - name: assets
+    globs:
+      - assets/**
+    role: config
+  - name: root
+    globs:
+      - "*"
+    role: docs
+  - name: scripts
+    globs:
+      - scripts/**
+    role: code
+  - name: site
+    globs:
+      - site/**
+    role: code
+  - name: src
+    globs:
+      - src/**
+    role: code
