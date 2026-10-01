@@ -128,183 +128,183 @@
         "path": ".github/dependabot.yml"
       },
       {
-        "commits": 11,
-        "lines": 240,
+        "commits": 14,
+        "lines": 356,
         "path": ".github/workflows/ci.yml"
       },
       {
-        "commits": 5,
-        "lines": 14,
+        "commits": 7,
+        "lines": 94,
         "path": ".github/workflows/pages.yml"
       },
       {
-        "commits": 4,
-        "lines": 39,
+        "commits": 5,
+        "lines": 70,
         "path": ".github/workflows/publish.yml"
       },
       {
-        "commits": 5,
-        "lines": 40,
+        "commits": 6,
+        "lines": 50,
         "path": "CHANGELOG.md"
       },
       {
-        "commits": 1,
-        "lines": 220,
+        "commits": 2,
+        "lines": 440,
         "path": "README.es.md"
       },
       {
-        "commits": 1,
-        "lines": 212,
+        "commits": 2,
+        "lines": 424,
         "path": "README.fr.md"
       },
       {
-        "commits": 1,
-        "lines": 214,
+        "commits": 2,
+        "lines": 428,
         "path": "README.hi.md"
       },
       {
-        "commits": 1,
-        "lines": 204,
+        "commits": 2,
+        "lines": 408,
         "path": "README.it.md"
       },
       {
-        "commits": 1,
-        "lines": 218,
+        "commits": 2,
+        "lines": 436,
         "path": "README.ja.md"
       },
       {
-        "commits": 1,
-        "lines": 90,
+        "commits": 2,
+        "lines": 180,
         "path": "README.md"
       },
       {
-        "commits": 1,
-        "lines": 214,
+        "commits": 2,
+        "lines": 428,
         "path": "README.pt-BR.md"
       },
       {
-        "commits": 1,
-        "lines": 220,
+        "commits": 2,
+        "lines": 440,
         "path": "README.zh.md"
       },
       {
-        "commits": 1,
-        "lines": 15,
+        "commits": 2,
+        "lines": 30,
         "path": "SECURITY.md"
       },
       {
-        "commits": 2,
-        "lines": 150,
+        "commits": 5,
+        "lines": 340,
         "path": "atlas/README.md"
       },
       {
-        "commits": 2,
-        "lines": 60,
+        "commits": 3,
+        "lines": 90,
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 2,
-        "lines": 276,
+        "commits": 5,
+        "lines": 1303,
         "path": "atlas/page.json"
       },
       {
-        "commits": 2,
-        "lines": 1260,
+        "commits": 5,
+        "lines": 2486,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 2,
-        "lines": 3074,
+        "commits": 5,
+        "lines": 11062,
         "path": "atlas/structure.json"
+      },
+      {
+        "commits": 3,
+        "lines": 54,
+        "path": "codecov.yml"
+      },
+      {
+        "commits": 21,
+        "lines": 5804,
+        "path": "package-lock.json"
+      },
+      {
+        "commits": 16,
+        "lines": 45,
+        "path": "package.json"
+      },
+      {
+        "commits": 4,
+        "lines": 19,
+        "path": "scripts/translate-all.mjs"
+      },
+      {
+        "commits": 4,
+        "lines": 10,
+        "path": "scripts/translate-readme.mjs"
+      },
+      {
+        "commits": 2,
+        "lines": 4,
+        "path": "site/astro.config.mjs"
+      },
+      {
+        "commits": 2,
+        "lines": 12102,
+        "path": "site/package-lock.json"
+      },
+      {
+        "commits": 2,
+        "lines": 12,
+        "path": "site/package.json"
+      },
+      {
+        "commits": 2,
+        "lines": 40,
+        "path": "site/src/content/docs/handbook/beginners.md"
       },
       {
         "commits": 2,
         "lines": 36,
-        "path": "codecov.yml"
-      },
-      {
-        "commits": 16,
-        "lines": 5498,
-        "path": "package-lock.json"
-      },
-      {
-        "commits": 15,
-        "lines": 42,
-        "path": "package.json"
-      },
-      {
-        "commits": 3,
-        "lines": 17,
-        "path": "scripts/translate-all.mjs"
-      },
-      {
-        "commits": 3,
-        "lines": 6,
-        "path": "scripts/translate-readme.mjs"
-      },
-      {
-        "commits": 1,
-        "lines": 2,
-        "path": "site/astro.config.mjs"
-      },
-      {
-        "commits": 1,
-        "lines": 6051,
-        "path": "site/package-lock.json"
-      },
-      {
-        "commits": 1,
-        "lines": 6,
-        "path": "site/package.json"
-      },
-      {
-        "commits": 1,
-        "lines": 20,
-        "path": "site/src/content/docs/handbook/beginners.md"
-      },
-      {
-        "commits": 1,
-        "lines": 18,
         "path": "site/src/content/docs/handbook/features.md"
       },
       {
-        "commits": 1,
-        "lines": 24,
+        "commits": 2,
+        "lines": 48,
         "path": "site/src/content/docs/handbook/getting-started.md"
       },
       {
-        "commits": 1,
-        "lines": 4,
+        "commits": 2,
+        "lines": 8,
         "path": "site/src/content/docs/handbook/index.md"
       },
       {
-        "commits": 1,
-        "lines": 47,
+        "commits": 2,
+        "lines": 94,
         "path": "site/src/content/docs/handbook/reference.md"
       },
       {
-        "commits": 1,
-        "lines": 27,
+        "commits": 2,
+        "lines": 54,
         "path": "site/src/content/docs/handbook/tools.md"
       },
       {
-        "commits": 1,
-        "lines": 23,
+        "commits": 2,
+        "lines": 46,
         "path": "site/src/site-config.ts"
       },
       {
-        "commits": 1,
-        "lines": 270,
+        "commits": 2,
+        "lines": 540,
         "path": "src/cache.concurrency.test.ts"
       },
       {
-        "commits": 2,
-        "lines": 302,
+        "commits": 3,
+        "lines": 496,
         "path": "src/cache.test.ts"
       },
       {
-        "commits": 3,
-        "lines": 393,
+        "commits": 4,
+        "lines": 730,
         "path": "src/cache.ts"
       },
       {
@@ -348,8 +348,8 @@
         "path": "src/translate.ts"
       },
       {
-        "commits": 1,
-        "lines": 110,
+        "commits": 2,
+        "lines": 220,
         "path": "src/translateMarkdown.cache.test.ts"
       },
       {
@@ -358,8 +358,8 @@
         "path": "src/translateMarkdown.codespans.test.ts"
       },
       {
-        "commits": 1,
-        "lines": 71,
+        "commits": 2,
+        "lines": 142,
         "path": "src/translateMarkdown.concurrency.test.ts"
       },
       {
@@ -373,8 +373,8 @@
         "path": "src/translateMarkdown.test.ts"
       },
       {
-        "commits": 4,
-        "lines": 144,
+        "commits": 5,
+        "lines": 152,
         "path": "src/translateMarkdown.ts"
       },
       {
@@ -398,17 +398,17 @@
     "level": "low",
     "reason": "fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions"
   },
-  "generatedAt": "2026-09-30T20:11:27.616Z",
+  "generatedAt": "2026-10-01T02:13:34.298Z",
   "generatedFrom": {
-    "commit": "c3305f2f8dbf38151adbf61c4437be0bf0ab5235"
+    "commit": "e0fd93e1984754317e96214bd4f4723c28406d4f"
   },
   "pairs": [
     {
       "a": "package-lock.json",
       "b": "package.json",
-      "either": 11,
+      "either": 13,
       "shared": 9,
-      "strength": 0.818182
+      "strength": 0.692308
     }
   ],
   "parameters": {
@@ -421,16 +421,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "both",
-    "headDate": "2026-09-29T16:48:04-07:00",
+    "headDate": "2026-09-30T18:08:40-07:00",
     "inScopeFiles": 138,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 24,
+    "qualifyingCommits": 28,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-04-02T23:48:04.000Z",
+    "since": "2026-04-04T01:08:40.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

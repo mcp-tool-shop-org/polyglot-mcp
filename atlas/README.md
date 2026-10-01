@@ -1,27 +1,21 @@
 # polyglot-mcp: how it works
 
-Mapped at 2026-09-30 from commit c3305f2 by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit e0fd93e by Atlas 1.24.0.
 
 ## What this is
 
-7 parts, mostly Markdown (71 files); code in TypeScript (39), JavaScript (4), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because a pull request goes through it. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.
+7 parts, mostly Markdown (71 files); code in TypeScript (39), JavaScript (4), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.
 
-## What changed since 2026-09-23 (a91c112)
+## What changed since 2026-09-30 (c3305f2)
 
-- CI's pull request trigger now also names `codecov.yml`.
-- CI's push trigger now also names `codecov.yml`.
-- CI now also runs src/cache.concurrency.test.ts, src/cache.test.ts, src/codeSpans.test.ts and 18 more.
-- And 4 more changes to doors.
-- CHANGELOG.md is now read by src/version.test.ts.
-- README.ja.md is now also read by src/translateAll.test.ts and src/translateReadme.test.ts.
-- README.md is now also read by src/translateReadme.test.ts.
-- And 6 more new writers and readers of places.
-- 4 files added and 127 changed content, across 6 parts.
+- CI's pull request trigger no longer names `.github/workflows/**`, `atlas/**`, `codecov.yml`, `package-lock.json`, `package.json`, `site/astro.config.mjs`, `site/package-lock.json`, `site/package.json`, `src/**` and `tsconfig.json`.
+- Deploy site to GitHub Pages now also starts on a pull request to main touching 2 paths.
+- 3 files changed content, across 2 parts.
 
 ## What comes in
 
-1. **CI.** On a pull request to main touching 10 paths; on a push to main touching 10 paths; or by hand. Runs src/cache.concurrency.test.ts, src/cache.test.ts, src/codeSpans.test.ts and 18 more; builds src/.
-2. **Deploy site to GitHub Pages.** On a push to main touching 2 paths; or by hand. Runs site/astro.config.mjs and site/src/.
+1. **CI.** On a pull request to main; on a push to main touching 10 paths; or by hand. Runs src/cache.concurrency.test.ts, src/cache.test.ts, src/codeSpans.test.ts and 18 more; builds src/.
+2. **Deploy site to GitHub Pages.** On a pull request to main touching 2 paths; on a push to main touching 2 paths; or by hand. Runs site/astro.config.mjs and site/src/.
 3. **Publish to npm.** When a release is published; or by hand. Runs src/cache.concurrency.test.ts, src/cache.test.ts, src/codeSpans.test.ts and 18 more; builds src/.
 4. **@mcptoolshop/polyglot-mcp** (the package people import). Loads src/index.ts, src/cache.ts, src/codeSpans.ts and 9 more.
 5. **polyglot-mcp** (a command people run). Runs src/index.ts.
@@ -37,7 +31,7 @@ CI writes nothing this map can see.
 
 ## The other doors
 
-**Deploy site to GitHub Pages** runs site/astro.config.mjs and site/src/, and deploys the site.
+**Deploy site to GitHub Pages** runs site/astro.config.mjs and site/src/, and deploys the site on a push to main or by hand.
 
 **Publish to npm** runs src/cache.concurrency.test.ts, src/cache.test.ts, src/codeSpans.test.ts and 18 more, builds src/, and publishes to npm.
 
