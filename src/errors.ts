@@ -16,7 +16,9 @@ export type ErrorCode =
   | "SAME_LANGUAGE"
   | "NETWORK_ERROR"
   | "OLLAMA_ERROR"
-  | "TRANSLATE_ERROR";
+  | "TRANSLATE_ERROR"
+  | "CONFIG_ERROR"
+  | "LOST_SPAN";
 
 export class PolyglotError extends Error {
   readonly code: ErrorCode;

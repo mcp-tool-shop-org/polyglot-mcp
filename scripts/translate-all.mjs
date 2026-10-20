@@ -11,12 +11,19 @@
  * --cache-clear     Clear the cached translations of each language before translating it
  * --concurrency=N   Run N languages in parallel (default 2, max 3)
  * --no-nav-bar      Skip language nav bar injection
+ * --on-lost-span=fail|report
+ *                   When a protected span (inline code, a protected term, an
+ *                   "N of M" count) is missing from a translation: fail
+ *                   (default — this runs before releases) writes the files,
+ *                   lists language, segment and missing span, and exits 1;
+ *                   report writes the files and the list and exits 0
  */
 
 import { spawn } from "node:child_process";
 import { existsSync, renameSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LostSpanError, formatLostSpans, parseLostSpanPolicy } from "../dist/survival.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -27,9 +34,20 @@ const flags = process.argv.slice(2).filter((a) => a.startsWith("--"));
 const [readmePath] = args;
 
 if (!readmePath) {
-  console.error("Usage: node scripts/translate-all.mjs <readme-path> [--fast] [--no-cache] [--cache-clear] [--concurrency=N] [--no-nav-bar]");
+  console.error("Usage: node scripts/translate-all.mjs <readme-path> [--fast] [--no-cache] [--cache-clear] [--concurrency=N] [--no-nav-bar] [--on-lost-span=fail|report]");
   process.exit(1);
 }
+
+let onLostSpan;
+try {
+  onLostSpan = parseLostSpanPolicy(flags.find((f) => f.startsWith("--on-lost-span="))?.split("=")[1], "fail");
+} catch (err) {
+  console.error(err.toUserString?.() ?? String(err));
+  process.exit(1);
+}
+
+/** translate-readme.mjs exits with this when it wrote a file that lost protected spans. */
+const EXIT_LOST_SPAN = 2;
 
 const absReadmePath = resolve(readmePath);
 if (!existsSync(absReadmePath)) {
@@ -58,7 +76,13 @@ const totalStart = Date.now();
 let failed = 0;
 let completed = 0;
 
-const passFlags = flags.filter((f) => !f.startsWith("--concurrency") && f !== "--no-nav-bar");
+const passFlags = [
+  ...flags.filter((f) => !f.startsWith("--concurrency") && f !== "--no-nav-bar" && !f.startsWith("--on-lost-span")),
+  `--on-lost-span=${onLostSpan}`,
+];
+
+/** Every language's lost spans, from the children's POLYGLOT_LOST_SPANS lines. */
+const lostSpans = [];
 
 console.log(`Translating ${basename(absReadmePath)} → ${LANGUAGES.length} languages (concurrency=${concurrency})\n`);
 
@@ -99,6 +123,11 @@ async function translateLang(lang) {
     let killed = false;
     const timer = setTimeout(() => { killed = true; child.kill(); }, 900_000);
 
+    // Read the child's stdout: it carries the lost-span list, and an unread
+    // pipe can fill and stall the child.
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
       // Parse segment progress lines: "  PROGRESS:12/40"
@@ -113,11 +142,22 @@ async function translateLang(lang) {
       const elapsed = ((Date.now() - langStart) / 1000).toFixed(1);
       delete segProgress[lang.code];
 
-      if (code === 0 && !killed) {
+      const lost = stdout
+        .split("\n")
+        .filter((line) => line.startsWith("POLYGLOT_LOST_SPANS "))
+        .flatMap((line) => JSON.parse(line.slice("POLYGLOT_LOST_SPANS ".length)));
+      lostSpans.push(...lost);
+
+      if ((code === 0 || code === EXIT_LOST_SPAN) && !killed) {
+        // Exit 2: the file was written but lost protected spans (--on-lost-span=fail).
         const result = finishLang(lang, langStart);
+        if (code === EXIT_LOST_SPAN) result.status = "lost-span";
+        if (lost.length > 0) result.lostSpans = lost.length;
         completed++;
         renderProgress();
-        process.stderr.write(`\n  ✓ ${lang.name} — ${result.time}s\n`);
+        const mark = code === 0 ? "✓" : "✗";
+        const note = lost.length > 0 ? ` — ${lost.length} protected span(s) lost` : "";
+        process.stderr.write(`\n  ${mark} ${lang.name} — ${result.time}s${note}\n`);
         resolve_(result);
       } else {
         completed++;
@@ -155,13 +195,18 @@ for (let i = 0; i < LANGUAGES.length; i += concurrency) {
   }
 }
 
+/** A language whose README was written: translated cleanly, or with lost spans to fix. */
+function wroteFile(r) {
+  return r.status === "ok" || r.status === "lost-span";
+}
+
 // --- Inject language nav bar into all READMEs ---
 if (!noNavBar) {
-  const succeeded = results.filter((r) => r.status === "ok");
+  const succeeded = results.filter(wroteFile);
   if (succeeded.length > 0) {
     // Build nav bar HTML
     const links = LANGUAGES
-      .filter((lang) => results.some((r) => r.lang === lang.code && r.status === "ok"))
+      .filter((lang) => results.some((r) => r.lang === lang.code && wroteFile(r)))
       .map((lang) => {
         const file = `README.${lang.file ?? lang.code}.md`;
         return `<a href="${file}">${lang.label}</a>`;
@@ -225,7 +270,7 @@ if (!noNavBar) {
       } else {
         const thisFile = basename(filePath);
         const thisLinks = LANGUAGES
-          .filter((lang) => results.some((r) => r.lang === lang.code && r.status === "ok"))
+          .filter((lang) => results.some((r) => r.lang === lang.code && wroteFile(r)))
           .map((lang) => {
             const file = `README.${lang.file ?? lang.code}.md`;
             if (file === thisFile) return `<a href="README.md">English</a>`;
@@ -263,6 +308,9 @@ console.log("");
 console.log("=".repeat(60));
 console.log("POLYGLOT_COMPLETE");
 console.log("=".repeat(60));
+// Under --on-lost-span=fail any lost span fails the run, in the repo's
+// structured error shape (code, message, hint, retryable).
+const lostSpanFailure = onLostSpan === "fail" && lostSpans.length > 0 ? new LostSpanError(lostSpans) : undefined;
 console.log(JSON.stringify({
   polyglot: "complete",
   readme: absReadmePath,
@@ -270,8 +318,17 @@ console.log(JSON.stringify({
   succeeded: results.length - failed,
   failed,
   totalTime: `${totalElapsed}s`,
+  onLostSpan,
+  lostSpans,
+  ...(lostSpanFailure ? { error: lostSpanFailure.toMcpResult() } : {}),
   results,
 }, null, 2));
 console.log("=".repeat(60));
 
-process.exit(failed > 0 ? 1 : 0);
+if (lostSpans.length > 0) {
+  console.error(`\n${lostSpanFailure ? "✗" : "⚠"} ${lostSpans.length} protected span(s) lost (--on-lost-span=${onLostSpan}):`);
+  for (const line of formatLostSpans(lostSpans)) console.error(`  - ${line}`);
+  if (lostSpanFailure) console.error(`\n${lostSpanFailure.hint}`);
+}
+
+process.exit(failed > 0 || lostSpanFailure ? 1 : 0);

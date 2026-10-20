@@ -138,4 +138,36 @@ describe("translateReadme", () => {
     const result = await translateReadme("/repo/README.md", { navBar: false });
     expect(result.model).toMatch(/^translategemma:/);
   });
+
+  it("passes the terms and pins beside the README, reports by default, and collects lost spans", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "polyglot-readme-"));
+    try {
+      writeFileSync(join(dir, ".polyglot-terms.json"), JSON.stringify({ terms: ["Gemma"] }));
+      writeFileSync(
+        join(dir, ".polyglot-pins.json"),
+        JSON.stringify({ version: 1, pins: { "abc:hi": { lang: "hi", source: "x", translation: "y", pinnedAt: "" } } }),
+      );
+      const lost = { lang: "hi", segment: "Built by Kimi-K3.", span: "Kimi-K3", kind: "term" as const };
+      vi.mocked(translateAll).mockResolvedValue({
+        results: [{ ...okLang("hi", "hi", "# X", "Hindi"), lostSpans: [lost] }],
+        succeeded: 1,
+        failed: 0,
+        durationMs: 100,
+      });
+
+      const result = await translateReadme(join(dir, "README.md"), { navBar: false });
+
+      const opts = vi.mocked(translateAll).mock.calls[0][1]!;
+      expect(opts.onLostSpan).toBe("report");
+      expect(opts.pins?.pins["abc:hi"].translation).toBe("y");
+      expect(opts.terms?.rules.some((r) => r.id === "term:Gemma")).toBe(true);
+      expect(result.lostSpans).toEqual([lost]);
+      expect(result.results[0].lostSpans).toEqual([lost]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

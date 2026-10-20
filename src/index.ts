@@ -18,11 +18,28 @@ import { LANGUAGES } from "./languages.js";
 import { OllamaClient } from "./ollama.js";
 import { VERSION } from "./version.js";
 import { friendlyError } from "./errors.js";
+import { formatLostSpans, type LostSpan } from "./survival.js";
 
 const server = new McpServer({
   name: "polyglot-mcp",
   version: VERSION,
 });
+
+/** The survival check's policy, as a tool parameter. The MCP path defaults to "report". */
+const onLostSpanParam = z
+  .enum(["report", "fail"])
+  .optional()
+  .describe(
+    'What to do when a protected span (inline code, a protected term such as XLS-30 or Kimi-K3, or an "N of M" count) is missing from a translation: "report" (default) lists it with the result, "fail" makes it an error.'
+  );
+
+/** A text block listing lost spans: language, segment, missing span. */
+function lostSpanBlock(lost: LostSpan[]): { type: "text"; text: string } {
+  return {
+    type: "text" as const,
+    text: `\n⚠ ${lost.length} protected span(s) lost in translation:\n${formatLostSpans(lost).map((l) => `  - ${l}`).join("\n")}`,
+  };
+}
 
 // ─── Helper: send MCP progress notifications ─────────────────────
 
@@ -159,8 +176,9 @@ server.tool(
       .string()
       .optional()
       .describe('Ollama model (default: "translategemma:27b")'),
+    onLostSpan: onLostSpanParam,
   },
-  async ({ markdown, from, to, model }, extra) => {
+  async ({ markdown, from, to, model, onLostSpan }, extra) => {
     try {
       const { report } = makeProgress(extra as Extra);
       report(0, 1, "Segmenting markdown…");
@@ -168,6 +186,7 @@ server.tool(
       const result = await translateMarkdown(markdown, from, to, {
         model,
         cache: false,
+        onLostSpan: onLostSpan ?? "report",
         onProgress: (completed, total) => {
           report(completed, total, `Translated ${completed}/${total} segments`);
         },
@@ -189,6 +208,7 @@ server.tool(
           text: `\n⚠ Warnings:\n${result.warnings.map(w => `  - ${w}`).join("\n")}`,
         });
       }
+      if ((result.lostSpans ?? []).length > 0) content.push(lostSpanBlock(result.lostSpans));
       return { content };
     } catch (err) {
       return {
@@ -231,8 +251,9 @@ server.tool(
       .boolean()
       .optional()
       .describe("Inject a language nav bar at the top of each output (default: true)"),
+    onLostSpan: onLostSpanParam,
   },
-  async ({ markdown, from, languages, model, concurrency, navBar }, extra) => {
+  async ({ markdown, from, languages, model, concurrency, navBar, onLostSpan }, extra) => {
     try {
       const { report } = makeProgress(extra as Extra);
       const targetLangs = languages ?? TRANSLATE_ALL_LANGUAGES.map((l) => l.code);
@@ -244,6 +265,7 @@ server.tool(
         model,
         concurrency,
         navBar,
+        onLostSpan: onLostSpan ?? "report",
         onProgress: (completed, total, lang) => {
           report(completed, total, `Completed ${lang} (${completed}/${total})`);
         },
@@ -271,6 +293,9 @@ server.tool(
         type: "text" as const,
         text: `\n---\n${result.succeeded} succeeded | ${result.failed} failed | ${secs}s total`,
       });
+
+      const lost = result.results.flatMap((r) => r.lostSpans ?? []);
+      if (lost.length > 0) content.push(lostSpanBlock(lost));
 
       return { content };
     } catch (err) {
@@ -329,8 +354,9 @@ server.tool(
       .describe(
         "Inject/refresh the language nav bar in the source + translated READMEs (default: true)."
       ),
+    onLostSpan: onLostSpanParam,
   },
-  async ({ readmePath, tier, model, languages, concurrency, navBar }, extra) => {
+  async ({ readmePath, tier, model, languages, concurrency, navBar, onLostSpan }, extra) => {
     try {
       const { report } = makeProgress(extra as Extra);
       const resolvedModel = model ?? TIER_MODELS[tier ?? "quality"];
@@ -342,6 +368,7 @@ server.tool(
         targetLangs: languages,
         concurrency,
         navBar,
+        onLostSpan: onLostSpan ?? "report",
         onProgress: (completed, t, lang) =>
           report(completed, t, `Translated ${lang} (${completed}/${t})`),
       });
@@ -364,6 +391,7 @@ server.tool(
         "",
         `${result.succeeded} succeeded · ${result.failed} failed · ${secs}s total`
       );
+      if ((result.lostSpans ?? []).length > 0) lines.push(lostSpanBlock(result.lostSpans).text);
 
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],

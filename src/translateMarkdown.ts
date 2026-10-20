@@ -14,6 +14,16 @@ import { translateBatch, type TranslateBatchOptions, type BatchItem } from "./tr
 import { resolveLanguage, type Language } from "./languages.js";
 import { validateTranslation } from "./validate.js";
 import { maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
+import { DEFAULT_PROTECTED_TERMS, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
+import { createPins, getPin, loadPins, type PinFile } from "./pins.js";
+import {
+  checkCodeStructure,
+  checkSegment,
+  enforceLostSpanPolicy,
+  expectedSpans,
+  type LostSpan,
+  type LostSpanPolicy,
+} from "./survival.js";
 import {
   loadCache,
   saveCache,
@@ -67,6 +77,23 @@ export interface TranslateMarkdownOptions extends TranslateBatchOptions {
   filePath?: string;
   /** Progress callback — called with (completed, total) after each segment batch. */
   onProgress?: (completed: number, total: number) => void;
+  /**
+   * Protected terms masked in prose, like inline code spans. Default: the
+   * `.polyglot-terms.json` beside `filePath` if there is one, else the
+   * default patterns.
+   */
+  terms?: ProtectedTermSet;
+  /**
+   * Pinned translations, which win over the cache and the model. Default: the
+   * `.polyglot-pins.json` beside `filePath`, else none.
+   */
+  pins?: PinFile;
+  /**
+   * What to do when the survival check finds a protected span missing from
+   * the translation: "report" lists it in `lostSpans` (default), "fail" throws
+   * a LostSpanError carrying the list and this result.
+   */
+  onLostSpan?: LostSpanPolicy;
 }
 
 export interface TranslateMarkdownResult {
@@ -77,9 +104,13 @@ export interface TranslateMarkdownResult {
   deduplicated: number;
   /** Segments reused from a cached source that differs only in whitespace layout. */
   fuzzyMatched: number;
+  /** Segments taken from `.polyglot-pins.json`. */
+  pinned: number;
   ollamaCalls: number;
   durationMs: number;
   warnings: string[];
+  /** Protected spans in the source that the translation does not carry. */
+  lostSpans: LostSpan[];
 }
 
 // ─── Segmentation ─────────────────────────────────────────────────
@@ -281,6 +312,140 @@ export function reassembleTable(parsed: ParsedRow[], translatedMap: Map<string, 
   return rows.join("\n");
 }
 
+// ─── Translatable units ───────────────────────────────────────────
+
+/** One piece of prose that goes through translation on its own. */
+export interface TranslatableUnit {
+  segIndex: number;
+  kind: "heading" | "text" | "cell";
+  /** The source text: heading text without its `#`s, a tagline's inner text, a trimmed cell. */
+  text: string;
+  /** `row:cell` within the table, for cells. */
+  tableKey?: string;
+}
+
+/**
+ * The translatable units of a segmented document, in order: headings,
+ * paragraphs and block quotes, taglines' inner text, and translatable table
+ * cells. Records each table's parse on its segment for reassembly.
+ */
+export function collectUnits(segments: Segment[]): TranslatableUnit[] {
+  const units: TranslatableUnit[] = [];
+  for (let s = 0; s < segments.length; s++) {
+    const seg = segments[s];
+    if (seg.type === "html-tagline") {
+      const innerText = extractTaglineText(seg.text);
+      if (innerText) units.push({ segIndex: s, kind: "text", text: innerText });
+    } else if (seg.type === "heading") {
+      units.push({ segIndex: s, kind: "heading", text: seg.text });
+    } else if (seg.type === "text") {
+      if (/^`[^`]+`$/.test(seg.text.trim())) continue; // skip bare backtick terms
+      units.push({ segIndex: s, kind: "text", text: seg.text });
+    } else if (seg.type === "table") {
+      const { parsed, translatableCells } = parseTable(seg.text);
+      seg._parsed = parsed;
+      for (const cell of translatableCells) {
+        units.push({ segIndex: s, kind: "cell", text: cell.text, tableKey: `${cell.rowIdx}:${cell.cellIdx}` });
+      }
+    }
+  }
+  return units;
+}
+
+/** A source unit and the text that stands in its place in a translation. */
+export interface AlignedUnit {
+  unit: TranslatableUnit;
+  target: string;
+}
+
+/**
+ * Pair each translatable unit of `source` with its counterpart in
+ * `translation`, by position. Translation keeps the document's structure, so
+ * the n-th heading, paragraph, tagline or table of one is the n-th of the
+ * other, and a table cell sits at the same row and column. Returns null when
+ * the structures differ and no such pairing can be trusted.
+ */
+export function alignUnits(source: string, translation: string): AlignedUnit[] | null {
+  const sourceSegs = segmentMarkdown(source);
+  const targetSegs = segmentMarkdown(translation);
+  const sourceIdx = sourceSegs.flatMap((seg, i) => (seg.type === "protected" ? [] : [i]));
+  const targetIdx = targetSegs.flatMap((seg, i) => (seg.type === "protected" ? [] : [i]));
+  if (sourceIdx.length !== targetIdx.length) return null;
+
+  const counterpart = new Map<number, Segment>();
+  for (let i = 0; i < sourceIdx.length; i++) {
+    const target = targetSegs[targetIdx[i]];
+    if (sourceSegs[sourceIdx[i]].type !== target.type) return null;
+    counterpart.set(sourceIdx[i], target);
+  }
+
+  const targetTables = new Map<Segment, ParsedRow[]>();
+  const aligned: AlignedUnit[] = [];
+  for (const unit of collectUnits(sourceSegs)) {
+    const target = counterpart.get(unit.segIndex)!;
+    if (unit.kind === "cell") {
+      let parsed = targetTables.get(target);
+      if (!parsed) {
+        parsed = parseTable(target.text).parsed;
+        targetTables.set(target, parsed);
+      }
+      const [r, c] = unit.tableKey!.split(":").map(Number);
+      const cell = parsed[r]?.type === "data" ? parsed[r].cells?.[c] : undefined;
+      if (!cell) return null;
+      aligned.push({ unit, target: cell.original.trim() });
+    } else if (target.type === "html-tagline") {
+      const inner = extractTaglineText(target.text);
+      if (inner === null) return null;
+      aligned.push({ unit, target: inner });
+    } else {
+      aligned.push({ unit, target: target.text });
+    }
+  }
+  return aligned;
+}
+
+/**
+ * The survival check for one translated file: every protected span in the
+ * English (inline code spans, protected terms, and "N of M" counts as `N/M`)
+ * must be present, character for character, in the translation of its
+ * segment; each table cell must carry the same numbers as its source cell; and
+ * the file must keep its fenced blocks and inline code spans.
+ *
+ * When the translation's structure no longer lines up with the source's, the
+ * spans are checked against the whole file instead.
+ */
+export function checkSurvival(
+  source: string,
+  translation: string,
+  options: { lang: string; terms?: ProtectedTermSet },
+): LostSpan[] {
+  const terms = options.terms ?? DEFAULT_PROTECTED_TERMS;
+  const { lang } = options;
+  const lost: LostSpan[] = [];
+
+  const aligned = alignUnits(source, translation);
+  if (aligned) {
+    for (const { unit, target } of aligned) {
+      lost.push(...checkSegment(unit.text, target, lang, { terms, isCell: unit.kind === "cell" }));
+    }
+  } else {
+    const total = new Map<string, { kind: LostSpan["kind"]; count: number }>();
+    for (const unit of collectUnits(segmentMarkdown(source))) {
+      for (const [span, { kind, count }] of expectedSpans(unit.text, terms)) {
+        const entry = total.get(span);
+        if (entry) entry.count += count;
+        else total.set(span, { kind, count });
+      }
+    }
+    for (const [span, { kind, count }] of total) {
+      if (translation.split(span).length - 1 < count) lost.push({ lang, segment: "(whole file)", span, kind });
+    }
+  }
+
+  lost.push(...checkCodeStructure(source, translation, lang));
+  return lost;
+}
+
 // ─── Translation cleaning ─────────────────────────────────────────
 
 /**
@@ -343,6 +508,13 @@ export async function translateMarkdown(
   const warnings: string[] = [];
   const useCache = options.cache !== false;
   const model = options.model ?? undefined; // let translateBatch pick default
+  const onLostSpan = options.onLostSpan ?? "report";
+
+  // Protected terms and pins live beside the source file, when there is one.
+  // Both load before the cache is touched, so a broken file fails the run
+  // before a --cache-clear has thrown anything away.
+  const terms = options.terms ?? (options.filePath ? loadProtectedTerms(options.filePath) : DEFAULT_PROTECTED_TERMS);
+  const pins = options.pins ?? (options.filePath ? loadPins(options.filePath) : createPins());
 
   // Set up cache
   let cache: TranslationCache;
@@ -370,37 +542,57 @@ export async function translateMarkdown(
     kind: "heading" | "text" | "cell";
     /** Masked text — what the model sees, and what the cache is keyed on. */
     text: string;
-    /** Source text with its inline code spans still inline. */
+    /** Source text with its inline code spans and protected terms still inline. */
     original: string;
-    /** Code spans lifted out of `original`, indexed by placeholder number. */
+    /** What each placeholder in `text` restores to, indexed by placeholder number. */
     spans: string[];
+    /** Cache key: masked text, language, model and the protected-term rules that fired. */
+    key: string;
     cacheHit?: string;
     /** Set when this entry was matched via fuzzy cache (translation memory). */
     fuzzyHit?: boolean;
+    /** Final text that needs neither cache nor model: a pin, or nothing left to translate. */
+    resolved?: string;
+    /** Set when `resolved` came from `.polyglot-pins.json`. */
+    pinned?: boolean;
     tableKey?: string;
   }
 
   const batchItems: BatchEntry[] = [];
 
   /**
-   * Mask a translatable string's inline code spans, look it up in the cache by
-   * its MASKED form, and queue it.
+   * Mask a translatable string's inline code spans and protected terms, look
+   * it up in the cache by its MASKED form, and queue it.
    *
    * Keying the cache on the masked text is deliberate and does two jobs at
    * once. It invalidates entries written before this protection existed (their
    * keys carried the raw spans), so a stale cache cannot replay a transliterated
    * identifier. And it widens dedup: two sentences differing only in which
    * identifier they name collapse to one translation, then each entry restores
-   * its own spans.
+   * its own spans. The hash of the protected-term rules that fired is folded
+   * into the key as well, so adding a term retires every cached translation of
+   * a segment that contains it.
+   *
+   * A pinned segment skips all of that: the pin is the translation.
    */
-  const enqueue = (
-    segIndex: number,
-    kind: "heading" | "text" | "cell",
-    raw: string,
-    tableKey?: string,
-  ) => {
-    const { text: masked, spans } = maskCodeSpans(raw);
-    const key = cacheKey(masked, targetLang, modelStr);
+  const enqueue = ({ segIndex, kind, text: raw, tableKey }: TranslatableUnit) => {
+    const where = tableKey !== undefined ? { tableKey } : {};
+    const pin = getPin(pins, raw, targetLang);
+    if (pin !== undefined) {
+      batchItems.push({ segIndex, kind, text: raw, original: raw, spans: [], key: "", resolved: pin, pinned: true, ...where });
+      return;
+    }
+
+    const { text: masked, spans, termsHash } = maskCodeSpans(raw, terms);
+    const key = cacheKey(masked, targetLang, modelStr, termsHash);
+
+    // Nothing but placeholders, digits and punctuation left (a cell that reads
+    // "218 of 224"): there is nothing to translate, so the model never sees it.
+    if (!/\p{L}/u.test(masked)) {
+      batchItems.push({ segIndex, kind, text: masked, original: raw, spans, key, resolved: restoreCodeSpans(masked, spans).text, ...where });
+      return;
+    }
+
     const cached = useCache ? getCached(cache, key) : undefined;
     const fuzzy = (!cached && useCache)
       ? getFuzzyCached(cache, masked, targetLang, modelStr)
@@ -411,47 +603,20 @@ export async function translateMarkdown(
       text: masked,
       original: raw,
       spans,
-      ...(tableKey !== undefined ? { tableKey } : {}),
+      key,
+      ...where,
       ...(cached ? { cacheHit: cached } : fuzzy ? { cacheHit: fuzzy.translation, fuzzyHit: true } : {}),
     });
   };
 
-  for (let s = 0; s < segments.length; s++) {
-    const seg = segments[s];
-
-    if (seg.type === "protected") continue;
-
-    if (seg.type === "html-tagline") {
-      const innerText = extractTaglineText(seg.text);
-      if (innerText) enqueue(s, "text", innerText);
-      continue;
-    }
-
-    if (seg.type === "heading") {
-      enqueue(s, "heading", seg.text);
-      continue;
-    }
-
-    if (seg.type === "text") {
-      if (/^`[^`]+`$/.test(seg.text.trim())) continue; // skip bare backtick terms
-      enqueue(s, "text", seg.text);
-      continue;
-    }
-
-    if (seg.type === "table") {
-      const { parsed, translatableCells } = parseTable(seg.text);
-      seg._parsed = parsed;
-      for (const cell of translatableCells) {
-        enqueue(s, "cell", cell.text, `${cell.rowIdx}:${cell.cellIdx}`);
-      }
-      continue;
-    }
-  }
+  for (const unit of collectUnits(segments)) enqueue(unit);
 
   // Split into hits and misses, dedup misses
-  const misses = batchItems.filter((b) => !b.cacheHit);
+  const misses = batchItems.filter((b) => b.resolved === undefined && !b.cacheHit);
   const cacheHits = batchItems.filter((b) => b.cacheHit && !b.fuzzyHit).length;
   const fuzzyHits = batchItems.filter((b) => b.fuzzyHit).length;
+  const resolvedItems = batchItems.filter((b) => b.resolved !== undefined).length;
+  const pinnedItems = batchItems.filter((b) => b.pinned).length;
 
   const uniqueTexts = new Map<string, number>();
   const uniqueItems: BatchItem[] = [];
@@ -470,9 +635,9 @@ export async function translateMarkdown(
 
   const deduplicated = misses.length - uniqueItems.length;
 
-  // Report progress for cache hits (exact + fuzzy)
+  // Report progress for cache hits (exact + fuzzy) and resolved items
   const totalItems = batchItems.length;
-  let completedItems = cacheHits + fuzzyHits;
+  let completedItems = cacheHits + fuzzyHits + resolvedItems;
   if (options.onProgress && completedItems > 0) {
     options.onProgress(completedItems, totalItems);
   }
@@ -494,12 +659,12 @@ export async function translateMarkdown(
     uniqueTranslations = result.translations;
     ollamaCalls = result.ollamaCalls;
 
-    // Cache the results
+    // Cache the results, under each miss's own key: two misses can share a
+    // masked text but differ in which protected-term rules fired.
     if (useCache) {
-      for (let i = 0; i < uniqueItems.length; i++) {
-        const key = cacheKey(uniqueItems[i].text, targetLang, modelStr);
-        setCached(cache, key, uniqueTranslations[i], modelStr, uniqueItems[i].text, targetLang);
-      }
+      misses.forEach((m, i) => {
+        setCached(cache, m.key, uniqueTranslations[missToUnique[i]], modelStr, m.text, targetLang);
+      });
     }
 
     // Report progress for translated items
@@ -515,42 +680,50 @@ export async function translateMarkdown(
 
   let missIdx = 0;
   for (const item of batchItems) {
-    let translated: string;
-    if (item.cacheHit) {
-      translated = item.cacheHit;
+    let cleaned: string;
+    if (item.resolved !== undefined) {
+      cleaned = item.resolved;
     } else {
-      translated = uniqueTranslations[missToUnique[missIdx++]];
-    }
-
-    // Validate
-    try {
-      const validation = validateTranslation(item.text, translated, sourceLang, targetLang);
-      if (!validation.valid) {
-        for (const w of validation.warnings) {
-          warnings.push(`[segment "${item.original.slice(0, 40)}…"]: ${w}`);
-        }
-      }
-    } catch {
-      // validateTranslation threw — empty output. Use source as fallback.
-      warnings.push(`[segment "${item.original.slice(0, 40)}…"]: Empty translation, using source text as fallback.`);
-      translated = item.text;
-    }
-
-    let cleaned = cleanTranslation(translated, item.kind === "heading");
-
-    // Put the inline code spans back. If the placeholders did not survive the
-    // round trip the translation has silently lost or doubled an identifier, so
-    // fall back to the source text: untranslated prose is a visible, reportable
-    // cost, whereas a mangled `npm install` line reads as correct and is not.
-    if (item.spans.length > 0) {
-      const restored = restoreCodeSpans(cleaned, item.spans);
-      if (restored.intact) {
-        cleaned = restored.text;
+      let translated: string;
+      if (item.cacheHit) {
+        translated = item.cacheHit;
       } else {
-        warnings.push(
-          `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
-        );
-        cleaned = item.original;
+        translated = uniqueTranslations[missToUnique[missIdx++]];
+      }
+
+      // Validate
+      try {
+        const validation = validateTranslation(item.text, translated, sourceLang, targetLang);
+        if (!validation.valid) {
+          for (const w of validation.warnings) {
+            warnings.push(`[segment "${item.original.slice(0, 40)}…"]: ${w}`);
+          }
+        }
+      } catch {
+        // validateTranslation threw — empty output. Use source as fallback.
+        warnings.push(`[segment "${item.original.slice(0, 40)}…"]: Empty translation, using source text as fallback.`);
+        translated = item.text;
+      }
+
+      cleaned = cleanTranslation(translated, item.kind === "heading");
+
+      // Put the inline code spans and protected terms back. If the
+      // placeholders did not survive the round trip the translation has
+      // silently lost or doubled an identifier, so fall back to the source
+      // text: untranslated prose is a visible, reportable cost, whereas a
+      // mangled `npm install` line reads as correct and is not. The fallback
+      // is the masked source restored, which is the source with its counts
+      // written as N/M.
+      if (item.spans.length > 0) {
+        const restored = restoreCodeSpans(cleaned, item.spans);
+        if (restored.intact) {
+          cleaned = restored.text;
+        } else {
+          warnings.push(
+            `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
+          );
+          cleaned = restoreCodeSpans(item.text, item.spans).text;
+        }
       }
     }
 
@@ -609,17 +782,29 @@ export async function translateMarkdown(
     saveCache(options.filePath, cache);
   }
 
-  return {
-    markdown: output.join("\n"),
+  const translatedMarkdown = output.join("\n");
+
+  // The survival check reads the finished file, so it covers every road a
+  // segment took to get there: the model, the cache, a pin, or a fallback.
+  const lostSpans = checkSurvival(markdown, translatedMarkdown, { lang: targetLang, terms });
+
+  const result: TranslateMarkdownResult = {
+    markdown: translatedMarkdown,
     segments: batchItems.length,
     cached: cacheHits,
     translated: uniqueItems.length,
     deduplicated,
     fuzzyMatched: fuzzyHits,
+    pinned: pinnedItems,
     ollamaCalls,
     durationMs: Date.now() - start,
     warnings,
+    lostSpans,
   };
+
+  // After the cache is saved: a failed check must not cost the translations.
+  enforceLostSpanPolicy(lostSpans, onLostSpan, result);
+  return result;
 }
 
 // ─── HTML tagline helpers (fix for item #1) ───────────────────────

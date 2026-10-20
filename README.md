@@ -89,14 +89,15 @@ Long text is automatically split into chunks at paragraph and sentence boundarie
 
 ### `translate_markdown`
 
-Translate an entire markdown document while preserving structure. Code blocks, HTML elements, badges, URLs, and table formatting are kept intact — only prose content (headings, paragraphs, taglines, table cells) is translated. Inline code spans are swapped for placeholders before translation and restored after, so commands, flags, package names, and identifiers come back exactly as written.
+Translate an entire markdown document while preserving structure. Code blocks, HTML elements, badges, URLs, and table formatting are kept intact — only prose content (headings, paragraphs, taglines, table cells) is translated. Inline code spans and [protected terms](#protected-terms-polyglot-termsjson) are swapped for placeholders before translation and restored after, so commands, flags, package names, and identifiers come back exactly as written, and every "N of M" count comes back as `N/M`.
 
-| Parameter   | Required | Description |
-|-------------|----------|-------------|
-| `markdown`  | yes      | The full markdown content to translate |
-| `from`      | yes      | Source language code or name |
-| `to`        | yes      | Target language code or name |
-| `model`     | no       | Ollama model (default: `translategemma:27b`) |
+| Parameter    | Required | Description |
+|--------------|----------|-------------|
+| `markdown`   | yes      | The full markdown content to translate |
+| `from`       | yes      | Source language code or name |
+| `to`         | yes      | Target language code or name |
+| `model`      | no       | Ollama model (default: `translategemma:27b`) |
+| `onLostSpan` | no       | `report` (default) lists protected spans missing from the translation; `fail` makes that an error. See [Survival Check](#survival-check---on-lost-span) |
 
 ### `list_languages`
 
@@ -118,6 +119,7 @@ Translate markdown content into multiple languages at once (default: 7 — Japan
 | `model`       | no       | Ollama model (default: `translategemma:27b`) |
 | `concurrency` | no       | Max concurrent translations (default: 2, max: 3) |
 | `navBar`      | no       | Inject language nav bar (default: true) |
+| `onLostSpan`  | no       | `report` (default) lists lost protected spans per language; `fail` turns a language with any into an error |
 
 ### `translate_readme`
 
@@ -131,6 +133,9 @@ Translate a README.md **file** into the same 7 languages and write the `README.<
 | `languages`   | no       | Subset of target language codes (default: all 7) |
 | `concurrency` | no       | Max concurrent translations (default: 2, max: 3) |
 | `navBar`      | no       | Inject or refresh the language nav bar (default: true) |
+| `onLostSpan`  | no       | `report` (default) writes every file and lists lost protected spans; `fail` leaves a language with any unwritten, as an error |
+
+`translate_readme` reads the README's `.polyglot-terms.json` and `.polyglot-pins.json` if they exist.
 
 ## Features
 
@@ -144,12 +149,61 @@ Transient Ollama failures (network blips, temporary overload) are automatically 
 Long text is split at natural boundaries — paragraphs, then sentences — so translation context is preserved. Chunk sizes adapt to the model: 2K chars for 2B/4B models, 4K for 12B, 6K for 27B.
 
 ### Segment Cache
-Translated segments are cached by content hash (SHA-256 of source text + target language + model). Unchanged segments skip re-translation entirely, so re-running a translation after an edit touches only what changed. The cache lives in `.polyglot-cache.json` next to the source file, with a 30-day TTL. It is used by the `translateMarkdown` library API when given a `filePath` (and by the repo's `scripts/translate-*.mjs` CLI); the MCP tools translate without it.
+Translated segments are cached by content hash (SHA-256 of the masked source text + target language + model, plus a hash of the protected-term rules that matched in the segment). Unchanged segments skip re-translation entirely, so re-running a translation after an edit touches only what changed. Adding a protected term changes the key of every segment containing it, so a cached translation that respelled the term is not replayed; other segments keep their keys. The cache lives in `.polyglot-cache.json` next to the source file, with a 30-day TTL. It is used by the `translateMarkdown` library API when given a `filePath` (and by the repo's `scripts/translate-*.mjs` CLI); the MCP tools translate without it.
 
 Several runs can share one cache file. Each save merges only its own changes into the file under a lock and replaces the file atomically, so languages translated in parallel keep each other's entries, and clearing the cache for one language leaves the others alone.
 
 ### Translation Memory (Fuzzy Cache)
 When an exact cache hit isn't found, a cached translation is reused only if its source differs from the new one in whitespace layout alone: spacing within a line, whitespace at either end, or CRLF versus LF. Any other edit is retranslated, including a changed word, number, punctuation mark, letter case, or inline code span. A cached translation is the translation of its own source, so reusing it for edited text would ship the old wording.
+
+### Protected Terms (`.polyglot-terms.json`)
+TranslateGemma respells bare identifiers in another script: a Hindi README wrote `XLS-30` as `एक्सएलएस-30` and `Kimi-K3` as `किमी-के3`. It also garbles counts: Chinese turned "218 of 224" into "224 of 218". So identifiers in prose are masked like inline code spans: each is swapped for a letter-free placeholder before translation and restored after. The defaults:
+
+| Pattern | Masks | Leaves alone |
+|---------|-------|--------------|
+| `url` | `https://…` up to whitespace, a quote, a bracket or a backtick | |
+| `caps-id` | ALL-CAPS tokens with a digit, or capitals joined by `-` or `_`: `XLS-30`, `HOST_REJECTED`, `SHA-256`, `ARM64` | `README`, `API`, `NASA` |
+| `camel-case` | CamelCase and mixedCase words: `DepositAuth`, `AMMCreate`, `mixedCase`, `SoulX-Singer` | `URLs`, `IDs`, `GPUs`, ordinary capitalised words |
+| `model-id` | Model and product IDs with a letter-and-digit part: `Kimi-K3`, `gemma4:31b`, `Qwen2.5-32B` | `Node.js`, `top-10` |
+
+"N of M" in prose and table cells (`218 of 224`) is masked as one span and restored as `218/224` in every language, which reads correctly everywhere and cannot be reversed or turned into an ordinal. A table cell that is only a count is not sent to the model at all.
+
+A repository adds its own terms in `.polyglot-terms.json` beside the README. Every field is optional:
+
+```json
+{
+  "terms": ["Gemma", "TranslateGemma"],
+  "patterns": ["\\bRFC \\d+\\b"],
+  "disable": ["camel-case"],
+  "nOfM": true
+}
+```
+
+`terms` are exact, case-sensitive strings matched as whole words; `patterns` are JavaScript regular expressions. Both add to the defaults. `disable` switches defaults off by name, and `"nOfM": false` switches the count rule off. A file that cannot be parsed stops the run with `CONFIG_ERROR` instead of translating without the terms it asked for.
+
+### Survival Check (`--on-lost-span`)
+After translating, every target file is checked against the English: each protected span (inline code span, protected term, and each count as `N/M`) must be present in the translation of its segment, character for character. Each table cell must carry the same numbers as its source cell, compared as a multiset, not in order: correct Chinese for "218 of 224" puts the total first (`224 首中的 218 首`), so an order check would flag the right answer. Digits from other scripts are normalised before comparing. The file must also keep its fenced code blocks and inline code spans.
+
+`--on-lost-span=fail|report` picks what happens when something is lost:
+
+- **`fail`**: the run exits non-zero with a list of language, segment and missing span. This is the default for `scripts/translate-all.mjs`, which runs before releases. The files are still written, so they can be fixed by hand and pinned. The summary JSON carries the list and a `LOST_SPAN` error in the usual `PolyglotError` shape (`code`, `message`, `hint`, `retryable`).
+- **`report`**: the list is written and the run exits 0. This is the default for the MCP tools (`onLostSpan` parameter) and the `translateMarkdown` library API (`onLostSpan` option, result field `lostSpans`).
+
+```bash
+node scripts/translate-all.mjs README.md                       # --on-lost-span=fail
+node scripts/translate-all.mjs README.md --on-lost-span=report
+```
+
+### Pinned Translations (`.polyglot-pins.json`)
+A pinned translation always wins. `.polyglot-pins.json` sits beside the cache; each entry is keyed by a hash of the English segment plus the target language, and holds the hand-fixed translation. A pin beats the cache and the model and survives every rerun, `--cache-clear` included. When the English changes, the hash changes, so a pin cannot outlive the text it was written for.
+
+To pin hand fixes, correct the translated file, then run:
+
+```bash
+node scripts/pin-translation.mjs README.md hi README.hi.md
+```
+
+It pairs each segment of the English with its text in the corrected file and pins every segment whose text differs from the cached translation. `--dry-run` lists the pins without writing them. `--model=NAME` sets the model whose cache entries it compares with (default: `$POLYGLOT_MODEL` or `translategemma:27b`, the same as the scripts). `--include-uncached` also pins segments the cache has no translation for. Commit `.polyglot-pins.json` and `.polyglot-terms.json` with the README.
 
 ### Ollama Cloud (optional)
 Set `OLLAMA_HOST` to send requests to another Ollama server instead of `localhost:11434`. For [Ollama Cloud](https://ollama.com), also set `OLLAMA_API_KEY`: the key is sent as a Bearer token, and only to a non-loopback host.
@@ -220,6 +274,14 @@ MCP Client (Claude Code, etc.)
 ├──────────────────┤
 │  codeSpans.ts    │  Inline code-span masking and fail-closed restore
 ├──────────────────┤
+│protectedTerms.ts │  Protected terms in prose, "N of M", .polyglot-terms.json
+├──────────────────┤
+│   survival.ts    │  Survival check: lost spans, cell numbers, --on-lost-span
+├──────────────────┤
+│     pins.ts      │  Pinned hand fixes, .polyglot-pins.json
+├──────────────────┤
+│pinCorrections.ts │  Corrected file → pins (scripts/pin-translation.mjs)
+├──────────────────┤
 │ translateAll.ts  │  Multi-language orchestrator with nav bar injection
 ├──────────────────┤
 │translateReadme.ts│  README file translation — writes README.<lang>.md
@@ -250,8 +312,8 @@ MCP Client (Claude Code, etc.)
 
 | Aspect | Detail |
 |--------|--------|
-| **Data touched** | Text sent to the Ollama API — local (`localhost:11434`) by default, or the host in `OLLAMA_HOST` if you set one. `.polyglot-cache.json` segment cache next to a translated file (library and CLI use only) |
-| **Files written** | `translate_readme` writes `README.<lang>.md` next to the README you pass it and refreshes that README's language nav bar |
+| **Data touched** | Text sent to the Ollama API — local (`localhost:11434`) by default, or the host in `OLLAMA_HOST` if you set one. `.polyglot-cache.json` segment cache next to a translated file (library and CLI use only). `.polyglot-terms.json` and `.polyglot-pins.json` next to a translated README are read if present |
+| **Files written** | `translate_readme` writes `README.<lang>.md` next to the README you pass it and refreshes that README's language nav bar. `scripts/pin-translation.mjs` writes `.polyglot-pins.json` next to the README |
 | **Data NOT touched** | No browser data, no OS credentials, nothing outside the directories above |
 | **Network** | HTTP to `localhost:11434` only by default — zero external egress. Remote only when `OLLAMA_HOST` points elsewhere |
 | **Secrets** | `OLLAMA_API_KEY`, if set, is read from the environment and sent only as a Bearer token to a non-loopback `OLLAMA_HOST`; never written to disk or logged |
@@ -264,7 +326,7 @@ See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy.
 ```bash
 npm install             # install deps
 npm run typecheck       # type-check without emitting
-npm test                # run 362 tests (vitest)
+npm test                # run 433 tests (vitest)
 npm run build           # compile TypeScript to dist/
 npm run verify          # typecheck + test + build + pack (full gate)
 ```

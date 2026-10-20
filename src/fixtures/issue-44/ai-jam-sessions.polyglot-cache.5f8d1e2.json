@@ -1,0 +1,34 @@
+{
+  "_provenance": "Extract of mcp-tool-shop-org/ai-jam-sessions .polyglot-cache.json at 5f8d1e2, keys as written by polyglot-mcp 1.8: zh 218 of 224 → 218 首中的 224 首 (reversed); zh 285 of 414 → 414个中的第285个 (ordinal); hi credits paragraph with किमी-के3 (present at 5f8d1e2^ too); zh credits paragraph, correct.",
+  "version": 1,
+  "entries": {
+    "6eb097414da59042": {
+      "translation": "218 首中的 224 首",
+      "model": "translategemma:27b",
+      "timestamp": 1791402618833,
+      "source": "218 of 224",
+      "targetLang": "zh"
+    },
+    "85e2645f8a0662fb": {
+      "translation": "414个中的第285个",
+      "model": "translategemma:27b",
+      "timestamp": 1791479569835,
+      "source": "285 of 414",
+      "targetLang": "zh"
+    },
+    "d80ff4f64eeb47f5": {
+      "translation": "आवाज सिंथेटिक है: [SoulX-Singer](https://github.com/Soul-AILab/SoulX-Singer) (Apache-2.0), जिसमें अपनी विशिष्ट ध्वनि है, और यह किसी भी वास्तविक गायक की नकल नहीं करता है। इस परियोजना के लिए पियानो की धुनें किमी-के3 द्वारा लिखी गई हैं और इन्हें सार्वजनिक डोमेन को समर्पित किया गया है (CC0)। तीनों भजन सार्वजनिक डोमेन में हैं।",
+      "model": "translategemma:27b",
+      "timestamp": 1791444664117,
+      "source": "The voice is synthetic: [SoulX-Singer](https://github.com/Soul-AILab/SoulX-Singer) (Apache-2.0), with its own example timbre,\r\nimitating no real singer. The piano arrangements were written for this project by Kimi-K3 and are dedicated to the public\r\ndomain (CC0). All three hymns are in the public domain.\r",
+      "targetLang": "hi"
+    },
+    "c15d8f3821d5ee51": {
+      "translation": "声音是合成的：[SoulX-Singer](https://github.com/Soul-AILab/SoulX-Singer)（Apache-2.0），具有其自身的音色示例，\n不模仿任何真实的歌手。 钢琴伴奏是为这个项目而创作的，由 Kimi-K3 创作，并献给公共领域（CC0）。 这三首赞美诗都属于公共领域。",
+      "model": "translategemma:27b",
+      "timestamp": 1791444522470,
+      "source": "The voice is synthetic: [SoulX-Singer](https://github.com/Soul-AILab/SoulX-Singer) (Apache-2.0), with its own example timbre,\r\nimitating no real singer. The piano arrangements were written for this project by Kimi-K3 and are dedicated to the public\r\ndomain (CC0). All three hymns are in the public domain.\r",
+      "targetLang": "zh"
+    }
+  }
+}

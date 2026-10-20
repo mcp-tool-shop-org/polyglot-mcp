@@ -17,6 +17,7 @@ import {
   type TargetLanguage,
 } from "./translateAll.js";
 import { translateMarkdown } from "./translateMarkdown.js";
+import { LostSpanError } from "./survival.js";
 
 describe("TRANSLATE_ALL_LANGUAGES", () => {
   it("contains 7 languages", () => {
@@ -282,5 +283,35 @@ describe("translateAll", () => {
     });
 
     expect(maxConcurrent).toBeLessThanOrEqual(2);
+  });
+
+  it("passes the survival-check policy (report by default) and each language's lost spans", async () => {
+    const lost = { lang: "ja", segment: "Built by Kimi-K3.", span: "Kimi-K3", kind: "term" as const };
+    vi.mocked(translateMarkdown).mockReset();
+    vi.mocked(translateMarkdown)
+      .mockResolvedValueOnce({
+        markdown: "# OK",
+        segments: 1,
+        cached: 0,
+        translated: 1,
+        deduplicated: 0,
+        fuzzyMatched: 0,
+        pinned: 0,
+        ollamaCalls: 1,
+        durationMs: 200,
+        warnings: [],
+        lostSpans: [lost],
+      })
+      .mockRejectedValueOnce(new LostSpanError([{ ...lost, lang: "es" }]));
+
+    const result = await translateAll("# Test", { targetLangs: ["ja", "es"], navBar: false });
+
+    expect(vi.mocked(translateMarkdown).mock.calls[0][3]).toMatchObject({ cache: false, onLostSpan: "report" });
+    const ja = result.results.find((r) => r.lang === "ja")!;
+    const es = result.results.find((r) => r.lang === "es")!;
+    expect(ja).toMatchObject({ status: "ok", lostSpans: [lost] });
+    expect(es.status).toBe("error");
+    expect(es.error).toMatch(/protected span/);
+    expect(es.lostSpans).toEqual([{ ...lost, lang: "es" }]);
   });
 });

@@ -1,6 +1,7 @@
 /**
  * Segment-level translation cache.
- * Hashes source text + target language + model to avoid re-translating unchanged segments.
+ * Hashes source text + target language + model (+ the protected-term rules that
+ * fired in the segment) to avoid re-translating unchanged segments.
  * Cache file lives alongside the README as .polyglot-cache.json.
  */
 
@@ -23,10 +24,19 @@ export interface TranslationCache {
   entries: Record<string, CacheEntry>;
 }
 
-/** Generate a cache key from source text, target language, and model. */
-export function cacheKey(text: string, targetLang: string, model: string): string {
+/**
+ * Generate a cache key from source text, target language, and model.
+ *
+ * `termsHash` is the hash of the protected-term rules that fired in this
+ * segment (MaskedText.termsHash). Folding it in means adding a term changes
+ * the key of every segment containing it, so a cached translation that
+ * respelled the term is not replayed; segments it does not touch keep their
+ * key. Empty or absent leaves the key as it was before protected terms.
+ */
+export function cacheKey(text: string, targetLang: string, model: string, termsHash = ""): string {
+  const terms = termsHash ? `terms=${termsHash}:` : "";
   return createHash("sha256")
-    .update(`${targetLang}:${model}:${text}`)
+    .update(`${targetLang}:${model}:${terms}${text}`)
     .digest("hex")
     .slice(0, 16);
 }
