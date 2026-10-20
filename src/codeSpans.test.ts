@@ -151,3 +151,19 @@ describe("CODE_SPAN_PATTERN", () => {
     expect(matches).toEqual(["`one`", "`two`"]);
   });
 });
+
+describe("placeholder patterns — linear time", () => {
+  it("rejects an unclosed bracket followed by a long digit run quickly", () => {
+    const hostile = "⟦" + "0".repeat(50_000);
+    const start = Date.now();
+    expect(containsCodePlaceholder(hostile)).toBe(false);
+    expect(restoreCodeSpans(hostile, ["`x`"]).text).toBe(hostile);
+    expect(Date.now() - start).toBeLessThan(500);
+  });
+
+  it("still matches padded and decorated placeholders", () => {
+    expect(restoreCodeSpans("a ⟦ 0 ⟧ b ⟦x1y⟧", ["`p`", "`q`"])).toEqual({ text: "a `p` b `q`", intact: true });
+    expect(containsCodePlaceholder("⟦12⟧")).toBe(true);
+    expect(containsCodePlaceholder("⟦ab⟧")).toBe(false);
+  });
+});

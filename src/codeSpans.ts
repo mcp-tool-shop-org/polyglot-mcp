@@ -33,11 +33,18 @@ export const codePlaceholder = (index: number): string => `⟦${index}⟧`;
  * Matches a placeholder on the way back, tolerantly: any bracket pair whose
  * contents include a digit run. Models pad brackets and occasionally slip a
  * stray character inside; anything looser than this would start eating prose.
+ *
+ * Written so that no two parts can match the same characters: the text before
+ * the first digit run holds no digits, the run is taken whole, and anything
+ * after it starts with a non-digit. The earlier lazy form,
+ * `⟦[^⟦⟧]*?(\d+)[^⟦⟧]*?⟧`, matched the same placeholders but backtracked
+ * polynomially on an unclosed `⟦` followed by a long digit run (CodeQL
+ * js/polynomial-redos).
  */
-const PLACEHOLDER_PATTERN = /⟦[^⟦⟧]*?(\d+)[^⟦⟧]*?⟧/g;
+const PLACEHOLDER_PATTERN = /⟦[^⟦⟧\d]*(\d+)(?:[^⟦⟧\d][^⟦⟧]*)?⟧/g;
 
 /** Non-global twin of the above — safe for `.test()` (no `lastIndex` state). */
-const HAS_PLACEHOLDER = /⟦[^⟦⟧]*?\d+[^⟦⟧]*?⟧/;
+const HAS_PLACEHOLDER = /⟦[^⟦⟧\d]*\d+(?:[^⟦⟧\d][^⟦⟧]*)?⟧/;
 
 /** True when `text` already contains something shaped like a placeholder. */
 export const containsCodePlaceholder = (text: string): boolean => HAS_PLACEHOLDER.test(text);

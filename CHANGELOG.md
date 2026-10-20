@@ -25,6 +25,10 @@ Protected terms, a survival check, and hand fixes that stick (#44).
 - **The cache key folds in the protected-term rules** — `cacheKey(text, targetLang, model, termsHash?)` (`src/cache.ts`) now includes a hash of the protected-term rules that fired in the segment. Adding a term changes the key of every segment containing it, so a cached slip that respelled the term is not replayed; segments it does not touch keep their keys. A segment where no rule fires keeps its 1.8 key (`targetLang:model:text`), so caches carry over except for segments that contain protected terms. Those are retranslated once. The `किमी-के3` entry in ai-jam-sessions' cache at 5f8d1e2 is keyed exactly as 1.8 keyed it, and a test asserts it is no longer replayed.
 - When a segment's placeholders do not survive translation, it falls back to the source with its counts written as `N/M`. Before, it fell back to the raw source.
 
+### Fixed
+
+- **Placeholder patterns ran in polynomial time on hostile input** — the restore patterns in `src/codeSpans.ts` (`⟦[^⟦⟧]*?(\d+)[^⟦⟧]*?⟧`) backtracked polynomially on an unclosed `⟦` followed by a long digit run (CodeQL js/polynomial-redos, newly reachable through the pin helper). They are rewritten so that no two parts can match the same characters. They match the same placeholders, and a 50,000-digit hostile string is now rejected in linear time (2 new tests).
+
 ## [1.8.0] - 2026-09-25
 
 ### Added
