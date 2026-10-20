@@ -18,6 +18,9 @@ import {
   TRANSLATE_ALL_LANGUAGES,
 } from "./translateAll.js";
 import { DEFAULT_MODEL } from "./translate.js";
+import { loadProtectedTerms } from "./protectedTerms.js";
+import { loadPins } from "./pins.js";
+import type { LostSpan, LostSpanPolicy } from "./survival.js";
 
 export interface TranslateReadmeOptions {
   /** Source language code (default: "en"). */
@@ -32,6 +35,11 @@ export interface TranslateReadmeOptions {
   navBar?: boolean;
   /** Progress callback — fired after each language completes. */
   onProgress?: (completed: number, total: number, lang: string) => void;
+  /**
+   * "report" (default) writes every translation and lists lost protected
+   * spans; "fail" leaves a language with any lost span unwritten, as an error.
+   */
+  onLostSpan?: LostSpanPolicy;
 }
 
 export interface TranslateReadmeLanguageResult {
@@ -42,6 +50,8 @@ export interface TranslateReadmeLanguageResult {
   file: string;
   durationMs: number;
   error?: string;
+  /** Protected spans this language's translation lost (the survival check). */
+  lostSpans?: LostSpan[];
 }
 
 export interface TranslateReadmeResult {
@@ -58,6 +68,8 @@ export interface TranslateReadmeResult {
   outputFiles: string[];
   /** Whether the source README's nav bar was (re)written. */
   sourceNavBarUpdated: boolean;
+  /** Every language's lost protected spans, in language order. */
+  lostSpans: LostSpan[];
   results: TranslateReadmeLanguageResult[];
 }
 
@@ -83,6 +95,7 @@ export async function translateReadme(
   const dir = dirname(absPath);
   const markdown = await readFile(absPath, "utf-8");
 
+  // The repository's protected terms and pinned hand fixes sit beside the README.
   const all = await translateAll(markdown, {
     sourceLang: options.sourceLang,
     targetLangs: options.targetLangs,
@@ -90,6 +103,9 @@ export async function translateReadme(
     concurrency: options.concurrency,
     navBar: options.navBar,
     onProgress: options.onProgress,
+    terms: loadProtectedTerms(absPath),
+    pins: loadPins(absPath),
+    onLostSpan: options.onLostSpan ?? "report",
   });
 
   // Write each successful translation to disk; record every language's outcome.
@@ -108,6 +124,7 @@ export async function translateReadme(
       file,
       durationMs: r.durationMs,
       error: r.error,
+      ...(r.lostSpans && r.lostSpans.length > 0 ? { lostSpans: r.lostSpans } : {}),
     });
   }
 
@@ -135,6 +152,7 @@ export async function translateReadme(
     durationMs: all.durationMs,
     outputFiles,
     sourceNavBarUpdated,
+    lostSpans: results.flatMap((r) => r.lostSpans ?? []),
     results,
   };
 }

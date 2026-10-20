@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-10-20
+
+Protected terms, a survival check, and hand fixes that stick (#44).
+
+### Added
+
+- **Protected terms in prose** — TranslateGemma respelled bare identifiers in another script, and nothing covered them because they are not in backticks. xrpl-lab's Hindi README wrote its `XLS-nn` spec IDs and `DepositAuth` / `DepositPreauth` in Devanagari (`एक्सएलएस-85`, `डिपॉजिटऑथ`), and ai-jam-sessions' Hindi README wrote `Kimi-K3` as `किमी-के3`. Protected terms now go through the same letter-free `⟦n⟧` placeholders as inline code spans (`maskCodeSpans(text, terms)` in `src/codeSpans.ts`), numbered after the code spans and restored the same way. The default set (`src/protectedTerms.ts`) is URLs; ALL-CAPS identifiers with a digit, hyphen or underscore (`XLS-30`, `HOST_REJECTED`); CamelCase and mixedCase identifiers (`DepositAuth`, `AMMCreate`); and model and product IDs with a letter-and-digit part (`Kimi-K3`, `gemma4:31b`, `Qwen2.5-32B`). Each pattern requires a shape ordinary capitalised English lacks, and tests pin that `README`, `API`, `URLs`, `IDs`, `Node.js`, `Top-10` and plain capitalised words stay prose.
+- **"N of M" counts restored as `N/M`** — in Chinese, "218 of 224" came back as `218 首中的 224 首` ("224 of 218") and "285 of 414" as the ordinal `414个中的第285个`. Both were fixed by hand to `218/224` and `285/414` (ai-jam-sessions 5f8d1e2). A count in prose or a table cell is now masked as one span and restored as `N/M` in every language. A cell that is only a count is not sent to the model. On by default.
+- **`.polyglot-terms.json`** beside the README: `terms` (exact, case-sensitive, whole-word), `patterns` (regexes), `disable` (default patterns by name) and `nOfM` (`false` switches counts off). Read by the scripts, by `translate_readme`, and by `translateMarkdown` when given a `filePath`. A file that cannot be parsed fails with the new `CONFIG_ERROR` code; the run does not continue without the terms.
+- **Survival check** (`src/survival.ts`, `checkSurvival` in `src/translateMarkdown.ts`) — after translation, every protected span in the English must be present, character for character, in the translation of its segment, with inline code spans and fenced blocks counted per file. As a backstop, the multiset of numbers in each table cell must match the source cell, with digits from other scripts normalised. The order of the numbers is not checked: correct Chinese puts the total first, and the reversed slip keeps the English order, so an order check would flag the right answer and pass the wrong one. The check reads the finished file, so it covers the model, the cache, pins and fallbacks alike. Results are in `TranslateMarkdownResult.lostSpans`.
+- **`--on-lost-span=fail|report`** — under `fail`, a run with a lost span exits non-zero with a list of language, segment and missing span. The library throws `LostSpanError`, a `PolyglotError` with code `LOST_SPAN` that carries the list and the result. Under `report`, the run writes the list and exits 0. `scripts/translate-all.mjs` (and `translate-readme.mjs`) default to `fail`; they still write the files so they can be fixed by hand and pinned, and the `POLYGLOT_COMPLETE` summary carries `lostSpans` and the structured `error`. The MCP tools (`translate_markdown`, `translate_all`, `translate_readme`, new `onLostSpan` parameter) and `translateMarkdown` default to `report`.
+- **Pinned translations, `.polyglot-pins.json`** (`src/pins.ts`) — a pinned translation always wins. An entry is keyed by the hash of the English segment plus the target language, with whitespace laid out canonically so that CRLF and LF checkouts share pins. It beats the cache and the model, survives every rerun including `--cache-clear`, and stops matching once the English changes. In ai-jam-sessions, `Kimi-K3` was fixed by hand in e4cd2fb, came back from the cache on the next run, and was fixed again in 5f8d1e2. A test now replays that sequence end to end.
+- **`scripts/pin-translation.mjs <readme> <lang> <corrected-file>`** (`src/pinCorrections.ts`) — pairs each segment of the English with its text in a hand-corrected translation and pins every segment whose text differs from what the cache would produce. `--dry-run`, `--model=`, `--include-uncached`.
+- New package exports: `./protectedTerms`, `./survival`, `./pins`, `./pinCorrections`.
+
+### Changed
+
+- **The cache key folds in the protected-term rules** — `cacheKey(text, targetLang, model, termsHash?)` (`src/cache.ts`) now includes a hash of the protected-term rules that fired in the segment. Adding a term changes the key of every segment containing it, so a cached slip that respelled the term is not replayed; segments it does not touch keep their keys. A segment where no rule fires keeps its 1.8 key (`targetLang:model:text`), so caches carry over except for segments that contain protected terms. Those are retranslated once. The `किमी-के3` entry in ai-jam-sessions' cache at 5f8d1e2 is keyed exactly as 1.8 keyed it, and a test asserts it is no longer replayed.
+- When a segment's placeholders do not survive translation, it falls back to the source with its counts written as `N/M`. Before, it fell back to the raw source.
+
+### Fixed
+
+- **Placeholder patterns ran in polynomial time on hostile input** — the restore patterns in `src/codeSpans.ts` (`⟦[^⟦⟧]*?(\d+)[^⟦⟧]*?⟧`) backtracked polynomially on an unclosed `⟦` followed by a long digit run (CodeQL js/polynomial-redos, newly reachable through the pin helper). They are rewritten so that no two parts can match the same characters. They match the same placeholders, and a 50,000-digit hostile string is now rejected in linear time (2 new tests).
+
 ## [1.8.0] - 2026-09-25
 
 ### Added

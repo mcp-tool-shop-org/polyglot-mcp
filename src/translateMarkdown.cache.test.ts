@@ -30,6 +30,11 @@ vi.mock("./translate.js", () => ({
 
 import { translateMarkdown } from "./translateMarkdown.js";
 import { translateBatch } from "./translate.js";
+import { maskCodeSpans } from "./codeSpans.js";
+import { DEFAULT_PROTECTED_TERMS } from "./protectedTerms.js";
+
+/** What the model is sent for a segment: its protected terms (FNV-1a, f64, NaN, x64, ARM64) masked. */
+const masked = (text: string) => maskCodeSpans(text, DEFAULT_PROTECTED_TERMS).text;
 
 const CELL_BEFORE =
   "A fixed-timestep tick; every step's state hashed with a two-lane FNV-1a over every f64; NaN refused; signed zero canonicalized";
@@ -87,7 +92,7 @@ describe("translateMarkdown — edited segments bypass the fuzzy cache", () => {
 
     // Only the two edited segments went to the model.
     const sent = vi.mocked(translateBatch).mock.calls.flatMap(([items]) => items.map((it) => it.text));
-    expect(sent.sort()).toEqual([CELL_AFTER, COUNT_AFTER].sort());
+    expect(sent.sort()).toEqual([masked(CELL_AFTER), masked(COUNT_AFTER)].sort());
     expect(result.translated).toBe(2);
     expect(result.fuzzyMatched).toBe(0);
   });

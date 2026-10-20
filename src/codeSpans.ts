@@ -15,7 +15,13 @@
  * nothing else: it carries no letters, so there is nothing in it for a
  * transliterating model to convert. Contrast `POLYGLOT_SEP`-style word tokens,
  * which are themselves transliterable — exactly the failure being fixed.
+ *
+ * Protected terms in prose (see protectedTerms.ts) ride the same mechanism:
+ * given a term set, `maskCodeSpans` swaps them for placeholders too, numbered
+ * after the code spans, and `restoreCodeSpans` puts them back.
  */
+
+import { findProtectedSpans, hashRules, type ProtectedSpanKind, type ProtectedTermSet } from "./protectedTerms.js";
 
 /** Matches an inline code span, backticks included. Never spans a newline. */
 export const CODE_SPAN_PATTERN = /`[^`\n]+`/g;
@@ -27,24 +33,47 @@ export const codePlaceholder = (index: number): string => `⟦${index}⟧`;
  * Matches a placeholder on the way back, tolerantly: any bracket pair whose
  * contents include a digit run. Models pad brackets and occasionally slip a
  * stray character inside; anything looser than this would start eating prose.
+ *
+ * Written so that no two parts can match the same characters: the text before
+ * the first digit run holds no digits, the run is taken whole, and anything
+ * after it starts with a non-digit. The earlier lazy form,
+ * `⟦[^⟦⟧]*?(\d+)[^⟦⟧]*?⟧`, matched the same placeholders but backtracked
+ * polynomially on an unclosed `⟦` followed by a long digit run (CodeQL
+ * js/polynomial-redos).
  */
-const PLACEHOLDER_PATTERN = /⟦[^⟦⟧]*?(\d+)[^⟦⟧]*?⟧/g;
+const PLACEHOLDER_PATTERN = /⟦[^⟦⟧\d]*(\d+)(?:[^⟦⟧\d][^⟦⟧]*)?⟧/g;
 
 /** Non-global twin of the above — safe for `.test()` (no `lastIndex` state). */
-const HAS_PLACEHOLDER = /⟦[^⟦⟧]*?\d+[^⟦⟧]*?⟧/;
+const HAS_PLACEHOLDER = /⟦[^⟦⟧\d]*\d+(?:[^⟦⟧\d][^⟦⟧]*)?⟧/;
 
 /** True when `text` already contains something shaped like a placeholder. */
 export const containsCodePlaceholder = (text: string): boolean => HAS_PLACEHOLDER.test(text);
 
+/** What a placeholder stands for: an inline code span, a protected term, or an "N of M" count. */
+export type MaskedSpanKind = "code" | ProtectedSpanKind;
+
 export interface MaskedText {
-  /** Text with every inline code span replaced by its placeholder. */
+  /** Text with every inline code span (and protected term) replaced by its placeholder. */
   text: string;
-  /** The removed spans, indexed by placeholder number. Backticks included. */
+  /**
+   * What each placeholder restores to, indexed by placeholder number. A code
+   * span or term restores to itself, backticks included; a count restores to
+   * `N/M`.
+   */
   spans: string[];
+  /** What each placeholder stands for, parallel to `spans`. */
+  kinds: MaskedSpanKind[];
+  /** Ids of the protected-term rules that fired, sorted and unique. */
+  rules: string[];
+  /** Hash of `rules`; empty when none fired. Folded into the cache key. */
+  termsHash: string;
 }
 
 /**
- * Replace every inline code span in `text` with a placeholder.
+ * Replace every inline code span in `text` with a placeholder and, given a
+ * protected-term set, every protected term in the prose around them too. Code
+ * spans take placeholders first, in order, then terms in order; both restore
+ * through `restoreCodeSpans`.
  *
  * If `text` already contains placeholder-shaped bracket pairs, masking is
  * skipped entirely (spans stay inline and translate as prose) rather than
@@ -52,15 +81,34 @@ export interface MaskedText {
  * genuinely uses ⟦ ⟧ around a number is vanishingly rare in a README; a
  * mangled identifier is not worth the risk of guessing.
  */
-export function maskCodeSpans(text: string): MaskedText {
-  if (containsCodePlaceholder(text)) return { text, spans: [] };
+export function maskCodeSpans(text: string, terms?: ProtectedTermSet): MaskedText {
+  if (containsCodePlaceholder(text)) return { text, spans: [], kinds: [], rules: [], termsHash: "" };
 
   const spans: string[] = [];
-  const masked = text.replace(CODE_SPAN_PATTERN, (span) => {
+  const kinds: MaskedSpanKind[] = [];
+  let masked = text.replace(CODE_SPAN_PATTERN, (span) => {
     spans.push(span);
+    kinds.push("code");
     return codePlaceholder(spans.length - 1);
   });
-  return { text: masked, spans };
+
+  let rules: string[] = [];
+  if (terms) {
+    const blocked = [...masked.matchAll(/⟦\d+⟧/g)].map((m) => [m.index, m.index + m[0].length] as const);
+    const matches = findProtectedSpans(masked, terms, blocked);
+    let out = "";
+    let cursor = 0;
+    for (const m of matches) {
+      out += masked.slice(cursor, m.start) + codePlaceholder(spans.length);
+      spans.push(m.restored);
+      kinds.push(m.kind);
+      cursor = m.end;
+    }
+    masked = out + masked.slice(cursor);
+    rules = [...new Set(matches.map((m) => m.rule))].sort();
+  }
+
+  return { text: masked, spans, kinds, rules, termsHash: hashRules(rules) };
 }
 
 export interface RestoreResult {
