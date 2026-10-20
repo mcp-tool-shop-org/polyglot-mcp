@@ -43,6 +43,26 @@ Any other edit is retranslated, including a changed word, number, punctuation ma
 
 Inline code spans are swapped for placeholders (`⟦0⟧`, `⟦1⟧`, ...) before translation and restored afterwards, so commands, flags, package names, and identifiers inside backticks come back byte-for-byte instead of being translated or transliterated into the target script. The placeholders contain no letters, so a transliterating model has nothing in them to convert. If the placeholders do not come back exactly once each, the segment falls back to the source text with a warning: untranslated prose is visible, while a sentence that silently lost its `npm install` target is not.
 
+## Protected terms
+
+Identifiers in prose are masked the same way, so the model can't respell them in another script (Hindi once wrote `XLS-30` and `Kimi-K3` in Devanagari). The defaults mask URLs, ALL-CAPS IDs with a digit or a `-`/`_` (`XLS-30`, `HOST_REJECTED`), CamelCase words (`DepositAuth`, `AMMCreate`), and model IDs with a letter-and-digit part (`Kimi-K3`, `gemma4:31b`). Ordinary capitalised words are left alone.
+
+A count written "N of M" is masked as one span and restored as `N/M` in every language, so it can't be reversed or turned into an ordinal. A table cell that is only a count never reaches the model.
+
+A repository adds its own terms in `.polyglot-terms.json` beside the README: `terms` (exact, case-sensitive, whole words), `patterns` (regular expressions), `disable` (switch defaults off by name) and `nOfM`. A file that can't be parsed stops the run with `CONFIG_ERROR`.
+
+## Survival check
+
+After translating, each file is checked against the English. Every protected span, code span and `N/M` count must be present, character for character, and each table cell must carry the same numbers as its source cell, compared as a set rather than in order (correct Chinese puts the total first). Digits from other scripts are normalised first.
+
+`--on-lost-span=fail|report` chooses what happens when something is lost. `fail` exits non-zero with the language, segment and missing span; it's the default for `translate-all.mjs` and `translate-readme.mjs`, which run before releases. `report` lists the losses and exits 0; it's the default for the MCP tools and the library API. Files are written either way, so they can be fixed and pinned.
+
+## Pinned translations
+
+A pinned translation always wins. `.polyglot-pins.json` holds hand-fixed translations keyed by a hash of the English segment plus the language. A pin beats the cache and the model and survives every rerun; when the English changes, its hash changes, so a pin can't outlive the text it was written for.
+
+To pin hand fixes, correct the translated file, then run `node scripts/pin-translation.mjs README.md hi README.hi.md`. It pins every segment whose text differs from the cached translation (`--dry-run` lists them without writing). Commit `.polyglot-pins.json` and `.polyglot-terms.json` with the README.
+
 ## Concurrency semaphore
 
 All Ollama calls are guarded by a counting semaphore (default limit: 1) to prevent GPU OOM on systems with limited VRAM. The semaphore queues excess requests and releases them in order. Override with `POLYGLOT_CONCURRENCY`:

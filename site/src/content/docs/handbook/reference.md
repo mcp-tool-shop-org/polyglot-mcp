@@ -122,6 +122,10 @@ The package exposes individual module exports for programmatic use:
 | `@mcptoolshop/polyglot-mcp/translate` | Core translate + translateBatch |
 | `@mcptoolshop/polyglot-mcp/translateMarkdown` | Markdown-aware translation |
 | `@mcptoolshop/polyglot-mcp/codeSpans` | Inline code-span masking and restore |
+| `@mcptoolshop/polyglot-mcp/protectedTerms` | Protected-term masking and `.polyglot-terms.json` |
+| `@mcptoolshop/polyglot-mcp/survival` | Survival check and `--on-lost-span` |
+| `@mcptoolshop/polyglot-mcp/pins` | Pinned translations (`.polyglot-pins.json`) |
+| `@mcptoolshop/polyglot-mcp/pinCorrections` | Pin hand fixes from a corrected file |
 | `@mcptoolshop/polyglot-mcp/translateAll` | Multi-language orchestrator |
 | `@mcptoolshop/polyglot-mcp/validate` | Output validation |
 | `@mcptoolshop/polyglot-mcp/ollama` | Ollama HTTP client |
