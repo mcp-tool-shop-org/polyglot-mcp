@@ -81,7 +81,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "scripts",
-      "qualifyingSourceCommits": 4,
+      "qualifyingSourceCommits": 5,
       "rebaseline": null
     },
     {
@@ -115,7 +115,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "src",
-      "qualifyingSourceCommits": 7,
+      "qualifyingSourceCommits": 6,
       "rebaseline": null
     }
   ],
@@ -128,23 +128,23 @@
         "path": ".github/dependabot.yml"
       },
       {
-        "commits": 14,
-        "lines": 356,
+        "commits": 12,
+        "lines": 376,
         "path": ".github/workflows/ci.yml"
       },
       {
-        "commits": 7,
-        "lines": 94,
+        "commits": 3,
+        "lines": 86,
         "path": ".github/workflows/pages.yml"
       },
       {
-        "commits": 5,
-        "lines": 70,
+        "commits": 3,
+        "lines": 66,
         "path": ".github/workflows/publish.yml"
       },
       {
-        "commits": 6,
-        "lines": 50,
+        "commits": 7,
+        "lines": 70,
         "path": "CHANGELOG.md"
       },
       {
@@ -173,8 +173,8 @@
         "path": "README.ja.md"
       },
       {
-        "commits": 2,
-        "lines": 180,
+        "commits": 3,
+        "lines": 264,
         "path": "README.md"
       },
       {
@@ -193,8 +193,8 @@
         "path": "SECURITY.md"
       },
       {
-        "commits": 5,
-        "lines": 340,
+        "commits": 7,
+        "lines": 388,
         "path": "atlas/README.md"
       },
       {
@@ -203,18 +203,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 5,
-        "lines": 1303,
+        "commits": 7,
+        "lines": 1487,
         "path": "atlas/page.json"
       },
       {
-        "commits": 5,
-        "lines": 2486,
+        "commits": 7,
+        "lines": 2826,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 5,
-        "lines": 11062,
+        "commits": 7,
+        "lines": 11170,
         "path": "atlas/structure.json"
       },
       {
@@ -223,23 +223,28 @@
         "path": "codecov.yml"
       },
       {
-        "commits": 21,
-        "lines": 5804,
+        "commits": 15,
+        "lines": 1394,
         "path": "package-lock.json"
       },
       {
-        "commits": 16,
-        "lines": 45,
+        "commits": 10,
+        "lines": 49,
         "path": "package.json"
       },
       {
-        "commits": 4,
-        "lines": 19,
+        "commits": 1,
+        "lines": 60,
+        "path": "scripts/pin-translation.mjs"
+      },
+      {
+        "commits": 5,
+        "lines": 92,
         "path": "scripts/translate-all.mjs"
       },
       {
-        "commits": 4,
-        "lines": 10,
+        "commits": 5,
+        "lines": 83,
         "path": "scripts/translate-readme.mjs"
       },
       {
@@ -248,8 +253,8 @@
         "path": "site/astro.config.mjs"
       },
       {
-        "commits": 2,
-        "lines": 12102,
+        "commits": 4,
+        "lines": 12114,
         "path": "site/package-lock.json"
       },
       {
@@ -303,8 +308,8 @@
         "path": "src/cache.test.ts"
       },
       {
-        "commits": 4,
-        "lines": 730,
+        "commits": 5,
+        "lines": 748,
         "path": "src/cache.ts"
       },
       {
@@ -313,18 +318,53 @@
         "path": "src/codeSpans.test.ts"
       },
       {
-        "commits": 1,
-        "lines": 107,
+        "commits": 2,
+        "lines": 162,
         "path": "src/codeSpans.ts"
       },
       {
-        "commits": 4,
-        "lines": 67,
-        "path": "src/index.test.ts"
+        "commits": 1,
+        "lines": 4,
+        "path": "src/errors.ts"
       },
       {
         "commits": 1,
-        "lines": 100,
+        "lines": 6,
+        "path": "src/fixtures/issue-44/ai-jam-sessions.README.5f8d1e2-parent.md"
+      },
+      {
+        "commits": 1,
+        "lines": 3,
+        "path": "src/fixtures/issue-44/ai-jam-sessions.README.hi.5f8d1e2.md"
+      },
+      {
+        "commits": 1,
+        "lines": 6,
+        "path": "src/fixtures/issue-44/ai-jam-sessions.README.zh.5f8d1e2-parent.md"
+      },
+      {
+        "commits": 1,
+        "lines": 34,
+        "path": "src/fixtures/issue-44/ai-jam-sessions.polyglot-cache.5f8d1e2.json"
+      },
+      {
+        "commits": 1,
+        "lines": 12,
+        "path": "src/fixtures/issue-44/xrpl-lab.README.7acc67c.md"
+      },
+      {
+        "commits": 1,
+        "lines": 12,
+        "path": "src/fixtures/issue-44/xrpl-lab.README.hi.7acc67c.md"
+      },
+      {
+        "commits": 1,
+        "lines": 7,
+        "path": "src/index.test.ts"
+      },
+      {
+        "commits": 2,
+        "lines": 134,
         "path": "src/index.ts"
       },
       {
@@ -338,8 +378,43 @@
         "path": "src/ollama.ts"
       },
       {
-        "commits": 4,
-        "lines": 99,
+        "commits": 1,
+        "lines": 129,
+        "path": "src/pinCorrections.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 174,
+        "path": "src/pins.test.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 131,
+        "path": "src/pins.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 185,
+        "path": "src/protectedTerms.test.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 291,
+        "path": "src/protectedTerms.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 175,
+        "path": "src/survival.test.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 233,
+        "path": "src/survival.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 43,
         "path": "src/translate.test.ts"
       },
       {
@@ -348,8 +423,18 @@
         "path": "src/translate.ts"
       },
       {
-        "commits": 2,
-        "lines": 220,
+        "commits": 1,
+        "lines": 33,
+        "path": "src/translateAll.test.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 19,
+        "path": "src/translateAll.ts"
+      },
+      {
+        "commits": 3,
+        "lines": 227,
         "path": "src/translateMarkdown.cache.test.ts"
       },
       {
@@ -364,6 +449,11 @@
       },
       {
         "commits": 1,
+        "lines": 268,
+        "path": "src/translateMarkdown.protected.test.ts"
+      },
+      {
+        "commits": 1,
         "lines": 77,
         "path": "src/translateMarkdown.roundtrip.test.ts"
       },
@@ -373,24 +463,19 @@
         "path": "src/translateMarkdown.test.ts"
       },
       {
-        "commits": 5,
-        "lines": 152,
+        "commits": 6,
+        "lines": 509,
         "path": "src/translateMarkdown.ts"
       },
       {
-        "commits": 1,
-        "lines": 141,
+        "commits": 2,
+        "lines": 173,
         "path": "src/translateReadme.test.ts"
       },
       {
-        "commits": 1,
-        "lines": 140,
-        "path": "src/translateReadme.ts"
-      },
-      {
         "commits": 2,
-        "lines": 30,
-        "path": "tsconfig.json"
+        "lines": 158,
+        "path": "src/translateReadme.ts"
       }
     ]
   },
@@ -398,21 +483,28 @@
     "level": "low",
     "reason": "fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-01T02:13:34.298Z",
+  "generatedAt": "2026-10-20T21:35:38.251Z",
   "generatedFrom": {
-    "commit": "e0fd93e1984754317e96214bd4f4723c28406d4f"
+    "commit": "e920cf46935bf5e4ccc45c40fa5678821e8b6ce2"
   },
   "pairs": [
     {
+      "a": "CHANGELOG.md",
+      "b": "src/translateMarkdown.ts",
+      "either": 7,
+      "shared": 4,
+      "strength": 0.571429
+    },
+    {
       "a": "package-lock.json",
       "b": "package.json",
-      "either": 13,
-      "shared": 9,
-      "strength": 0.692308
+      "either": 12,
+      "shared": 7,
+      "strength": 0.583333
     }
   ],
   "parameters": {
-    "appliedChangesetLimit": 34.5,
+    "appliedChangesetLimit": 38.25,
     "changeset": 50,
     "changesetFraction": 0.25,
     "cohesionDrop": 0.2,
@@ -421,16 +513,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "both",
-    "headDate": "2026-09-30T18:08:40-07:00",
-    "inScopeFiles": 138,
+    "headDate": "2026-10-20T17:35:23-04:00",
+    "inScopeFiles": 153,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 28,
+    "qualifyingCommits": 27,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-04-04T01:08:40.000Z",
+    "since": "2026-04-23T21:35:23.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

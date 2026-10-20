@@ -306,7 +306,7 @@
           "path": ".npmignore"
         },
         {
-          "hash": "8963c7a0fdf37eeef7dbebadad31c1eea9f8be11ca4e83295093b9ba6fd5c62f",
+          "hash": "dcdab517efa2b5f39caeed83073bda989d015703738ec3af059ffcc18e673495",
           "path": "CHANGELOG.md"
         },
         {
@@ -334,7 +334,7 @@
           "path": "README.ja.md"
         },
         {
-          "hash": "9ffa75f7c10db64997c87489195ede3e3c74c5a5ad115819421601d0fca6beba",
+          "hash": "836d8006dab85daea46950e2fecc26295c510a64efa4e5454eae8a6a9fea084d",
           "path": "README.md"
         },
         {
@@ -366,11 +366,11 @@
           "path": "logo.png"
         },
         {
-          "hash": "82a93ac7880103304f5e53367431d414fff069c71962663d15af3f6d4d9039ae",
+          "hash": "b0fa2c2f2536e5af04a1ebbdfba7fd94c7738df9a6d0ee3eccc81ae9ee47d2a7",
           "path": "package-lock.json"
         },
         {
-          "hash": "386ff7a3b879daba1cb038f41fd1de33ff0fa8ac10a9da9385be01d8200b604f",
+          "hash": "3d24439f8795a65944c8b739f921bdae9959312357b19ff20f6868c5343423cd",
           "path": "package.json"
         },
         {
@@ -394,7 +394,7 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 5,
+      "dynamicReads": 6,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
       "dynamicWrites": 3,
@@ -402,7 +402,29 @@
       "externals": 0,
       "files": [
         {
-          "hash": "2dfed3e31050caa84a90d9666fb25329af040a3deae8905b4830be83d3ceca54",
+          "failurePaths": [
+            {
+              "kind": "catch",
+              "line": 57
+            }
+          ],
+          "hash": "8943ac23e6685c7fa33008a2250a36a6422a7c34382871c0c2659b9352e4e216",
+          "importsFiles": [
+            "src/pinCorrections.ts"
+          ],
+          "path": "scripts/pin-translation.mjs"
+        },
+        {
+          "failurePaths": [
+            {
+              "kind": "catch",
+              "line": 44
+            }
+          ],
+          "hash": "ad95ab74e12a87f9fe71a8d68a8eb1d2c2ddf67c01a63a104261f5006f3cbcbb",
+          "importsFiles": [
+            "src/survival.ts"
+          ],
           "path": "scripts/translate-all.mjs"
         },
         {
@@ -420,8 +442,27 @@
           "path": "scripts/translate-readme-batch.mjs"
         },
         {
-          "hash": "93a63e8cd1cc38282ded4e9701dce4e44f4d84a3f873de2cc2875287e85d07ab",
+          "failurePaths": [
+            {
+              "kind": "catch",
+              "line": 43
+            },
+            {
+              "kind": "catch",
+              "line": 75
+            },
+            {
+              "kind": "throw",
+              "line": 76
+            }
+          ],
+          "hash": "d5d7ab83ba715550fe7af348de7dc6902eaaf9369014496d3d6c494317963f16",
+          "importOrder": [
+            "src/translateMarkdown.ts",
+            "src/survival.ts"
+          ],
           "importsFiles": [
+            "src/survival.ts",
             "src/translateMarkdown.ts"
           ],
           "path": "scripts/translate-readme.mjs"
@@ -450,7 +491,7 @@
           "path": "site/astro.config.mjs"
         },
         {
-          "hash": "af5d4f54dca60686724d306eb58759fb25b6f5ba4d66559ab84a968112a184e5",
+          "hash": "0607a19c4f60b635244a906c7ad2424359b50e20c4a83bc140f202abce4a941e",
           "path": "site/package-lock.json"
         },
         {
@@ -574,65 +615,65 @@
             {
               "in": "readCacheFile",
               "kind": "catch",
-              "line": 58
+              "line": 68
             },
             {
               "in": "readCacheFile",
               "kind": "throw",
-              "line": 60
+              "line": 70
             },
             {
               "in": "readCacheFile",
               "kind": "catch",
-              "line": 65
+              "line": 75
             },
             {
               "in": "loadCache",
               "kind": "catch",
-              "line": 77
+              "line": 87
             },
             {
               "in": "withLock",
               "kind": "catch",
-              "line": 185
+              "line": 195
             },
             {
               "in": "writeFileAtomic",
               "kind": "catch",
-              "line": 207
+              "line": 217
             },
             {
               "in": "writeFileAtomic",
               "kind": "throw",
-              "line": 209
+              "line": 219
             },
             {
               "in": "retryOnWindows",
               "kind": "catch",
-              "line": 222
+              "line": 232
             },
             {
               "in": "retryOnWindows",
               "kind": "throw",
-              "line": 225
+              "line": 235
             },
             {
               "in": "fileAgeMs",
               "kind": "catch",
-              "line": 234
+              "line": 244
             },
             {
               "in": "removeFile",
               "kind": "catch",
-              "line": 242
+              "line": 252
             },
             {
               "in": "getCachePath",
               "kind": "throw",
-              "line": 499
+              "line": 509
             }
           ],
-          "hash": "a417e1d34a4aeacd27ed367c56e28367dfa1abda70ad76a8a61fc5c6c50d1ec5",
+          "hash": "e2643a34d6cea90443347e842fd07f76f78b6790f8099033aac88e2879eeacdb",
           "path": "src/cache.ts"
         },
         {
@@ -644,14 +685,43 @@
           "testFramework": "vitest"
         },
         {
+          "entry": "maskCodeSpans",
+          "entryRule": 4,
           "exports": [
             "codePlaceholder",
             "containsCodePlaceholder",
             "maskCodeSpans",
             "restoreCodeSpans"
           ],
-          "hash": "fc23f4c4adaed67c93f0bb9ea5cd31e4a5f7f81850ab35f9e7dc1011d516ad6c",
-          "path": "src/codeSpans.ts"
+          "hash": "e7b6f977316be3c5ce92499a97a2beef9d1d840905f90b1b879f59ca79b8be64",
+          "importsFiles": [
+            "src/protectedTerms.ts"
+          ],
+          "path": "src/codeSpans.ts",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 91,
+                  "name": "findProtectedSpans",
+                  "target": {
+                    "file": "src/protectedTerms.ts"
+                  }
+                },
+                {
+                  "line": 104,
+                  "name": "hashRules",
+                  "target": {
+                    "file": "src/protectedTerms.ts"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "maskCodeSpans"
+            }
+          ]
         },
         {
           "hash": "547671a18164f295066ab274e5c2fd2621c1a904b71a22c055ce834bbf69b37f",
@@ -665,8 +735,32 @@
           "exports": [
             "friendlyError"
           ],
-          "hash": "062dbf0a61f462262435ac976ce3692b3dae514c34ab8fb56acfad7766d58f13",
+          "hash": "2e443053fcf2714bb5ba6fccfd16b248f786e4aab4d23e05ff3ac64283b99245",
           "path": "src/errors.ts"
+        },
+        {
+          "hash": "b89cc1ce4c4a7472b063ef318685b7c10eff3b23011ba9f8f2743bf8b4dc7894",
+          "path": "src/fixtures/issue-44/ai-jam-sessions.README.5f8d1e2-parent.md"
+        },
+        {
+          "hash": "a7352a7d27534fb2f5a45b8c8aca493769bd35b020e74b0fc7c6dacb85556e17",
+          "path": "src/fixtures/issue-44/ai-jam-sessions.README.hi.5f8d1e2.md"
+        },
+        {
+          "hash": "0f7583c97f5311a399aabd8f7544bdce60673d3ce3013353baf3915d88dfb705",
+          "path": "src/fixtures/issue-44/ai-jam-sessions.README.zh.5f8d1e2-parent.md"
+        },
+        {
+          "hash": "9ec6047cdff42d9e99d620c72c3615931846199136b976a10722a65a60ba29a7",
+          "path": "src/fixtures/issue-44/ai-jam-sessions.polyglot-cache.5f8d1e2.json"
+        },
+        {
+          "hash": "1a8eaf9903d74e5929f9aae2eb3558abb8101766e57fff39c7673f5c6f18cb91",
+          "path": "src/fixtures/issue-44/xrpl-lab.README.7acc67c.md"
+        },
+        {
+          "hash": "4aae7dd1b5f8c2afe6ce1f3cbcdfc2488fdeca25b66604c8c3c8026f01a3b3a0",
+          "path": "src/fixtures/issue-44/xrpl-lab.README.hi.7acc67c.md"
         },
         {
           "hash": "9ab8a8fef80bdbb4582ab9d18ec35202ede8f01ef6f386f9080392680a1864a4",
@@ -710,22 +804,22 @@
           "failurePaths": [
             {
               "kind": "catch",
-              "line": 116
+              "line": 133
             },
             {
               "kind": "catch",
-              "line": 193
+              "line": 213
             },
             {
               "kind": "catch",
-              "line": 276
+              "line": 301
             },
             {
               "kind": "catch",
-              "line": 373
+              "line": 401
             }
           ],
-          "hash": "185174b72bbd69cdb2b8815e62788046a0d36fe616b18f3e335cc7bc1a178d57",
+          "hash": "59d77c5e1c84fd2ad4c77cc8862a7cc15515c64c97df60af3ba0dbbe32f6e3d1",
           "importOrder": [
             "src/translate.ts",
             "src/translateMarkdown.ts",
@@ -734,12 +828,14 @@
             "src/languages.ts",
             "src/ollama.ts",
             "src/version.ts",
-            "src/errors.ts"
+            "src/errors.ts",
+            "src/survival.ts"
           ],
           "importsFiles": [
             "src/errors.ts",
             "src/languages.ts",
             "src/ollama.ts",
+            "src/survival.ts",
             "src/translate.ts",
             "src/translateAll.ts",
             "src/translateMarkdown.ts",
@@ -747,7 +843,23 @@
             "src/version.ts"
           ],
           "path": "src/index.ts",
-          "sequences": []
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 40,
+                  "name": "formatLostSpans",
+                  "target": {
+                    "file": "src/survival.ts"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "lostSpanBlock"
+            }
+          ]
         },
         {
           "hash": "2b6d04fbf1eefdf01ec5e665ce39579d52f765bfcf4235f280bac2249a6b1c69",
@@ -929,6 +1041,391 @@
           "path": "src/ollama.ts"
         },
         {
+          "entry": "pinCorrections",
+          "entryRule": 3,
+          "exports": [
+            "pinCorrections"
+          ],
+          "failurePaths": [
+            {
+              "in": "pinCorrections",
+              "kind": "throw",
+              "line": 73
+            }
+          ],
+          "hash": "3ed74295e45ec41e48a2de0002dbccb86623db4c127b6b931726ecbaaf8102d8",
+          "importsFiles": [
+            "src/cache.ts",
+            "src/codeSpans.ts",
+            "src/errors.ts",
+            "src/pins.ts",
+            "src/protectedTerms.ts",
+            "src/survival.ts",
+            "src/translateMarkdown.ts"
+          ],
+          "path": "src/pinCorrections.ts",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 69,
+                  "name": "loadProtectedTerms",
+                  "target": {
+                    "file": "src/protectedTerms.ts"
+                  }
+                },
+                {
+                  "line": 71,
+                  "name": "alignUnits",
+                  "target": {
+                    "file": "src/translateMarkdown.ts"
+                  }
+                },
+                {
+                  "line": 81,
+                  "name": "loadCache",
+                  "target": {
+                    "file": "src/cache.ts"
+                  }
+                },
+                {
+                  "line": 82,
+                  "name": "loadPins",
+                  "target": {
+                    "file": "src/pins.ts"
+                  }
+                },
+                {
+                  "line": 83,
+                  "name": "getPinsPath",
+                  "target": {
+                    "file": "src/pins.ts"
+                  }
+                },
+                {
+                  "inner": [
+                    {
+                      "line": 51,
+                      "name": "canonicalWhitespace",
+                      "target": {
+                        "file": "src/cache.ts"
+                      },
+                      "via": "pinKey"
+                    }
+                  ],
+                  "line": 86,
+                  "name": "getPin",
+                  "target": {
+                    "file": "src/pins.ts"
+                  }
+                },
+                {
+                  "inner": [
+                    {
+                      "line": 91,
+                      "name": "findProtectedSpans",
+                      "target": {
+                        "file": "src/protectedTerms.ts"
+                      }
+                    },
+                    {
+                      "line": 104,
+                      "name": "hashRules",
+                      "target": {
+                        "file": "src/protectedTerms.ts"
+                      }
+                    }
+                  ],
+                  "line": 120,
+                  "name": "maskCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  },
+                  "via": "currentTranslation"
+                },
+                {
+                  "branch": "!/\\p{L}/u.test(masked)",
+                  "line": 121,
+                  "name": "restoreCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  },
+                  "via": "currentTranslation"
+                },
+                {
+                  "line": 123,
+                  "name": "cacheKey",
+                  "target": {
+                    "file": "src/cache.ts"
+                  },
+                  "via": "currentTranslation"
+                },
+                {
+                  "line": 123,
+                  "name": "getCached",
+                  "target": {
+                    "file": "src/cache.ts"
+                  },
+                  "via": "currentTranslation"
+                },
+                {
+                  "line": 123,
+                  "name": "getFuzzyCached",
+                  "target": {
+                    "file": "src/cache.ts"
+                  },
+                  "via": "currentTranslation"
+                },
+                {
+                  "line": 125,
+                  "name": "cleanTranslation",
+                  "target": {
+                    "file": "src/translateMarkdown.ts"
+                  },
+                  "via": "currentTranslation"
+                },
+                {
+                  "line": 127,
+                  "name": "restoreCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  },
+                  "via": "currentTranslation"
+                },
+                {
+                  "inner": [
+                    {
+                      "line": 51,
+                      "name": "canonicalWhitespace",
+                      "target": {
+                        "file": "src/cache.ts"
+                      },
+                      "via": "pinKey"
+                    }
+                  ],
+                  "line": 95,
+                  "name": "setPin",
+                  "target": {
+                    "file": "src/pins.ts"
+                  }
+                },
+                {
+                  "line": 96,
+                  "name": "segmentLabel",
+                  "target": {
+                    "file": "src/survival.ts"
+                  }
+                },
+                {
+                  "line": 100,
+                  "name": "savePins",
+                  "target": {
+                    "file": "src/pins.ts"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "pinCorrections"
+            },
+            {
+              "calls": [
+                {
+                  "line": 120,
+                  "name": "maskCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  }
+                },
+                {
+                  "branch": "!/\\p{L}/u.test(masked)",
+                  "line": 121,
+                  "name": "restoreCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  }
+                },
+                {
+                  "line": 123,
+                  "name": "cacheKey",
+                  "target": {
+                    "file": "src/cache.ts"
+                  }
+                },
+                {
+                  "line": 123,
+                  "name": "getCached",
+                  "target": {
+                    "file": "src/cache.ts"
+                  }
+                },
+                {
+                  "line": 123,
+                  "name": "getFuzzyCached",
+                  "target": {
+                    "file": "src/cache.ts"
+                  }
+                },
+                {
+                  "line": 125,
+                  "name": "cleanTranslation",
+                  "target": {
+                    "file": "src/translateMarkdown.ts"
+                  }
+                },
+                {
+                  "line": 127,
+                  "name": "restoreCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "currentTranslation"
+            }
+          ]
+        },
+        {
+          "hash": "4f1f9aeafe06fabbbe79d234ac469fe31ad0d5a8a4fe2a5f52580c245a26893d",
+          "importOrder": [
+            "src/translateMarkdown.ts",
+            "src/translate.ts",
+            "src/pins.ts",
+            "src/pinCorrections.ts",
+            "src/protectedTerms.ts",
+            "src/errors.ts"
+          ],
+          "importsFiles": [
+            "src/errors.ts",
+            "src/pinCorrections.ts",
+            "src/pins.ts",
+            "src/protectedTerms.ts",
+            "src/translate.ts",
+            "src/translateMarkdown.ts"
+          ],
+          "path": "src/pins.test.ts",
+          "testFramework": "vitest"
+        },
+        {
+          "entry": "pinKey",
+          "entryRule": 4,
+          "exports": [
+            "createPins",
+            "getPin",
+            "getPinsPath",
+            "loadPins",
+            "pinKey",
+            "savePins",
+            "setPin"
+          ],
+          "failurePaths": [
+            {
+              "in": "loadPins",
+              "kind": "catch",
+              "line": 80
+            },
+            {
+              "in": "loadPins",
+              "kind": "throw",
+              "line": 82
+            },
+            {
+              "in": "loadPins",
+              "kind": "catch",
+              "line": 87
+            },
+            {
+              "in": "loadPins",
+              "kind": "throw",
+              "line": 88
+            },
+            {
+              "in": "loadPins",
+              "kind": "throw",
+              "line": 92
+            },
+            {
+              "in": "loadPins",
+              "kind": "throw",
+              "line": 95
+            },
+            {
+              "in": "savePins",
+              "kind": "catch",
+              "line": 108
+            },
+            {
+              "in": "savePins",
+              "kind": "catch",
+              "line": 111
+            },
+            {
+              "in": "savePins",
+              "kind": "throw",
+              "line": 114
+            }
+          ],
+          "hash": "a30a51ea74cf10892d690007ade76e1fba98e7ac7999100574884b7a677b97bf",
+          "importsFiles": [
+            "src/cache.ts",
+            "src/errors.ts"
+          ],
+          "path": "src/pins.ts",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 51,
+                  "name": "canonicalWhitespace",
+                  "target": {
+                    "file": "src/cache.ts"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "pinKey"
+            },
+            {
+              "calls": [
+                {
+                  "line": 51,
+                  "name": "canonicalWhitespace",
+                  "target": {
+                    "file": "src/cache.ts"
+                  },
+                  "via": "pinKey"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "getPin"
+            },
+            {
+              "calls": [
+                {
+                  "line": 51,
+                  "name": "canonicalWhitespace",
+                  "target": {
+                    "file": "src/cache.ts"
+                  },
+                  "via": "pinKey"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "setPin"
+            }
+          ]
+        },
+        {
           "hash": "6d1dd1f8304464979b02352750d91ec690ab94354027a3ddc0584ccd919acde7",
           "importsFiles": [
             "src/polish.ts"
@@ -949,6 +1446,95 @@
           "sequences": []
         },
         {
+          "hash": "24cf586eb4d749ee2bdc111c95b660445afdd6f57a68835cf15e08746c8743ab",
+          "importOrder": [
+            "src/protectedTerms.ts",
+            "src/codeSpans.ts",
+            "src/errors.ts"
+          ],
+          "importsFiles": [
+            "src/codeSpans.ts",
+            "src/errors.ts",
+            "src/protectedTerms.ts"
+          ],
+          "path": "src/protectedTerms.test.ts",
+          "testFramework": "vitest"
+        },
+        {
+          "entry": "buildProtectedTerms",
+          "entryRule": 1,
+          "exports": [
+            "buildProtectedTerms",
+            "findProtectedSpans",
+            "getTermsPath",
+            "hashRules",
+            "loadProtectedTerms"
+          ],
+          "failurePaths": [
+            {
+              "in": "buildProtectedTerms",
+              "kind": "throw",
+              "line": 162
+            },
+            {
+              "in": "buildProtectedTerms",
+              "kind": "catch",
+              "line": 170
+            },
+            {
+              "in": "buildProtectedTerms",
+              "kind": "throw",
+              "line": 171
+            },
+            {
+              "in": "buildProtectedTerms",
+              "kind": "throw",
+              "line": 183
+            },
+            {
+              "in": "loadProtectedTerms",
+              "kind": "catch",
+              "line": 214
+            },
+            {
+              "in": "loadProtectedTerms",
+              "kind": "throw",
+              "line": 216
+            },
+            {
+              "in": "loadProtectedTerms",
+              "kind": "catch",
+              "line": 221
+            },
+            {
+              "in": "loadProtectedTerms",
+              "kind": "throw",
+              "line": 222
+            },
+            {
+              "in": "loadProtectedTerms",
+              "kind": "throw",
+              "line": 224
+            },
+            {
+              "in": "loadProtectedTerms",
+              "kind": "throw",
+              "line": 227
+            },
+            {
+              "in": "loadProtectedTerms",
+              "kind": "throw",
+              "line": 229
+            }
+          ],
+          "hash": "0b828b6aa6c355588cd29ae048f1f6832bdae12bc047f7e429bfc610e0ad6571",
+          "importsFiles": [
+            "src/errors.ts"
+          ],
+          "path": "src/protectedTerms.ts",
+          "sequences": []
+        },
+        {
           "hash": "24df3e630127502073eab0a98b3f0274e41204f1a212b3a4779069a2e0d89f1d",
           "importsFiles": [
             "src/semaphore.ts"
@@ -966,6 +1552,159 @@
           ],
           "hash": "67b580a5f9198fff2da01c60ae47750ef9df427299603ea35db4b9a57d31f680",
           "path": "src/semaphore.ts"
+        },
+        {
+          "hash": "0cf14fd2dc8d45cdfb224a4261291bab1511fc37218ae41f88c27b24a4d1735d",
+          "importOrder": [
+            "src/translateMarkdown.ts",
+            "src/survival.ts",
+            "src/protectedTerms.ts",
+            "src/errors.ts"
+          ],
+          "importsFiles": [
+            "src/errors.ts",
+            "src/protectedTerms.ts",
+            "src/survival.ts",
+            "src/translateMarkdown.ts"
+          ],
+          "path": "src/survival.test.ts",
+          "testFramework": "vitest"
+        },
+        {
+          "entry": "expectedSpans",
+          "entryRule": 4,
+          "exports": [
+            "cellNumbersMatch",
+            "checkCodeStructure",
+            "checkSegment",
+            "countCodeStructure",
+            "enforceLostSpanPolicy",
+            "expectedSpans",
+            "formatLostSpans",
+            "normalizeDigits",
+            "numberMultiset",
+            "parseLostSpanPolicy",
+            "segmentLabel"
+          ],
+          "failurePaths": [
+            {
+              "in": "enforceLostSpanPolicy",
+              "kind": "throw",
+              "line": 220
+            },
+            {
+              "in": "parseLostSpanPolicy",
+              "kind": "throw",
+              "line": 227
+            }
+          ],
+          "hash": "876360e3ba5cca775acd76bd3d7058b0a4914da8ab80deac5952e807c7c2ffa3",
+          "importsFiles": [
+            "src/codeSpans.ts",
+            "src/errors.ts",
+            "src/protectedTerms.ts"
+          ],
+          "path": "src/survival.ts",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "inner": [
+                    {
+                      "line": 91,
+                      "name": "findProtectedSpans",
+                      "target": {
+                        "file": "src/protectedTerms.ts"
+                      }
+                    },
+                    {
+                      "line": 104,
+                      "name": "hashRules",
+                      "target": {
+                        "file": "src/protectedTerms.ts"
+                      }
+                    }
+                  ],
+                  "line": 62,
+                  "name": "maskCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "expectedSpans"
+            },
+            {
+              "calls": [
+                {
+                  "line": 78,
+                  "name": "normalize",
+                  "target": null
+                },
+                {
+                  "line": 81,
+                  "name": "codePointAt",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "digitValue"
+            },
+            {
+              "calls": [
+                {
+                  "line": 62,
+                  "name": "maskCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  },
+                  "via": "expectedSpans"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "checkSegment"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "CODE_SPAN_PATTERN",
+                  "passed": true,
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "countCodeStructure"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "CODE_SPAN_PATTERN",
+                  "passed": true,
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  },
+                  "via": "countCodeStructure"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "checkCodeStructure"
+            }
+          ]
         },
         {
           "hash": "3ad7d392959cfc8891c06a9e7d8f28e7741de7f86c7eaec78697574d485f75d2",
@@ -1256,8 +1995,14 @@
           ]
         },
         {
-          "hash": "966e4b2c2da3df2e8700b81179517de4b96263423c9a446f4364dc43157cbadd",
+          "hash": "ce847b8c0ced6e08cb894d33c9a1cb848dbaa05069e67eae1496b34fb37e1bef",
+          "importOrder": [
+            "src/translateAll.ts",
+            "src/translateMarkdown.ts",
+            "src/survival.ts"
+          ],
           "importsFiles": [
+            "src/survival.ts",
             "src/translateAll.ts",
             "src/translateMarkdown.ts"
           ],
@@ -1276,12 +2021,15 @@
             {
               "in": "translateAll",
               "kind": "catch",
-              "line": 180
+              "line": 198
             }
           ],
-          "hash": "14e289d603c0c99c5029fc01d48830c58eed84e831b6be4bb22a4bbedef36fd5",
+          "hash": "94e538fc92f6deab0c62a123c17d16b85ed5dd06e3adf4606be1aba9181fdd5b",
           "importsFiles": [
+            "src/pins.ts",
+            "src/protectedTerms.ts",
             "src/semaphore.ts",
+            "src/survival.ts",
             "src/translateMarkdown.ts"
           ],
           "path": "src/translateAll.ts",
@@ -1289,7 +2037,7 @@
             {
               "calls": [
                 {
-                  "line": 157,
+                  "line": 171,
                   "name": "acquire",
                   "receiver": "Semaphore",
                   "target": {
@@ -1299,49 +2047,78 @@
                 {
                   "inner": [
                     {
-                      "line": 322,
+                      "line": 487,
                       "name": "resolveLanguage",
                       "target": {
                         "file": "src/languages.ts"
                       }
                     },
                     {
-                      "line": 350,
+                      "line": 516,
+                      "name": "loadProtectedTerms",
+                      "target": {
+                        "file": "src/protectedTerms.ts"
+                      }
+                    },
+                    {
+                      "line": 517,
+                      "name": "loadPins",
+                      "target": {
+                        "file": "src/pins.ts"
+                      }
+                    },
+                    {
+                      "line": 517,
+                      "name": "createPins",
+                      "target": {
+                        "file": "src/pins.ts"
+                      }
+                    },
+                    {
+                      "line": 522,
                       "name": "loadCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 354,
+                      "line": 526,
                       "name": "clearCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 355,
+                      "line": 527,
                       "name": "saveCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 357,
+                      "line": 529,
                       "name": "pruneCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 360,
+                      "line": 532,
                       "name": "createCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 402,
+                      "line": 580,
+                      "name": "getPin",
+                      "target": {
+                        "file": "src/pins.ts"
+                      },
+                      "via": "enqueue"
+                    },
+                    {
+                      "line": 586,
                       "name": "maskCodeSpans",
                       "target": {
                         "file": "src/codeSpans.ts"
@@ -1349,51 +2126,24 @@
                       "via": "enqueue"
                     },
                     {
-                      "line": 403,
-                      "name": "cacheKey",
+                      "line": 586,
+                      "name": "DEFAULT_PROTECTED_TERMS",
+                      "passed": true,
                       "target": {
-                        "file": "src/cache.ts"
+                        "file": "src/protectedTerms.ts"
                       },
                       "via": "enqueue"
-                    },
-                    {
-                      "line": 404,
-                      "name": "getCached",
-                      "target": {
-                        "file": "src/cache.ts"
-                      },
-                      "via": "enqueue"
-                    },
-                    {
-                      "line": 406,
-                      "name": "getFuzzyCached",
-                      "target": {
-                        "file": "src/cache.ts"
-                      },
-                      "via": "enqueue"
-                    },
-                    {
-                      "line": 477,
-                      "name": "onProgress",
-                      "target": null
-                    },
-                    {
-                      "line": 485,
-                      "name": "translateBatch",
-                      "target": {
-                        "file": "src/translate.ts"
-                      }
                     }
                   ],
                   "innerTruncated": true,
-                  "line": 165,
+                  "line": 182,
                   "name": "translateMarkdown",
                   "target": {
                     "file": "src/translateMarkdown.ts"
                   }
                 },
                 {
-                  "line": 178,
+                  "line": 196,
                   "name": "onProgress",
                   "target": null
                 }
@@ -1406,12 +2156,16 @@
           ]
         },
         {
-          "hash": "aa022a74e811fdfe18ed09b17dcbabd63990f728eadd674df46e94939c9669cd",
+          "hash": "71ec78f48cb83e7744965c864fad46f496d97c9bf41c4caba4c9fc4884fc4714",
           "importOrder": [
             "src/translateMarkdown.ts",
-            "src/translate.ts"
+            "src/translate.ts",
+            "src/codeSpans.ts",
+            "src/protectedTerms.ts"
           ],
           "importsFiles": [
+            "src/codeSpans.ts",
+            "src/protectedTerms.ts",
             "src/translate.ts",
             "src/translateMarkdown.ts"
           ],
@@ -1445,6 +2199,29 @@
           "testFramework": "vitest"
         },
         {
+          "hash": "8800576f40b31b642288ae0dc39485ef6b84185fa7836260d0a301d997c45936",
+          "importOrder": [
+            "src/translateMarkdown.ts",
+            "src/translate.ts",
+            "src/cache.ts",
+            "src/codeSpans.ts",
+            "src/protectedTerms.ts",
+            "src/pins.ts",
+            "src/survival.ts"
+          ],
+          "importsFiles": [
+            "src/cache.ts",
+            "src/codeSpans.ts",
+            "src/pins.ts",
+            "src/protectedTerms.ts",
+            "src/survival.ts",
+            "src/translate.ts",
+            "src/translateMarkdown.ts"
+          ],
+          "path": "src/translateMarkdown.protected.test.ts",
+          "testFramework": "vitest"
+        },
+        {
           "hash": "8fc1c4e3fb1083c16b16545f21aa92623962e7d9feaa69b4f7b623ba33b20166",
           "importOrder": [
             "src/translateMarkdown.ts",
@@ -1469,7 +2246,10 @@
           "entry": "translateMarkdown",
           "entryRule": 3,
           "exports": [
+            "alignUnits",
+            "checkSurvival",
             "cleanTranslation",
+            "collectUnits",
             "extractTaglineText",
             "isTranslatableCell",
             "parseTable",
@@ -1482,25 +2262,28 @@
             {
               "in": "translateMarkdown",
               "kind": "throw",
-              "line": 324
+              "line": 489
             },
             {
               "in": "translateMarkdown",
               "kind": "throw",
-              "line": 334
+              "line": 499
             },
             {
               "in": "translateMarkdown",
               "kind": "catch",
-              "line": 533
+              "line": 702
             }
           ],
-          "hash": "40570b0fa694cef157b7e543d58f9d1fda7f0dbfe87915709291a7c01ee32873",
+          "hash": "32c9a9fe3130146225429c8592ddc4b6e98666bbcb08e3ee019ef042f6e4801d",
           "importsFiles": [
             "src/cache.ts",
             "src/codeSpans.ts",
             "src/errors.ts",
             "src/languages.ts",
+            "src/pins.ts",
+            "src/protectedTerms.ts",
+            "src/survival.ts",
             "src/translate.ts",
             "src/validate.ts"
           ],
@@ -1509,49 +2292,141 @@
             {
               "calls": [
                 {
-                  "line": 322,
+                  "line": 429,
+                  "name": "checkSegment",
+                  "target": {
+                    "file": "src/survival.ts"
+                  }
+                },
+                {
+                  "line": 434,
+                  "name": "expectedSpans",
+                  "target": {
+                    "file": "src/survival.ts"
+                  }
+                },
+                {
+                  "line": 434,
+                  "name": "DEFAULT_PROTECTED_TERMS",
+                  "passed": true,
+                  "target": {
+                    "file": "src/protectedTerms.ts"
+                  }
+                },
+                {
+                  "line": 445,
+                  "name": "checkCodeStructure",
+                  "target": {
+                    "file": "src/survival.ts"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "checkSurvival"
+            },
+            {
+              "calls": [
+                {
+                  "line": 487,
                   "name": "resolveLanguage",
                   "target": {
                     "file": "src/languages.ts"
                   }
                 },
                 {
-                  "line": 350,
+                  "line": 516,
+                  "name": "loadProtectedTerms",
+                  "target": {
+                    "file": "src/protectedTerms.ts"
+                  }
+                },
+                {
+                  "line": 517,
+                  "name": "loadPins",
+                  "target": {
+                    "file": "src/pins.ts"
+                  }
+                },
+                {
+                  "line": 517,
+                  "name": "createPins",
+                  "target": {
+                    "file": "src/pins.ts"
+                  }
+                },
+                {
+                  "line": 522,
                   "name": "loadCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 354,
+                  "line": 526,
                   "name": "clearCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 355,
+                  "line": 527,
                   "name": "saveCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 357,
+                  "line": 529,
                   "name": "pruneCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 360,
+                  "line": 532,
                   "name": "createCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 402,
+                  "inner": [
+                    {
+                      "line": 51,
+                      "name": "canonicalWhitespace",
+                      "target": {
+                        "file": "src/cache.ts"
+                      },
+                      "via": "pinKey"
+                    }
+                  ],
+                  "line": 580,
+                  "name": "getPin",
+                  "target": {
+                    "file": "src/pins.ts"
+                  },
+                  "via": "enqueue"
+                },
+                {
+                  "inner": [
+                    {
+                      "line": 91,
+                      "name": "findProtectedSpans",
+                      "target": {
+                        "file": "src/protectedTerms.ts"
+                      }
+                    },
+                    {
+                      "line": 104,
+                      "name": "hashRules",
+                      "target": {
+                        "file": "src/protectedTerms.ts"
+                      }
+                    }
+                  ],
+                  "line": 586,
                   "name": "maskCodeSpans",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -1559,7 +2434,16 @@
                   "via": "enqueue"
                 },
                 {
-                  "line": 403,
+                  "line": 586,
+                  "name": "DEFAULT_PROTECTED_TERMS",
+                  "passed": true,
+                  "target": {
+                    "file": "src/protectedTerms.ts"
+                  },
+                  "via": "enqueue"
+                },
+                {
+                  "line": 587,
                   "name": "cacheKey",
                   "target": {
                     "file": "src/cache.ts"
@@ -1567,7 +2451,16 @@
                   "via": "enqueue"
                 },
                 {
-                  "line": 404,
+                  "branch": "!/\\p{L}/u.test(masked)",
+                  "line": 592,
+                  "name": "restoreCodeSpans",
+                  "target": {
+                    "file": "src/codeSpans.ts"
+                  },
+                  "via": "enqueue"
+                },
+                {
+                  "line": 596,
                   "name": "getCached",
                   "target": {
                     "file": "src/cache.ts"
@@ -1575,7 +2468,7 @@
                   "via": "enqueue"
                 },
                 {
-                  "line": 406,
+                  "line": 598,
                   "name": "getFuzzyCached",
                   "target": {
                     "file": "src/cache.ts"
@@ -1583,7 +2476,7 @@
                   "via": "enqueue"
                 },
                 {
-                  "line": 477,
+                  "line": 642,
                   "name": "onProgress",
                   "target": null
                 },
@@ -1674,62 +2567,74 @@
                       }
                     }
                   ],
-                  "line": 485,
+                  "line": 650,
                   "name": "translateBatch",
                   "target": {
                     "file": "src/translate.ts"
                   }
                 },
                 {
-                  "line": 500,
-                  "name": "cacheKey",
-                  "target": {
-                    "file": "src/cache.ts"
-                  }
-                },
-                {
-                  "line": 501,
+                  "line": 666,
                   "name": "setCached",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 508,
+                  "line": 673,
                   "name": "onProgress",
                   "target": null
                 },
                 {
-                  "line": 527,
+                  "line": 696,
                   "name": "validateTranslation",
                   "target": {
                     "file": "src/validate.ts"
                   }
                 },
                 {
-                  "line": 546,
+                  "line": 718,
                   "name": "restoreCodeSpans",
                   "target": {
                     "file": "src/codeSpans.ts"
                   }
                 },
                 {
-                  "line": 609,
+                  "line": 782,
                   "name": "saveCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
+                },
+                {
+                  "inner": [
+                    {
+                      "line": 62,
+                      "name": "maskCodeSpans",
+                      "target": {
+                        "file": "src/codeSpans.ts"
+                      },
+                      "via": "expectedSpans"
+                    }
+                  ],
+                  "line": 429,
+                  "name": "checkSegment",
+                  "target": {
+                    "file": "src/survival.ts"
+                  },
+                  "via": "checkSurvival"
                 }
               ],
               "exported": true,
               "invokedAtTopLevel": false,
               "isDefaultExport": false,
-              "name": "translateMarkdown"
+              "name": "translateMarkdown",
+              "truncated": true
             }
           ]
         },
         {
-          "hash": "50fe944032c3ac1306431f19d834a4b9be21e699c7e68940e5b340e4f2166ff7",
+          "hash": "d94e12c9bfb8f8c1f7a7ee9187aa2d8496842af5fd488f88f8fe38f8cca9c1d1",
           "importsFiles": [
             "src/translateAll.ts",
             "src/translateReadme.ts"
@@ -1741,12 +2646,18 @@
           "exports": [
             "translateReadme"
           ],
-          "hash": "92f1a9b459109d7e41dc0ab82630c9477b42da5a2326fe5d92c4c92e31830038",
+          "hash": "4da0744994fccad49df9dbef81add39ebf4f08ab34c1d273cfe43d149c1814e8",
           "importOrder": [
             "src/translateAll.ts",
-            "src/translate.ts"
+            "src/translate.ts",
+            "src/protectedTerms.ts",
+            "src/pins.ts",
+            "src/survival.ts"
           ],
           "importsFiles": [
+            "src/pins.ts",
+            "src/protectedTerms.ts",
+            "src/survival.ts",
             "src/translate.ts",
             "src/translateAll.ts"
           ],
@@ -1810,20 +2721,20 @@
       "origin": "authored",
       "outsidePlaces": [
         {
-          "reads": 6,
+          "reads": 10,
           "where": [
             "caller"
           ],
-          "writes": 5
+          "writes": 7
         }
       ],
-      "outsideReads": 6,
-      "outsideWrites": 5,
+      "outsideReads": 10,
+      "outsideWrites": 7,
       "role": "code",
       "testRunners": [
         "vitest"
       ],
-      "testedBy": 20,
+      "testedBy": 24,
       "unresolvedSites": 0
     }
   ],
@@ -1990,7 +2901,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 36
+          "files": 44
         }
       ],
       "readers": [],
@@ -2070,6 +2981,13 @@
         {
           "job": "quality-gates",
           "matched": true,
+          "path": "src/pins.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "quality-gates",
+          "matched": true,
           "path": "src/polish.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -2077,7 +2995,21 @@
         {
           "job": "quality-gates",
           "matched": true,
+          "path": "src/protectedTerms.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "quality-gates",
+          "matched": true,
           "path": "src/semaphore.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "quality-gates",
+          "matched": true,
+          "path": "src/survival.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
         },
@@ -2119,6 +3051,13 @@
         {
           "job": "quality-gates",
           "matched": true,
+          "path": "src/translateMarkdown.protected.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "quality-gates",
+          "matched": true,
           "path": "src/translateMarkdown.roundtrip.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -2152,7 +3091,7 @@
           "via": "vitest vitest.config.ts"
         }
       ],
-      "runsCount": 22,
+      "runsCount": 26,
       "secrets": [],
       "sends": {
         "deploysPages": false,
@@ -2169,7 +3108,7 @@
         {
           "config": "vitest.config.ts",
           "coverage": true,
-          "files": 21,
+          "files": 25,
           "job": "quality-gates",
           "junit": true,
           "runner": "vitest",
@@ -2499,7 +3438,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 36
+          "files": 44
         }
       ],
       "readers": [],
@@ -2579,6 +3518,13 @@
         {
           "job": "publish",
           "matched": true,
+          "path": "src/pins.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "publish",
+          "matched": true,
           "path": "src/polish.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -2586,7 +3532,21 @@
         {
           "job": "publish",
           "matched": true,
+          "path": "src/protectedTerms.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "publish",
+          "matched": true,
           "path": "src/semaphore.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "publish",
+          "matched": true,
+          "path": "src/survival.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
         },
@@ -2628,6 +3588,13 @@
         {
           "job": "publish",
           "matched": true,
+          "path": "src/translateMarkdown.protected.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "publish",
+          "matched": true,
           "path": "src/translateMarkdown.roundtrip.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -2661,7 +3628,7 @@
           "via": "vitest vitest.config.ts"
         }
       ],
-      "runsCount": 22,
+      "runsCount": 26,
       "secrets": [],
       "sends": {
         "deploysPages": false,
@@ -2686,7 +3653,7 @@
       "tests": [
         {
           "config": "vitest.config.ts",
-          "files": 21,
+          "files": 25,
           "job": "publish",
           "runner": "vitest",
           "step": "4",
@@ -2728,7 +3695,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 15
+          "files": 19
         }
       ],
       "readers": [],
@@ -2758,11 +3725,27 @@
           "runKind": "executes"
         },
         {
+          "path": "src/pinCorrections.ts",
+          "runKind": "executes"
+        },
+        {
+          "path": "src/pins.ts",
+          "runKind": "executes"
+        },
+        {
           "path": "src/polish.ts",
           "runKind": "executes"
         },
         {
+          "path": "src/protectedTerms.ts",
+          "runKind": "executes"
+        },
+        {
           "path": "src/semaphore.ts",
+          "runKind": "executes"
+        },
+        {
+          "path": "src/survival.ts",
           "runKind": "executes"
         },
         {
@@ -2782,7 +3765,7 @@
           "runKind": "executes"
         }
       ],
-      "runsCount": 12,
+      "runsCount": 16,
       "secrets": [],
       "sends": {
         "deploysPages": false,
@@ -2814,7 +3797,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 15
+          "files": 18
         }
       ],
       "readers": [],
@@ -2851,8 +3834,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "e0fd93e1984754317e96214bd4f4723c28406d4f",
-    "tracked": 133
+    "commit": "e920cf46935bf5e4ccc45c40fa5678821e8b6ce2",
+    "tracked": 148
   },
   "landings": [
     {
@@ -3006,11 +3989,41 @@
       ],
       "target": "src/cache.ts",
       "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "src/pins.test.ts",
+          "call": "readFileSync",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "src/fixtures/issue-44/ai-jam-sessions.README.hi.5f8d1e2.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "src/pins.test.ts",
+          "call": "readFileSync",
+          "confidence": "ast",
+          "fromTests": true
+        },
+        {
+          "by": "src/translateMarkdown.protected.test.ts",
+          "call": "readFileSync",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "src/fixtures/issue-44/ai-jam-sessions.polyglot-cache.5f8d1e2.json",
+      "writers": []
     }
   ],
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 21,
+  "testFiles": 25,
   "unassigned": []
 }

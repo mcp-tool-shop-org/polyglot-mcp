@@ -19,36 +19,72 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 0,
-      "changed": 3,
+      "added": 15,
+      "changed": 17,
       "moved": 0,
-      "parts": 2,
+      "parts": 4,
       "removed": 0
     },
     "items": [
       {
         "kind": "door",
-        "sentence": "CI's pull request trigger no longer names `.github/workflows/**`, `atlas/**`, `codecov.yml`, `package-lock.json`, `package.json`, `site/astro.config.mjs`, `site/package-lock.json`, `site/package.json`, `src/**` and `tsconfig.json`.",
+        "sentence": "CI now also runs src/pins.test.ts, src/protectedTerms.test.ts, src/survival.test.ts and 1 more.",
         "subjects": [
-          ".github/workflows/ci.yml"
+          ".github/workflows/ci.yml",
+          "src/pins.test.ts",
+          "src/protectedTerms.test.ts",
+          "src/survival.test.ts",
+          "src/translateMarkdown.protected.test.ts"
         ]
       },
       {
         "kind": "door",
-        "sentence": "Deploy site to GitHub Pages now also starts on a pull request to main touching 2 paths.",
+        "sentence": "Publish to npm now also runs src/pins.test.ts, src/protectedTerms.test.ts, src/survival.test.ts and 1 more.",
         "subjects": [
-          ".github/workflows/pages.yml"
+          ".github/workflows/publish.yml",
+          "src/pins.test.ts",
+          "src/protectedTerms.test.ts",
+          "src/survival.test.ts",
+          "src/translateMarkdown.protected.test.ts"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "@mcptoolshop/polyglot-mcp now also runs src/pinCorrections.ts, src/pins.ts, src/protectedTerms.ts and 1 more.",
+        "subjects": [
+          "package.json",
+          "src/pinCorrections.ts",
+          "src/pins.ts",
+          "src/protectedTerms.ts",
+          "src/survival.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "src/fixtures/issue-44/ai-jam-sessions.README.hi.5f8d1e2.md is now read by src/pins.test.ts.",
+        "subjects": [
+          "src/fixtures/issue-44/ai-jam-sessions.README.hi.5f8d1e2.md",
+          "src/pins.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "src/fixtures/issue-44/ai-jam-sessions.polyglot-cache.5f8d1e2.json is now read by src/pins.test.ts and src/translateMarkdown.protected.test.ts.",
+        "subjects": [
+          "src/fixtures/issue-44/ai-jam-sessions.polyglot-cache.5f8d1e2.json",
+          "src/pins.test.ts",
+          "src/translateMarkdown.protected.test.ts"
         ]
       },
       {
         "kind": "counts",
-        "sentence": "3 files changed content, across 2 parts.",
+        "sentence": "15 files added and 17 changed content, across 4 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "c3305f2f8dbf38151adbf61c4437be0bf0ab5235",
-      "generatedAt": "2026-09-30T20:11:27.616Z"
+      "commit": "e0fd93e1984754317e96214bd4f4723c28406d4f",
+      "generatedAt": "2026-10-01T02:13:34.298Z"
     },
     "unchanged": false
   },
@@ -57,9 +93,9 @@
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "e0fd93e1984754317e96214bd4f4723c28406d4f",
+  "commit": "e920cf46935bf5e4ccc45c40fa5678821e8b6ce2",
   "defaultBranch": "main",
-  "derived": "7 parts, mostly Markdown (71 files); code in TypeScript (39), JavaScript (4), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
+  "derived": "7 parts, mostly Markdown (76 files); code in TypeScript (47), JavaScript (5), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
     {
       "builds": [
@@ -77,7 +113,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 36
+          "files": 44
         }
       ],
       "runs": [
@@ -90,21 +126,25 @@
         "src/integration.test.ts",
         "src/languages.test.ts",
         "src/ollama.test.ts",
+        "src/pins.test.ts",
         "src/polish.test.ts",
+        "src/protectedTerms.test.ts",
         "src/semaphore.test.ts",
+        "src/survival.test.ts",
         "src/translate.test.ts",
         "src/translateAll.test.ts",
         "src/translateMarkdown.cache.test.ts",
         "src/translateMarkdown.codespans.test.ts",
         "src/translateMarkdown.concurrency.test.ts",
+        "src/translateMarkdown.protected.test.ts",
         "src/translateMarkdown.roundtrip.test.ts",
         "src/translateMarkdown.test.ts",
         "src/translateReadme.test.ts",
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 21,
-      "runsMore": 18,
+      "runsCount": 25,
+      "runsMore": 22,
       "sends": [
         "uploads coverage to Codecov"
       ],
@@ -163,7 +203,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 36
+          "files": 44
         }
       ],
       "runs": [
@@ -176,21 +216,25 @@
         "src/integration.test.ts",
         "src/languages.test.ts",
         "src/ollama.test.ts",
+        "src/pins.test.ts",
         "src/polish.test.ts",
+        "src/protectedTerms.test.ts",
         "src/semaphore.test.ts",
+        "src/survival.test.ts",
         "src/translate.test.ts",
         "src/translateAll.test.ts",
         "src/translateMarkdown.cache.test.ts",
         "src/translateMarkdown.codespans.test.ts",
         "src/translateMarkdown.concurrency.test.ts",
+        "src/translateMarkdown.protected.test.ts",
         "src/translateMarkdown.roundtrip.test.ts",
         "src/translateMarkdown.test.ts",
         "src/translateReadme.test.ts",
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 21,
-      "runsMore": 18,
+      "runsCount": 25,
+      "runsMore": 22,
       "sends": [
         "publishes to npm"
       ],
@@ -214,7 +258,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 15
+          "files": 19
         }
       ],
       "runs": [
@@ -224,15 +268,19 @@
         "src/glossary.ts",
         "src/languages.ts",
         "src/ollama.ts",
+        "src/pinCorrections.ts",
+        "src/pins.ts",
         "src/polish.ts",
+        "src/protectedTerms.ts",
         "src/semaphore.ts",
+        "src/survival.ts",
         "src/translate.ts",
         "src/translateAll.ts",
         "src/translateMarkdown.ts",
         "src/validate.ts"
       ],
-      "runsCount": 12,
-      "runsMore": 9,
+      "runsCount": 16,
+      "runsMore": 13,
       "sends": [],
       "stages": [],
       "triggers": []
@@ -251,7 +299,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 15
+          "files": 18
         }
       ],
       "runs": [
@@ -270,10 +318,10 @@
   "edges": [],
   "engine": "1.24.0",
   "generated": [],
-  "generatedAt": "2026-10-01T02:13:34.298Z",
+  "generatedAt": "2026-10-20T21:35:38.251Z",
   "limits": [
-    "3 writes and 5 reads use paths built at run time and are not named here.",
-    "5 writes and 6 reads go to a path their caller passes, not to this repository.",
+    "3 writes and 6 reads use paths built at run time and are not named here.",
+    "7 writes and 10 reads go to a path their caller passes, not to this repository.",
     "4 commands are built at run time and not followed, 2 of them in tests.",
     "Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions."
   ],
@@ -304,11 +352,11 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 21,
+  "testFiles": 25,
   "testedBy": {
     "scripts": 0,
     "site": 0,
-    "src": 20
+    "src": 24
   },
   "unnamedWrites": 3,
   "unread": [],
