@@ -23,7 +23,13 @@ import { PolyglotError } from "./errors.js";
 import { DEFAULT_PROTECTED_TERMS, type ProtectedTermSet } from "./protectedTerms.js";
 
 /** What a lost span was. */
-export type LostSpanKind = MaskedSpanKind | "number" | "code-span-count" | "fence-count";
+export type LostSpanKind =
+  | MaskedSpanKind
+  | "number"
+  | "code-span-count"
+  | "fence-count"
+  | "link"
+  | "placeholder";
 
 export interface LostSpan {
   /** Target language code. */
@@ -107,6 +113,360 @@ export function cellNumbersMatch(source: string, translation: string): boolean {
   return a.length === b.length && a.every((n, i) => n === b[i]);
 }
 
+// ─── Links & placeholder leakage ──────────────────────────────────
+
+/**
+ * CommonMark reference-label normalisation: trim, collapse internal whitespace
+ * runs to a single space, and lowercase.
+ */
+export function normalizeRefLabel(label: string): string {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * Replace bracket, paren, angle, and placeholder characters inside inline code
+ * spans with `_` so link and placeholder scanners skip inline code while still
+ * preserving non-empty link text when a link wraps an inline code span
+ * (e.g. ``[`foo`](https://example.com)``).
+ */
+function maskInlineCodeForScan(line: string): string {
+  return line.replace(CODE_SPAN_PATTERN, (m) => m.replace(/[\[\]()⟦⟧<>]/g, "_"));
+}
+
+/**
+ * Yield lines of `markdown` that lie outside fenced code blocks (` ``` `) and
+ * HTML comments (`<!-- … -->`), with trailing `\r` stripped.
+ */
+function nonCodeLines(markdown: string): string[] {
+  const out: string[] = [];
+  let inFence = false;
+  let inComment = false;
+  for (const rawLine of markdown.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (/^```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (inComment) {
+      if (line.includes("-->")) inComment = false;
+      continue;
+    }
+    if (/^<!--/.test(line.trim())) {
+      if (!line.includes("-->")) inComment = true;
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+const REF_DEF_LINE_PATTERN =
+  /^[ \t>]*(?:【[^】\n]{1,8}】[ \t]*)?\[([^\][\n]+)\]:[ \t]*(?:<([^<>\s]+)>|([^\s<>]+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$/;
+
+/**
+ * Parse a reference link definition line (`[label]: target` with optional
+ * title) in linear time without backtracking regexes.
+ */
+function parseRefDefinitionLine(line: string): { label: string; target: string } | null {
+  const m = REF_DEF_LINE_PATTERN.exec(line);
+  if (!m) return null;
+  const label = normalizeRefLabel(m[1]);
+  const target = m[2] ?? m[3];
+  return label && target ? { label, target } : null;
+}
+
+/**
+ * Extract all reference link definitions (`[label]: target`) from a Markdown
+ * document, skipping fenced code blocks, HTML comments, and inline code spans.
+ * Labels are normalised via `normalizeRefLabel`; first definition wins.
+ */
+export function extractRefDefinitions(markdown: string): Map<string, string> {
+  const defs = new Map<string, string>();
+  for (const line of nonCodeLines(markdown)) {
+    const def = parseRefDefinitionLine(maskInlineCodeForScan(line));
+    if (def && !defs.has(def.label)) {
+      defs.set(def.label, def.target);
+    }
+  }
+  return defs;
+}
+
+/**
+ * Linear-time parser for an inline link destination `(target)` or
+ * `(target "title")` starting at `openParenIdx` (`line[openParenIdx] === "("`).
+ * Supports `<target>` and balanced parentheses in bare URLs
+ * (`https://en.wikipedia.org/wiki/Foo_(bar)`). Records `state.deadFrom` when an
+ * unclosed `(` reaches end-of-line so long unclosed runs of `(` are scanned
+ * at most once.
+ */
+function parseInlineTarget(
+  line: string,
+  openParenIdx: number,
+  state: { deadFrom: number },
+): { target: string; endIdx: number } | null {
+  const L = line.length;
+  if (openParenIdx >= state.deadFrom) return null;
+
+  let k = openParenIdx + 1;
+  while (k < L && (line[k] === " " || line[k] === "\t")) k++;
+  const start = k;
+  let depth = 1;
+  while (k < L && line[k] !== " " && line[k] !== "\t" && line[k] !== "[" && line[k] !== "]") {
+    if (line[k] === "(") {
+      depth++;
+    } else if (line[k] === ")") {
+      depth--;
+      if (depth === 0) {
+        const raw = line.slice(start, k);
+        const target = raw.startsWith("<") && raw.endsWith(">") ? raw.slice(1, -1) : raw;
+        return { target, endIdx: k };
+      }
+    }
+    k++;
+  }
+  if (k >= L && depth > 0) {
+    state.deadFrom = openParenIdx;
+    return null;
+  }
+  if (depth !== 1 || k === start) return null;
+  const raw = line.slice(start, k);
+  const target = raw.startsWith("<") && raw.endsWith(">") ? raw.slice(1, -1) : raw;
+
+  while (k < L && (line[k] === " " || line[k] === "\t")) k++;
+  if (k < L && (line[k] === '"' || line[k] === "'" || line[k] === "(")) {
+    const closeQuote = line[k] === "(" ? ")" : line[k];
+    const closeIdx = line.indexOf(closeQuote, k + 1);
+    if (closeIdx === -1) return null;
+    k = closeIdx + 1;
+    while (k < L && (line[k] === " " || line[k] === "\t")) k++;
+  }
+  return k < L && line[k] === ")" ? { target, endIdx: k } : null;
+}
+
+export interface ExtractedLinks {
+  /** Non-anchor link targets (external URLs, relative paths, images) in order. */
+  nonAnchorTargets: string[];
+  /** Number of in-page `#slug` anchor links. */
+  anchorCount: number;
+}
+
+/**
+ * Extract all Markdown links (inline links, images, resolved reference links,
+ * and reference definitions) from `markdown` in linear time, skipping fenced
+ * code blocks, HTML comments, and inline code spans.
+ */
+export function extractLinks(
+  markdown: string,
+  defs?: ReadonlyMap<string, string>,
+): ExtractedLinks {
+  const resolvedDefs = defs ?? extractRefDefinitions(markdown);
+  const nonAnchorTargets: string[] = [];
+  let anchorCount = 0;
+
+  const recordTarget = (target: string): void => {
+    if (target.startsWith("#")) anchorCount++;
+    else nonAnchorTargets.push(target);
+  };
+
+  for (const raw of nonCodeLines(markdown)) {
+    const line = maskInlineCodeForScan(raw);
+    const def = parseRefDefinitionLine(line);
+    if (def) {
+      recordTarget(def.target);
+      continue;
+    }
+
+    // Pass 1: pair every unescaped '[' and ']' in O(L) with a stack.
+    const L = line.length;
+    const closeBracketFor = new Int32Array(L).fill(-1);
+    const hasInnerBracket = new Uint8Array(L);
+    const stack: number[] = [];
+
+    for (let i = 0; i < L; i++) {
+      if (line[i] === "\\" && i + 1 < L) {
+        i++;
+        continue;
+      }
+      if (line[i] === "[") {
+        if (stack.length > 0) hasInnerBracket[stack[stack.length - 1]] = 1;
+        stack.push(i);
+      } else if (line[i] === "]") {
+        if (stack.length > 0) {
+          const openIdx = stack.pop()!;
+          closeBracketFor[openIdx] = i;
+          if (stack.length > 0 && hasInnerBracket[openIdx]) {
+            hasInnerBracket[stack[stack.length - 1]] = 1;
+          }
+        }
+      }
+    }
+
+    // Pass 2: visit paired brackets in O(L).
+    const skipBracketAt = new Uint8Array(L);
+    const parenState = { deadFrom: L };
+
+    for (let i = 0; i < L; i++) {
+      if (line[i] !== "[" || skipBracketAt[i]) continue;
+      const j = closeBracketFor[i];
+      if (j === -1) continue;
+
+      // 1. Inline link or image: `[text](target)` / `![alt](src)`
+      if (j + 1 < L && line[j + 1] === "(") {
+        const inline = parseInlineTarget(line, j + 1, parenState);
+        if (inline !== null) {
+          recordTarget(inline.target);
+          if (!hasInnerBracket[i]) {
+            i = inline.endIdx;
+          } else {
+            for (let p = j + 1; p <= inline.endIdx; p++) skipBracketAt[p] = 1;
+          }
+          continue;
+        }
+      }
+
+      // 2. Full `[text][label]` or collapsed `[text][]` reference link
+      if (j + 1 < L && line[j + 1] === "[") {
+        const k = closeBracketFor[j + 1];
+        if (k !== -1 && !hasInnerBracket[j + 1]) {
+          skipBracketAt[j + 1] = 1;
+          const rawLabel = k === j + 2 ? line.slice(i + 1, j) : line.slice(j + 2, k);
+          const norm = normalizeRefLabel(rawLabel);
+          if (norm && resolvedDefs.has(norm)) {
+            recordTarget(resolvedDefs.get(norm)!);
+          }
+          continue;
+        }
+      }
+
+      // 3. Shortcut reference link `[label]`
+      if (!hasInnerBracket[i]) {
+        const norm = normalizeRefLabel(line.slice(i + 1, j));
+        if (norm && resolvedDefs.has(norm)) {
+          recordTarget(resolvedDefs.get(norm)!);
+        }
+      }
+    }
+  }
+
+  return { nonAnchorTargets, anchorCount };
+}
+
+export interface LinkCheckOptions {
+  sourceDefs?: ReadonlyMap<string, string>;
+  targetDefs?: ReadonlyMap<string, string>;
+  segment?: string;
+}
+
+/**
+ * §1 link structure check:
+ * - the multiset of non-anchor link targets in the translation must equal the
+ *   source's, compared exactly;
+ * - the number of in-page anchor links must equal the source's.
+ */
+export function checkLinks(
+  source: string,
+  translation: string,
+  lang: string,
+  options: LinkCheckOptions = {},
+): LostSpan[] {
+  const segment = options.segment ?? segmentLabel(source);
+  const srcLinks = extractLinks(source, options.sourceDefs);
+  const tgtLinks = extractLinks(translation, options.targetDefs);
+  const lost: LostSpan[] = [];
+
+  const countMultiset = (items: readonly string[]): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const item of items) counts.set(item, (counts.get(item) ?? 0) + 1);
+    return counts;
+  };
+
+  const srcCounts = countMultiset(srcLinks.nonAnchorTargets);
+  const tgtCounts = countMultiset(tgtLinks.nonAnchorTargets);
+  const foundNonAnchor = tgtLinks.nonAnchorTargets.join(" ") || "(no links)";
+
+  let missingNonAnchor = 0;
+  for (const [target, srcCount] of srcCounts) {
+    if ((tgtCounts.get(target) ?? 0) < srcCount) {
+      missingNonAnchor++;
+      lost.push({
+        lang,
+        segment,
+        span: target,
+        kind: "link",
+        found: foundNonAnchor,
+      });
+    }
+  }
+
+  if (missingNonAnchor === 0 && tgtLinks.nonAnchorTargets.length !== srcLinks.nonAnchorTargets.length) {
+    lost.push({
+      lang,
+      segment,
+      span: srcLinks.nonAnchorTargets.join(" ") || "(no links)",
+      kind: "link",
+      found: foundNonAnchor,
+    });
+  }
+
+  if (srcLinks.anchorCount !== tgtLinks.anchorCount) {
+    lost.push({
+      lang,
+      segment,
+      span: `${srcLinks.anchorCount} anchor links`,
+      kind: "link",
+      found: String(tgtLinks.anchorCount),
+    });
+  }
+
+  return lost;
+}
+
+/**
+ * Linear-time matcher for leaked placeholder brackets outside code: matches a
+ * bracketed `⟦…⟧` span or a stray `⟦` / `⟧` character.
+ */
+export const PLACEHOLDER_LEAK_PATTERN = /⟦[^⟦⟧\n]*⟧|[⟦⟧]/g;
+
+/**
+ * §2 placeholder leakage check: any `⟦` or `⟧` outside code in the finished
+ * translation, beyond the number the source has outside code, is a `LostSpan`
+ * of kind `placeholder`.
+ */
+export function checkPlaceholders(
+  source: string,
+  translation: string,
+  lang: string,
+  options: { segment?: string } = {},
+): LostSpan[] {
+  const strip = (md: string): string =>
+    nonCodeLines(md)
+      .map((l) => l.replace(CODE_SPAN_PATTERN, ""))
+      .join("\n");
+  const srcClean = strip(source);
+  const tgtClean = strip(translation);
+
+  const srcOpen = (srcClean.match(/⟦/g) ?? []).length;
+  const srcClose = (srcClean.match(/⟧/g) ?? []).length;
+  const tgtOpen = (tgtClean.match(/⟦/g) ?? []).length;
+  const tgtClose = (tgtClean.match(/⟧/g) ?? []).length;
+
+  if (tgtOpen <= srcOpen && tgtClose <= srcClose) return [];
+
+  const segment = options.segment ?? segmentLabel(source);
+  const remaining = [...(srcClean.match(PLACEHOLDER_LEAK_PATTERN) ?? [])];
+  const lost: LostSpan[] = [];
+  for (const tok of tgtClean.match(PLACEHOLDER_LEAK_PATTERN) ?? []) {
+    const idx = remaining.indexOf(tok);
+    if (idx !== -1) {
+      remaining.splice(idx, 1);
+    } else {
+      lost.push({ lang, segment, span: tok, kind: "placeholder" });
+    }
+  }
+  return lost;
+}
+
 // ─── Per-segment check ────────────────────────────────────────────
 
 export interface SegmentCheckOptions {
@@ -114,11 +474,16 @@ export interface SegmentCheckOptions {
   terms?: ProtectedTermSet;
   /** Also compare the numbers (table cells). */
   isCell?: boolean;
+  /** Reference link definitions from the source file. */
+  sourceDefs?: ReadonlyMap<string, string>;
+  /** Reference link definitions from the translated file. */
+  targetDefs?: ReadonlyMap<string, string>;
 }
 
 /**
  * Check one translated segment against its source: every protected span is
- * present as often as in the source, and for a table cell the numbers match.
+ * present as often as in the source, link structure and placeholder brackets
+ * survive, and for a table cell the numbers match.
  */
 export function checkSegment(
   source: string,
@@ -141,6 +506,14 @@ export function checkSegment(
       found: numberMultiset(translation).join(" ") || "(no numbers)",
     });
   }
+  lost.push(
+    ...checkLinks(source, translation, lang, {
+      sourceDefs: options.sourceDefs,
+      targetDefs: options.targetDefs,
+      segment,
+    }),
+    ...checkPlaceholders(source, translation, lang, { segment }),
+  );
   return lost;
 }
 
@@ -257,26 +630,7 @@ export function extractDocumentAnchors(markdown: string): DocumentAnchors {
   const explicitIds = new Set<string>();
   const anchors: ExtractedAnchor[] = [];
 
-  const lines = markdown.split("\n");
-  let inFence = false;
-  let inComment = false;
-
-  for (const line of lines) {
-    if (/^```/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-
-    if (inComment) {
-      if (line.includes("-->")) inComment = false;
-      continue;
-    }
-    if (/^<!--/.test(line.trim())) {
-      if (!line.includes("-->")) inComment = true;
-      continue;
-    }
-
+  for (const line of nonCodeLines(markdown)) {
     if (/^#{1,6}\s/.test(line)) {
       const slug = safeDecodeSlug(slugger.slug(stripHeadingMarkup(line)));
       const idx = headings.length;
@@ -314,6 +668,8 @@ export function extractDocumentAnchors(markdown: string): DocumentAnchors {
 export interface AnchorCheckOptions {
   /** Non-fatal findings (unresolved in source, link count mismatch) are appended here (F5). */
   warnings?: string[];
+  /** Skip the count-mismatch LostSpan when §1 has already flagged an anchor-count mismatch in a segment. */
+  skipCountMismatch?: boolean;
 }
 
 /**
@@ -357,7 +713,10 @@ export function checkAnchors(
   const resolvesInTarget = (decoded: string): boolean =>
     tgt.headingSet.has(decoded) || tgt.explicitIds.has(decoded);
 
-  // F2 step 4: If link counts differ, report the mismatch and fall back to a plain resolve check.
+  // F2 step 4 / #50 §3: If link counts differ, report the mismatch in warnings,
+  // run the plain resolve check, and also push a LostSpan when at least one
+  // source anchor resolved in the source and the mismatch was not caused solely
+  // by source-broken links (unless §1 already flagged the segment mismatch).
   if (src.anchors.length !== tgt.anchors.length) {
     warnings?.push(
       `[${lang}]: anchor count mismatch (source has ${src.anchors.length}, translation has ${tgt.anchors.length}); falling back to plain resolve check.`,
@@ -365,12 +724,16 @@ export function checkAnchors(
     const srcBrokenDecoded = new Set(
       src.anchors.filter((_, idx) => srcStates[idx].status === "broken").map((a) => a.decoded),
     );
+    const srcValidCount = srcStates.filter((s) => s.status !== "broken").length;
+    const tgtNonSourceBrokenCount = tgt.anchors.filter((a) => !srcBrokenDecoded.has(a.decoded)).length;
+
+    const plainLost: LostSpan[] = [];
     for (const tgtA of tgt.anchors) {
       if (srcBrokenDecoded.has(tgtA.decoded)) continue;
       if (!resolvesInTarget(tgtA.decoded)) {
         const srcIdx = src.headingIndex.get(tgtA.decoded);
         const foundSlug = srcIdx !== undefined ? tgt.headings[srcIdx] : undefined;
-        lost.push({
+        plainLost.push({
           lang,
           segment: tgtA.segment,
           span: tgtA.raw,
@@ -379,6 +742,25 @@ export function checkAnchors(
         });
       }
     }
+
+    const alreadyReportedByPlain =
+      tgtNonSourceBrokenCount > srcValidCount && plainLost.length >= tgtNonSourceBrokenCount - srcValidCount;
+    if (
+      !options.skipCountMismatch &&
+      !alreadyReportedByPlain &&
+      srcValidCount > 0 &&
+      srcValidCount !== tgtNonSourceBrokenCount
+    ) {
+      lost.push({
+        lang,
+        segment: "(whole file)",
+        span: `anchor count ${src.anchors.length} → ${tgt.anchors.length}`,
+        kind: "anchor",
+        found: String(tgt.anchors.length),
+      });
+    }
+
+    lost.push(...plainLost);
     return lost;
   }
 

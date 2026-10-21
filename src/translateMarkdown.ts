@@ -20,9 +20,12 @@ import { createPins, getPin, loadPins, type PinFile } from "./pins.js";
 import {
   checkAnchors,
   checkCodeStructure,
+  checkLinks,
+  checkPlaceholders,
   checkSegment,
   enforceLostSpanPolicy,
   expectedSpans,
+  extractRefDefinitions,
   safeDecodeSlug,
   stripHeadingMarkup,
   type LostSpan,
@@ -517,11 +520,20 @@ export function checkSurvival(
   const terms = options.terms ?? DEFAULT_PROTECTED_TERMS;
   const { lang } = options;
   const lost: LostSpan[] = [];
+  const sourceDefs = extractRefDefinitions(source);
+  const targetDefs = extractRefDefinitions(translation);
 
   const aligned = alignUnits(source, translation);
   if (aligned) {
     for (const { unit, target } of aligned) {
-      lost.push(...checkSegment(unit.text, target, lang, { terms, isCell: unit.kind === "cell" }));
+      lost.push(
+        ...checkSegment(unit.text, target, lang, {
+          terms,
+          isCell: unit.kind === "cell",
+          sourceDefs,
+          targetDefs,
+        }),
+      );
     }
   } else {
     const total = new Map<string, { kind: LostSpan["kind"]; count: number }>();
@@ -536,11 +548,27 @@ export function checkSurvival(
     for (const [span, { kind, count }] of total) {
       if (translation.split(span).length - 1 < count) lost.push({ lang, segment: "(whole file)", span, kind });
     }
+    lost.push(
+      ...checkLinks(source, translation, lang, {
+        sourceDefs,
+        targetDefs,
+        segment: "(whole file)",
+      }),
+      ...checkPlaceholders(source, translation, lang, {
+        segment: "(whole file)",
+      }),
+    );
   }
 
   lost.push(...checkCodeStructure(source, translation, lang));
   if (anchorsEnabled(terms)) {
-    lost.push(...checkAnchors(source, translation, lang, { warnings: options.warnings }));
+    const skipCountMismatch = lost.some((l) => l.kind === "link" && l.span.endsWith(" anchor links"));
+    lost.push(
+      ...checkAnchors(source, translation, lang, {
+        warnings: options.warnings,
+        skipCountMismatch,
+      }),
+    );
   }
   return lost;
 }

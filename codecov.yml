@@ -1,16 +1,15 @@
-# Coverage is reported here, never enforced. Both statuses are informational,
-# so no coverage number can block a merge, and neither names a fixed target.
-# The signal read on a pull request is patch coverage: how much of the lines
-# it changed the tests actually ran. The comment carries that and the test
-# results; the repository-wide percentage stays out of it.
+# Both project and patch coverage are enforced at 90% (with a 1% threshold on
+# project coverage to absorb minor line-count shifts), matching the 90% line
+# coverage floor in vitest.config.ts.
 coverage:
   status:
     project:
       default:
-        informational: true
+        target: 90%
+        threshold: 1%
     patch:
       default:
-        informational: true
+        target: 90%
 
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"
