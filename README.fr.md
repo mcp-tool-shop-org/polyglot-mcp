@@ -19,13 +19,13 @@
 
 ## Fonctionnement
 
-Traduit le texte entre 57 langues en utilisant TranslateGemma(https://ollama.com/library/translategemma) exécuté localement sur votre GPU via ⟦Ollama⟧(https://ollama.com). Pas de clés API, pas de cloud, pas de limites de débit — par défaut, tout reste sur votre machine. Vous pouvez choisir d’utiliser un Ollama distant, tel que ⟦Ollama Cloud⟧(#ollama-cloud-optional).
+Traduit le texte entre 57 langues en utilisant [TranslateGemma](https://ollama.com/library/translategemma) exécuté localement sur votre GPU via [Ollama](https://ollama.com). Pas de clés API, pas de cloud, pas de limites de débit — par défaut, tout reste sur votre machine. Vous pouvez choisir d’utiliser un Ollama distant, tel que [Ollama Cloud](#ollama-cloud-facultatif).
 
 ## Démarrage rapide
 
 ### 1. Installez Ollama
 
-Téléchargez-le à partir de ⟦ollama.com⟧(https://ollama.com) et démarrez-le :
+Téléchargez-le à partir de [ollama.com](https://ollama.com) et démarrez-le :
 
 ```bash
 ollama serve
@@ -41,7 +41,7 @@ ollama pull translategemma:12b   # 8.1 GB — faster, for GPUs with less VRAM
 ollama pull translategemma:4b    # 3.3 GB — fastest, lower quality
 ```
 
-> **Conseil :** Vous pouvez ignorer cette étape — Polyglot télécharge automatiquement le modèle par défaut (27 B, 17 Go) lors de la première utilisation. Sur un GPU plus petit, définissez d’abord `POLYGLOT_MODEL=translategemma:12b` (voir ⟦Modèle par défaut configurable⟧(#configurable-default-model)).
+> **Conseil :** Vous pouvez ignorer cette étape — Polyglot télécharge automatiquement le modèle par défaut (27 B, 17 Go) lors de la première utilisation. Sur un GPU plus petit, définissez d’abord `POLYGLOT_MODEL=translategemma:12b` (voir [Modèle par défaut configurable](#modèle-par-défaut-configurable)).
 
 ### 3. Ajoutez-le à votre client MCP
 

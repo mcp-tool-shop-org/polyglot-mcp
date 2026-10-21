@@ -41,7 +41,7 @@ ollama pull translategemma:12b   # 8.1 GB — faster, for GPUs with less VRAM
 ollama pull translategemma:4b    # 3.3 GB — fastest, lower quality
 ```
 
-> **ヒント:** この手順をスキップできます。Polyglot は、初回使用時にデフォルトのモデル (27B、17 GB) を自動的にダウンロードします。GPU が小さい場合は、最初に `POLYGLOT_MODEL=translategemma:12b` を設定してください (「構成可能なデフォルトモデル」[#configurable-default-model] を参照)。
+> **ヒント:** この手順をスキップできます。Polyglot は、初回使用時にデフォルトのモデル (27B、17 GB) を自動的にダウンロードします。GPU が小さい場合は、最初に `POLYGLOT_MODEL=translategemma:12b` を設定してください ([構成可能なデフォルトモデル](#構成可能なデフォルトモデル) を参照)。
 
 ### 3. MCP クライアントに追加します
 
@@ -97,7 +97,7 @@ Polyglot は、6 つの MCP ツールを公開します。
 | `from`       | はい | ソース言語コードまたは名前 |
 | `to`         | はい | ターゲット言語コードまたは名前 |
 | `model`      | no       | Ollama モデル (デフォルト: `translategemma:27b`) |
-| `onLostSpan` | no       | `report` (デフォルト) は、翻訳から欠落している保護されたスパンをリストします。`fail` は、それをエラーにします。「Survival Check」[#survival-check---on-lost-span] を参照してください。 |
+| `onLostSpan` | no       | `report` (デフォルト) は、翻訳から欠落している保護されたスパンをリストします。`fail` は、それをエラーにします。[存続チェック](#存続チェック--on-lost-span) を参照してください。 |
 
 ### `list_languages`
 

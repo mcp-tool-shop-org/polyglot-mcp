@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "pins": {
+    "3c98b370fc2fe227:fr": {
+      "lang": "fr",
+      "source": "Download from [ollama.com](https://ollama.com) and start it:\r",
+      "translation": "Téléchargez-le à partir de [ollama.com](https://ollama.com) et démarrez-le :",
+      "pinnedAt": "2026-10-21T02:27:01.784Z"
+    },
+    "753daec0127509ba:fr": {
+      "lang": "fr",
+      "source": "Translates text between 57 languages using [TranslateGemma](https://ollama.com/library/translategemma) running locally on your GPU via [Ollama](https://ollama.com). No API keys, no cloud, no rate limits — by default everything stays on your machine. You can opt in to a remote Ollama such as [Ollama Cloud](#ollama-cloud-optional).\r",
+      "translation": "Traduit le texte entre 57 langues en utilisant [TranslateGemma](https://ollama.com/library/translategemma) exécuté localement sur votre GPU via [Ollama](https://ollama.com). Pas de clés API, pas de cloud, pas de limites de débit — par défaut, tout reste sur votre machine. Vous pouvez choisir d’utiliser un Ollama distant, tel que [Ollama Cloud](#ollama-cloud-facultatif).",
+      "pinnedAt": "2026-10-21T02:27:01.784Z"
+    },
+    "c65c5eb385b8ac2d:ja": {
+      "lang": "ja",
+      "source": "`report` (default) lists protected spans missing from the translation; `fail` makes that an error. See [Survival Check](#survival-check---on-lost-span)",
+      "translation": "`report` (デフォルト) は、翻訳から欠落している保護されたスパンをリストします。`fail` は、それをエラーにします。[存続チェック](#存続チェック--on-lost-span) を参照してください。",
+      "pinnedAt": "2026-10-21T02:27:01.917Z"
+    },
+    "d6e0b08243e33581:fr": {
+      "lang": "fr",
+      "source": "> **Tip:** You can skip this step — Polyglot auto-pulls the default model (27B, 17 GB) on first use. On a smaller GPU, set `POLYGLOT_MODEL=translategemma:12b` first (see [Configurable Default Model](#configurable-default-model)).\r",
+      "translation": "> **Conseil :** Vous pouvez ignorer cette étape — Polyglot télécharge automatiquement le modèle par défaut (27 B, 17 Go) lors de la première utilisation. Sur un GPU plus petit, définissez d’abord `POLYGLOT_MODEL=translategemma:12b` (voir [Modèle par défaut configurable](#modèle-par-défaut-configurable)).",
+      "pinnedAt": "2026-10-21T02:27:01.785Z"
+    },
+    "d6e0b08243e33581:ja": {
+      "lang": "ja",
+      "source": "> **Tip:** You can skip this step — Polyglot auto-pulls the default model (27B, 17 GB) on first use. On a smaller GPU, set `POLYGLOT_MODEL=translategemma:12b` first (see [Configurable Default Model](#configurable-default-model)).\r",
+      "translation": "> **ヒント:** この手順をスキップできます。Polyglot は、初回使用時にデフォルトのモデル (27B、17 GB) を自動的にダウンロードします。GPU が小さい場合は、最初に `POLYGLOT_MODEL=translategemma:12b` を設定してください ([構成可能なデフォルトモデル](#構成可能なデフォルトモデル) を参照)。",
+      "pinnedAt": "2026-10-21T02:27:01.915Z"
+    }
+  }
+}
