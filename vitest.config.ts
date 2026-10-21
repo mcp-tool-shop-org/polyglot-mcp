@@ -4,5 +4,10 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
     environment: "node",
+    coverage: {
+      thresholds: {
+        lines: 90,
+      },
+    },
   },
 });

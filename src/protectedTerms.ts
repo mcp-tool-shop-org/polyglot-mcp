@@ -31,7 +31,7 @@ import { PolyglotError } from "./errors.js";
 // ─── Default patterns ─────────────────────────────────────────────
 
 /** Name of a default pattern, as used by `disable` in the terms file. */
-export type DefaultPatternName = "url" | "anchor" | "caps-id" | "camel-case" | "model-id";
+export type DefaultPatternName = "url" | "anchor" | "link-target" | "caps-id" | "camel-case" | "model-id";
 
 export interface DefaultPattern {
   name: DefaultPatternName;
@@ -44,13 +44,23 @@ export interface DefaultPattern {
 /**
  * In-page anchor link targets:
  * - inline links: `](#slug)`, including `](#slug "title")`
- * - reference definitions: `[label]: #slug`
+ * - reference definitions: `[label]: #slug` (including inside blockquotes)
+ * - HTML attributes: `href="#slug"`
  *
  * Masks the `#slug` only so the link text stays translatable and the model
  * never sees or rewrites a slug.
  */
 export const ANCHOR_PATTERN =
-  /(?<=\]\(\s*)#[^\s)<>"'`[\]]+(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(?<=(?:^|\n)[ \t]{0,3}\[[^\][\n]+\]:[ \t]*)#[^\s)<>"'`[\]]+(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*(?:\r?\n|$))/gu;
+  /(?=#)(?<=(?<!\\)\]\(\s*)#[^\s)<>"'`[\]]+(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\r\n]*\)))?\s*\))|(?=#)(?<=(?:^|\n)[ \t>]*\[[ \t]*[^\][\s][^\][\r\n]*\]:[ \t]*)#[^\s)<>"'`[\]]+(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\r\n]*\)))?[ \t]*\r?(?:\n|$))|(?=#)(?<=\bhref\s*=\s*["'])#[^"'\s<>]+(?=["'])/giu;
+
+/**
+ * Non-HTTP(S), non-anchor Markdown link, image, and reference-definition
+ * targets (relative paths, bare filenames like `LICENSE`, `mailto:`, `<path with spaces>`,
+ * and paths with one level of balanced parentheses). Never matches link titles
+ * or HTML attributes.
+ */
+export const LINK_TARGET_PATTERN =
+  /(?=[^\s)>])(?<=(?<!\\)\]\([ \t]*)(?!https?:\/\/|#)(?:<(?!https?:\/\/|#)(?:\\.|[^<>\\\r\n])+>|(?:\\[^\s]|[^\s()<>\\]|\((?:\\[^\s]|[^\s()<>\\])*\))+)(?=(?:[ \t]+(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|\((?:\\.|[^()\\\r\n])*\)))?[ \t]*\))|(?=[^\s)>])(?<=(?:^|\n)[ \t>]*\[[ \t]*[^\][\s][^\][\r\n]*\]:[ \t]*)(?!https?:\/\/|#)(?:<(?!https?:\/\/|#)(?:\\.|[^<>\\\r\n])+>|(?:\\[^\s]|[^\s()<>\\]|\((?:\\[^\s]|[^\s()<>\\])*\))+)(?=(?:[ \t]+(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|\((?:\\.|[^()\\\r\n])*\)))?[ \t]*\r?(?:\n|$))/giu;
 
 /**
  * The default protected-term patterns.
@@ -59,11 +69,15 @@ export const ANCHOR_PATTERN =
  * a longer word, and every one demands something ordinary prose lacks:
  *
  * - `url` — `http://` or `https://` up to whitespace, a quote, a bracket or a
- *   backtick, minus trailing sentence punctuation. A Markdown link's target
- *   ends at its `)`.
- * - `anchor` — in-page link target `#slug` in `](#slug)`, `](#slug "title")`
- *   or `[label]: #slug`. Rewritten after assembly to the translated heading's
- *   slug.
+ *   backtick (allowing one level of balanced parentheses), minus trailing
+ *   sentence punctuation. A Markdown link's target ends at its `)`.
+ * - `anchor` — in-page link target `#slug` in `](#slug)`, `](#slug "title")`,
+ *   `[label]: #slug` or `href="#slug"`. Rewritten after assembly to the
+ *   translated heading's slug.
+ * - `link-target` — relative paths, bare filenames (`LICENSE`), `mailto:`, and
+ *   `<…>` destinations in Markdown inline links, images, and reference
+ *   definitions. Placed before `caps-id`, `camel-case`, and `model-id` so
+ *   paths like `docs/Kimi-K3.md` are masked as one span.
  * - `caps-id` — an ALL-CAPS token that carries a digit, or joins capitals with
  *   a hyphen or underscore: `XLS-30`, `HOST_REJECTED`, `SHA-256`, `ARM64`.
  *   `README`, `API` and `NASA` have neither, so they stay prose.
@@ -79,14 +93,24 @@ export const ANCHOR_PATTERN =
 export const DEFAULT_PATTERNS: readonly DefaultPattern[] = [
   {
     name: "url",
-    pattern: /\bhttps?:\/\/[^\s<>"'`()[\]{}]*[^\s<>"'`()[\]{}.,;:!?]/g,
-    examples: ["https://github.com/mcp-tool-shop-org/polyglot-mcp"],
+    pattern:
+      /\bhttps?:\/\/(?:[^\s<>"'`()[\]{}]|\([^\s<>"'`()[\]{}]*\))*(?:[^\s<>"'`()[\]{}.,;:!?]|\([^\s<>"'`()[\]{}]*\))/gu,
+    examples: [
+      "https://github.com/mcp-tool-shop-org/polyglot-mcp",
+      "https://en.wikipedia.org/wiki/Foo_(bar)",
+    ],
   },
   {
     name: "anchor",
     kind: "anchor",
     pattern: ANCHOR_PATTERN,
     examples: ["#ollama-cloud-optional", "#survival-check---on-lost-span"],
+  },
+  {
+    name: "link-target",
+    kind: "link-target",
+    pattern: LINK_TARGET_PATTERN,
+    examples: ["../facet", "LICENSE", "docs/Kimi-K3.md"],
   },
   {
     name: "caps-id",
@@ -130,7 +154,7 @@ export interface ProtectedTermsConfig {
 }
 
 /** What a span stands for once restored. */
-export type ProtectedSpanKind = "term" | "count" | "anchor";
+export type ProtectedSpanKind = "term" | "count" | "anchor" | "link-target";
 
 interface Rule {
   /** Stable identity, hashed into the cache key of segments it fires in. */
@@ -224,6 +248,16 @@ export const DEFAULT_PROTECTED_TERMS: ProtectedTermSet = buildProtectedTerms();
 /** True when the `anchor` rule is active in `set` (not switched off via `disable: ["anchor"]`). */
 export function anchorsEnabled(set: ProtectedTermSet = DEFAULT_PROTECTED_TERMS): boolean {
   return set.rules.some((r) => r.kind === "anchor");
+}
+
+/** True when the `url` rule is active in `set` (not switched off via `disable: ["url"]`). */
+export function urlsEnabled(set: ProtectedTermSet = DEFAULT_PROTECTED_TERMS): boolean {
+  return set.rules.some((r) => r.id.startsWith("default:url:"));
+}
+
+/** True when the `link-target` rule is active in `set` (not switched off via `disable: ["link-target"]`). */
+export function linkTargetsEnabled(set: ProtectedTermSet = DEFAULT_PROTECTED_TERMS): boolean {
+  return set.rules.some((r) => r.kind === "link-target");
 }
 
 /** Path of the terms file beside `readmePath`. */

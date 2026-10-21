@@ -1,0 +1,62 @@
+{
+  "sourceRef": "99b69e6",
+  "slipRefs": {
+    "es": "cc15bed",
+    "fr": "c142fbd",
+    "ja": "c142fbd"
+  },
+  "slips": [
+    {
+      "id": "es-line-22",
+      "lang": "es",
+      "pinKey": "753daec0127509ba:es",
+      "source": "Translates text between 57 languages using [TranslateGemma](https://ollama.com/library/translategemma) running locally on your GPU via [Ollama](https://ollama.com). No API keys, no cloud, no rate limits — by default everything stays on your machine. You can opt in to a remote Ollama such as [Ollama Cloud](#ollama-cloud-optional).",
+      "broken": "Traduce texto entre 57 idiomas utilizando TranslateGemma(https://ollama.com/library/translategemma) que se ejecuta localmente en su GPU a través de [Ollama](https://ollama.com). No hay claves de API, ni nube, ni límites de frecuencia; de forma predeterminada, todo permanece en su máquina. Puede optar por utilizar un Ollama remoto, como [Ollama Cloud](#ollama-cloud-opcional).",
+      "sourceHeading": "### Ollama Cloud (optional)",
+      "targetHeading": "### Ollama Cloud (opcional)"
+    },
+    {
+      "id": "fr-line-22",
+      "lang": "fr",
+      "pinKey": "753daec0127509ba:fr",
+      "source": "Translates text between 57 languages using [TranslateGemma](https://ollama.com/library/translategemma) running locally on your GPU via [Ollama](https://ollama.com). No API keys, no cloud, no rate limits — by default everything stays on your machine. You can opt in to a remote Ollama such as [Ollama Cloud](#ollama-cloud-optional).",
+      "broken": "Traduit le texte entre 57 langues en utilisant TranslateGemma(https://ollama.com/library/translategemma) exécuté localement sur votre GPU via ⟦Ollama⟧(https://ollama.com). Pas de clés API, pas de cloud, pas de limites de débit — par défaut, tout reste sur votre machine. Vous pouvez choisir d’utiliser un Ollama distant, tel que ⟦Ollama Cloud⟧(#ollama-cloud-optional).",
+      "sourceHeading": "### Ollama Cloud (optional)",
+      "targetHeading": "### Ollama Cloud (facultatif)"
+    },
+    {
+      "id": "fr-line-28",
+      "lang": "fr",
+      "pinKey": "3c98b370fc2fe227:fr",
+      "source": "Download from [ollama.com](https://ollama.com) and start it:",
+      "broken": "Téléchargez-le à partir de ⟦ollama.com⟧(https://ollama.com) et démarrez-le\u00a0:"
+    },
+    {
+      "id": "fr-line-44",
+      "lang": "fr",
+      "pinKey": "d6e0b08243e33581:fr",
+      "source": "> **Tip:** You can skip this step — Polyglot auto-pulls the default model (27B, 17 GB) on first use. On a smaller GPU, set `POLYGLOT_MODEL=translategemma:12b` first (see [Configurable Default Model](#configurable-default-model)).",
+      "broken": "> **Conseil\u00a0:** Vous pouvez ignorer cette étape — Polyglot télécharge automatiquement le modèle par défaut (27\u00a0B, 17\u00a0Go) lors de la première utilisation. Sur un GPU plus petit, définissez d’abord `POLYGLOT_MODEL=translategemma:12b` (voir ⟦Modèle par défaut configurable⟧(#configurable-default-model)).",
+      "sourceHeading": "### Configurable Default Model",
+      "targetHeading": "### Modèle par défaut configurable"
+    },
+    {
+      "id": "ja-line-44",
+      "lang": "ja",
+      "pinKey": "d6e0b08243e33581:ja",
+      "source": "> **Tip:** You can skip this step — Polyglot auto-pulls the default model (27B, 17 GB) on first use. On a smaller GPU, set `POLYGLOT_MODEL=translategemma:12b` first (see [Configurable Default Model](#configurable-default-model)).",
+      "broken": "> **ヒント:** この手順をスキップできます。Polyglot は、初回使用時にデフォルトのモデル (27B、17 GB) を自動的にダウンロードします。GPU が小さい場合は、最初に `POLYGLOT_MODEL=translategemma:12b` を設定してください (「構成可能なデフォルトモデル」[#configurable-default-model] を参照)。",
+      "sourceHeading": "### Configurable Default Model",
+      "targetHeading": "### 構成可能なデフォルトモデル"
+    },
+    {
+      "id": "ja-line-100",
+      "lang": "ja",
+      "pinKey": "c65c5eb385b8ac2d:ja",
+      "source": "`report` (default) lists protected spans missing from the translation; `fail` makes that an error. See [Survival Check](#survival-check---on-lost-span)",
+      "broken": "`report` (デフォルト) は、翻訳から欠落している保護されたスパンをリストします。`fail` は、それをエラーにします。「Survival Check」[#survival-check---on-lost-span] を参照してください。",
+      "sourceHeading": "### Survival Check (`--on-lost-span`)",
+      "targetHeading": "### 存続チェック（`--on-lost-span`）"
+    }
+  ]
+}

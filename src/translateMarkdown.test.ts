@@ -129,6 +129,13 @@ describe("segmentMarkdown", () => {
     // No text segment should ever contain the comment.
     expect(segs.some((s) => s.type === "text" && s.text.includes("<!--"))).toBe(false);
   });
+
+  it("ends an HTML block at a level-1 # Title heading without a blank line (F10)", () => {
+    const md = '<p align="center">\n  <img src="logo.png">\n</p>\n# Title\n\nBody text.';
+    const segs = segmentMarkdown(md);
+    expect(segs[0]).toEqual({ type: "protected", text: '<p align="center">\n  <img src="logo.png">\n</p>' });
+    expect(segs[1]).toEqual({ type: "heading", prefix: "# ", text: "Title" });
+  });
 });
 
 // ─── isTranslatableCell ────────────────────────────────────────────

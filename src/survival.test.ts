@@ -24,11 +24,14 @@ import {
   LostSpanError,
   cellNumbersMatch,
   checkAnchors,
+  checkLinks,
+  checkPlaceholders,
   checkSegment,
   countCodeStructure,
   enforceLostSpanPolicy,
   expectedSpans,
   extractDocumentAnchors,
+  extractLinks,
   formatLostSpans,
   normalizeDigits,
   parseLostSpanPolicy,
@@ -36,7 +39,7 @@ import {
   slugifyHeadings,
   stripHeadingMarkup,
 } from "./survival.js";
-import { buildProtectedTerms } from "./protectedTerms.js";
+import { buildProtectedTerms, findProtectedSpans } from "./protectedTerms.js";
 import { PolyglotError } from "./errors.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "issue-44");
@@ -48,6 +51,25 @@ const GITHUB_SLUGS = JSON.parse(fixture46("github-slugs.json")) as {
   ref: string;
   sourceRef: string;
   fixtures: Record<string, string[]>;
+};
+
+const FIXTURES_50 = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "issue-50");
+const SLIPS_50 = JSON.parse(readFileSync(join(FIXTURES_50, "slips.json"), "utf-8")) as {
+  sourceRef: string;
+  slips: Array<{
+    id: string;
+    lang: string;
+    pinKey: string;
+    source: string;
+    broken: string;
+    sourceHeading?: string;
+    targetHeading?: string;
+  }>;
+};
+const PINS_99B69E6 = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", ".polyglot-pins.json"), "utf-8"),
+) as {
+  pins: Record<string, { lang: string; source: string; translation: string }>;
 };
 
 const KIMI_EN =
@@ -221,10 +243,10 @@ describe("survival check — GitHub-rendered heading slugs", () => {
 describe("survival check — in-page anchors", () => {
   const EN_9FBE43A = fixture46("polyglot-mcp.README.9fbe43a.md");
 
-  it("exempts anchor spans from expectedSpans, checkSegment, and whole-file fallback (§1)", () => {
-    const line = "See [Ollama Cloud](#ollama-cloud-optional).";
+  it("exempts anchor and link-target spans from expectedSpans, checkSegment, and whole-file fallback (§1, F8.3)", () => {
+    const line = "See [Ollama Cloud](#ollama-cloud-optional) and [MIT](LICENSE).";
     expect([...expectedSpans(line).keys()]).toEqual([]);
-    expect(checkSegment(line, "Voir [Ollama Cloud](#ollama-cloud-facultatif).", "fr")).toEqual([]);
+    expect(checkSegment(line, "Voir [Ollama Cloud](#ollama-cloud-facultatif) et [MIT](LICENSE).", "fr")).toEqual([]);
   });
 
   it("detects the broken anchors in polyglot-mcp's 1.9.0 translations at 9fbe43a (Cause 1 and Cause 2)", () => {
@@ -433,3 +455,460 @@ describe("survival check — in-page anchors", () => {
     ]);
   });
 });
+
+describe("survival check — broken links and placeholder leakage (#50)", () => {
+  it("each 1.10.0 slip fixture fails under fail with kind link and is listed under report", () => {
+    expect(SLIPS_50.slips).toHaveLength(6);
+    for (const slip of SLIPS_50.slips) {
+      const srcDoc = slip.sourceHeading ? `${slip.source}\n\n${slip.sourceHeading}\n` : `${slip.source}\n`;
+      const tgtDoc = slip.targetHeading ? `${slip.broken}\n\n${slip.targetHeading}\n` : `${slip.broken}\n`;
+
+      const lost = checkSurvival(srcDoc, tgtDoc, { lang: slip.lang });
+      expect(lost.some((l) => l.kind === "link"), `${slip.id} should report a link LostSpan`).toBe(true);
+      expect(() => enforceLostSpanPolicy(lost, "report")).not.toThrow();
+      expect(() => enforceLostSpanPolicy(lost, "fail")).toThrow(LostSpanError);
+    }
+  });
+
+  it("the hand-fixed versions in .polyglot-pins.json at 99b69e6 pass", () => {
+    for (const slip of SLIPS_50.slips) {
+      const pin = PINS_50_LOOKUP(slip.pinKey);
+      const srcDoc = slip.sourceHeading ? `${slip.source}\n\n${slip.sourceHeading}\n` : `${slip.source}\n`;
+      const tgtDoc = slip.targetHeading ? `${pin.translation}\n\n${slip.targetHeading}\n` : `${pin.translation}\n`;
+
+      const lost = checkSurvival(srcDoc, tgtDoc, { lang: slip.lang });
+      expect(lost, `${slip.id} hand-fixed pin should pass`).toEqual([]);
+      expect(() => enforceLostSpanPolicy(lost, "fail")).not.toThrow();
+    }
+  });
+
+  it("passes a correct translation that reorders two links within a sentence (multiset, not sequence)", () => {
+    const en = "Uses [TranslateGemma](https://ollama.com/library/translategemma) via [Ollama](https://ollama.com).";
+    const ja = "[Ollama](https://ollama.com) 経由で [TranslateGemma](https://ollama.com/library/translategemma) を使用します。";
+    expect(checkSegment(en, ja, "ja")).toEqual([]);
+  });
+
+  it("counts an image and a reference link", () => {
+    const en = "![Logo](https://example.com/logo.png) and [Guide][guide-ref].\n\n[guide-ref]: https://example.com/guide";
+    const frOk = "![Logo](https://example.com/logo.png) et [Guide][guide-ref].\n\n[guide-ref]: https://example.com/guide";
+    const frMissingImg = "Logo(https://example.com/logo.png) et [Guide][guide-ref].\n\n[guide-ref]: https://example.com/guide";
+
+    expect(checkSurvival(en, frOk, { lang: "fr" })).toEqual([]);
+    const lost = checkSurvival(en, frMissingImg, { lang: "fr" });
+    expect(lost).toEqual([
+      {
+        lang: "fr",
+        segment: "![Logo](https://example.com/logo.png) and [Guide][guide-ref]…",
+        span: "https://example.com/logo.png",
+        kind: "link",
+        found: "https://example.com/guide",
+      },
+    ]);
+  });
+
+  it("ignores a link inside inline code or a fenced code block", () => {
+    const en = [
+      "Write `[example](https://example.com)` in prose, or:",
+      "",
+      "```markdown",
+      "[fenced](https://example.com/fenced)",
+      "```",
+    ].join("\n");
+    const fr = [
+      "Écrivez `[example](https://example.com)` en prose, ou :",
+      "",
+      "```markdown",
+      "[fenced](https://example.com/fenced)",
+      "```",
+    ].join("\n");
+
+    expect(extractLinks(en)).toEqual({ nonAnchorTargets: [], anchorCount: 0 });
+    expect(checkSurvival(en, fr, { lang: "fr" })).toEqual([]);
+  });
+
+  it("fails when a translation renames a label in the reference link but not in its definition, and the reverse", () => {
+    const en = [
+      "Read the [Quick Start][quick-start] and [FAQ][] and [roadmap].",
+      "",
+      "[quick-start]: https://example.com/start",
+      "[FAQ]: https://example.com/faq",
+      "[roadmap]: https://example.com/roadmap",
+    ].join("\n");
+
+    const renamedInLink = [
+      "Lisez le [Démarrage rapide][demarrage-rapide] et [FAQ][] et [roadmap].",
+      "",
+      "[quick-start]: https://example.com/start",
+      "[FAQ]: https://example.com/faq",
+      "[roadmap]: https://example.com/roadmap",
+    ].join("\n");
+
+    const renamedInDef = [
+      "Lisez le [Démarrage rapide][quick-start] et [FAQ][] et [roadmap].",
+      "",
+      "[demarrage-rapide]: https://example.com/start",
+      "[FAQ]: https://example.com/faq",
+      "[roadmap]: https://example.com/roadmap",
+    ].join("\n");
+
+    const lostLink = checkSurvival(en, renamedInLink, { lang: "fr" });
+    expect(lostLink).toEqual([
+      {
+        lang: "fr",
+        segment: "Read the [Quick Start][quick-start] and [FAQ][] and [roadmap…",
+        span: "https://example.com/start",
+        kind: "link",
+        found: "https://example.com/faq https://example.com/roadmap",
+      },
+    ]);
+
+    const lostDef = checkSurvival(en, renamedInDef, { lang: "fr" });
+    expect(lostDef).toEqual([
+      {
+        lang: "fr",
+        segment: "Read the [Quick Start][quick-start] and [FAQ][] and [roadmap…",
+        span: "https://example.com/start",
+        kind: "link",
+        found: "https://example.com/faq https://example.com/roadmap",
+      },
+    ]);
+  });
+
+  it("counts a badge [![alt](img)](url) as two targets", () => {
+    const badge = "[![CI](https://example.com/badge.svg)](https://example.com/actions)";
+    const extracted = extractLinks(badge);
+    expect(extracted.nonAnchorTargets.sort()).toEqual([
+      "https://example.com/actions",
+      "https://example.com/badge.svg",
+    ]);
+
+    const brokenBadge = "[!CI(https://example.com/badge.svg)](https://example.com/actions)";
+    expect(checkLinks(badge, brokenBadge, "fr")).toEqual([
+      {
+        lang: "fr",
+        segment: "[![CI](https://example.com/badge.svg)](https://example.com/a…",
+        span: "https://example.com/badge.svg",
+        kind: "link",
+        found: "https://example.com/actions",
+      },
+    ]);
+  });
+
+  it("treats a URL with balanced parentheses as one target", () => {
+    const en = "See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) for details.";
+    expect(extractLinks(en)).toEqual({
+      nonAnchorTargets: ["https://en.wikipedia.org/wiki/Foo_(bar)"],
+      anchorCount: 0,
+    });
+    const fr = "Voir [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) pour plus de détails.";
+    expect(checkSegment(en, fr, "fr")).toEqual([]);
+  });
+
+  it("finishes in well under a second on long unclosed runs of '[' and '(' (50,000 chars each)", () => {
+    const hostile = "[".repeat(50_000) + "(".repeat(50_000) + "[a](".repeat(10_000) + "⟦".repeat(50_000);
+    const start = performance.now();
+    const links = extractLinks(hostile);
+    const placeholders = checkPlaceholders("plain", hostile, "fr");
+    const elapsedMs = performance.now() - start;
+
+    expect(links).toEqual({ nonAnchorTargets: [], anchorCount: 0 });
+    expect(placeholders).toHaveLength(50_000);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("flags ⟦Ollama⟧(…) with kind placeholder and passes a source that documents ⟦n⟧ in prose", () => {
+    const en = "Download from [ollama.com](https://ollama.com) and start it:";
+    const fr = "Téléchargez-le à partir de ⟦ollama.com⟧(https://ollama.com) et démarrez-le :";
+    const lost = checkSegment(en, fr, "fr");
+    expect(lost).toContainEqual({
+      lang: "fr",
+      segment: en,
+      span: "⟦ollama.com⟧",
+      kind: "placeholder",
+    });
+
+    const docEn = "Protected terms go through letter-free ⟦n⟧ placeholders just like ⟦0⟧.";
+    const docFr = "Les termes protégés passent par des espaces réservés ⟦n⟧ sans lettres comme ⟦0⟧.";
+    expect(checkSegment(docEn, docFr, "fr")).toEqual([]);
+  });
+
+  it("anchor fallback: fails under fail on a count mismatch with a source-valid anchor", () => {
+    const en = "## Usage\n\nSee [Usage](#usage).\n";
+    const frDropped = "## Utilisation\n\nVoir Utilisation.\n";
+    const warnings: string[] = [];
+    const lost = checkAnchors(en, frDropped, "fr", { warnings });
+
+    expect(warnings).toEqual([expect.stringContaining("anchor count mismatch (source has 1, translation has 0)")]);
+    expect(lost).toEqual([
+      {
+        lang: "fr",
+        segment: "(whole file)",
+        span: "anchor count 1 → 0",
+        kind: "anchor",
+        found: "0",
+      },
+    ]);
+    expect(() => enforceLostSpanPolicy(lost, "fail")).toThrow(LostSpanError);
+  });
+
+  it("anchor fallback: warns and passes when a count mismatch is caused only by a link broken in the source", () => {
+    const en = "## Usage\n\nSee [Usage](#usage) and [Broken](#no-such-heading).\n";
+    const fr = "## Utilisation\n\nVoir [Utilisation](#utilisation).\n";
+    const warnings: string[] = [];
+    const lost = checkAnchors(en, fr, "fr", { warnings });
+
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain("anchor #no-such-heading is unresolved in source");
+    expect(warnings[1]).toContain("anchor count mismatch (source has 2, translation has 1)");
+    expect(lost).toEqual([]);
+    expect(() => enforceLostSpanPolicy(lost, "fail")).not.toThrow();
+  });
+
+  it("anchor fallback: reports the ja fixture once, not twice (one slip, one report)", () => {
+    const jaSlip = SLIPS_50.slips.find((s) => s.id === "ja-line-100")!;
+    const srcDoc = `${jaSlip.source}\n\n${jaSlip.sourceHeading}\n`;
+    const tgtDoc = `${jaSlip.broken}\n\n${jaSlip.targetHeading}\n`;
+    const warnings: string[] = [];
+    const lost = checkSurvival(srcDoc, tgtDoc, { lang: "ja", warnings });
+
+    expect(lost).toEqual([
+      {
+        lang: "ja",
+        segment: "`report` (default) lists protected spans missing from the tr…",
+        span: "1 anchor links",
+        kind: "link",
+        found: "0",
+      },
+    ]);
+    expect(warnings).toEqual([expect.stringContaining("anchor count mismatch (source has 1, translation has 0)")]);
+  });
+
+  it("applies the link and placeholder rules in the whole-file fallback when structure diverges", () => {
+    const en = "# Title\n\nVisit [Ollama](https://ollama.com).\n\nSecond paragraph.\n";
+    const frMergedBroken = "# Titre\n\nVisitez ⟦Ollama⟧(https://ollama.com). Deuxième paragraphe.\n";
+    const lost = checkSurvival(en, frMergedBroken, { lang: "fr" });
+
+    expect(lost).toEqual([
+      {
+        lang: "fr",
+        segment: "(whole file)",
+        span: "https://ollama.com",
+        kind: "link",
+        found: "(no links)",
+      },
+      {
+        lang: "fr",
+        segment: "(whole file)",
+        span: "⟦Ollama⟧",
+        kind: "placeholder",
+      },
+    ]);
+  });
+
+  it("extracts [WIP][Ollama](https://ollama.com) without dropping the inline link (F1)", () => {
+    expect(extractLinks("[WIP][Ollama](https://ollama.com)").nonAnchorTargets).toEqual(["https://ollama.com"]);
+  });
+
+  it("extracts angle-bracketed destinations with spaces and unbalanced parens, brackets, escapes, and escaped quotes in titles (F2)", () => {
+    expect(extractLinks("[doc](<path with spaces/file.md>)").nonAnchorTargets).toEqual(["path with spaces/file.md"]);
+    expect(extractLinks("[doc](<https://example.com/a)b>)").nonAnchorTargets).toEqual(["https://example.com/a)b"]);
+    expect(extractLinks("[doc](<https://example.com/a(b>)").nonAnchorTargets).toEqual(["https://example.com/a(b"]);
+    expect(extractLinks("[api](https://example.com/api?filter[a]=1)").nonAnchorTargets).toEqual([
+      "https://example.com/api?filter[a]=1",
+    ]);
+    expect(extractLinks("[doc](https://example.com/a\\)b)").nonAnchorTargets).toEqual(["https://example.com/a\\)b"]);
+    expect(extractLinks('[doc](https://example.com "say \\"hi\\"")').nonAnchorTargets).toEqual([
+      "https://example.com",
+    ]);
+    expect(
+      extractLinks('[![CI](https://example.com/badge.svg "a ] b")](https://example.com/actions)')
+        .nonAnchorTargets.sort(),
+    ).toEqual(["https://example.com/actions", "https://example.com/badge.svg"]);
+  });
+
+  it("finishes '[a](b ('.repeat(32000) in under 100 ms (F2 linear-time deadFrom)", () => {
+    const input = "[a](b (".repeat(32_000);
+    const start = performance.now();
+    const res = extractLinks(input);
+    const elapsedMs = performance.now() - start;
+    expect(res).toEqual({ nonAnchorTargets: [], anchorCount: 0 });
+    expect(elapsedMs).toBeLessThan(100);
+  });
+
+  it("passes F4's reordered sentence with a source-broken link, and fails when #イントロ in it is broken (F4)", () => {
+    const en = "## Intro\n\nSee [Intro](#intro) and [Broken](#no-such-heading).\n";
+    const jaOk = "## イントロ\n\n[Broken](#no-such-heading) と [Intro](#イントロ) を参照してください。\n";
+    const jaBroken = "## はじめに\n\n[Broken](#no-such-heading) と [Intro](#イントロ) を参照してください。\n";
+
+    const warningsOk: string[] = [];
+    expect(checkSurvival(en, jaOk, { lang: "ja", warnings: warningsOk })).toEqual([]);
+    expect(warningsOk).toEqual([expect.stringContaining("anchor #no-such-heading is unresolved in source")]);
+
+    const warningsBroken: string[] = [];
+    const lost = checkSurvival(en, jaBroken, { lang: "ja", warnings: warningsBroken });
+    expect(lost).toEqual([
+      {
+        lang: "ja",
+        segment: "[Broken](#no-such-heading) と [Intro](#イントロ) を参照してください。",
+        span: "#イントロ",
+        kind: "anchor",
+      },
+    ]);
+    expect(() => enforceLostSpanPolicy(lost, "fail")).toThrow(LostSpanError);
+  });
+
+  it("fails both of Argon's F5 count-mismatch cases (#a dropped + 2 broken added; #b and source-broken dropped + #a duplicated)", () => {
+    // Case 1: #a dropped, #b kept, and two broken anchors added.
+    const en1 = "## A\n\n## B\n\nSee [A](#a) and [B](#b).\n";
+    const fr1 = "## A\n\n## B\n\nVoir [B](#b), [X](#broken-1) et [Y](#broken-2).\n";
+    const lost1 = checkAnchors(en1, fr1, "fr");
+    expect(lost1).toEqual([
+      { lang: "fr", segment: "(whole file)", span: "anchor count 2 → 3", kind: "anchor", found: "3" },
+      { lang: "fr", segment: "Voir [B](#b), [X](#broken-1) et [Y](#broken-2).", span: "#broken-1", kind: "anchor" },
+      { lang: "fr", segment: "Voir [B](#b), [X](#broken-1) et [Y](#broken-2).", span: "#broken-2", kind: "anchor" },
+    ]);
+    expect(() => enforceLostSpanPolicy(checkSurvival(en1, fr1, { lang: "fr" }), "fail")).toThrow(LostSpanError);
+
+    // Case 2: #b and a link broken in the source dropped, and #a duplicated.
+    const en2 = '## A\n\n## B\n\nSee [A](#a) and [Broken](#no-such).\n\nJump to <a href="#b">B</a>.\n';
+    const fr2 = "## A\n\n## B\n\nVoir [A](#a) et [A](#a).\n\nAller à B.\n";
+    const lost2 = checkAnchors(en2, fr2, "fr");
+    expect(lost2).toEqual([
+      { lang: "fr", segment: "(whole file)", span: "anchor count 3 → 2", kind: "anchor", found: "2" },
+    ]);
+    const survivalLost2 = checkSurvival(en2, fr2, { lang: "fr" });
+    expect(survivalLost2.length).toBeGreaterThan(0);
+    expect(() => enforceLostSpanPolicy(survivalLost2, "fail")).toThrow(LostSpanError);
+  });
+
+  it("resolves [FAQ](#FAQ) beside ## FAQ without warning 'unresolved in source' (F6)", () => {
+    const en = "## FAQ\n\nSee [FAQ](#FAQ).\n";
+    const fr = "## FAQ\n\nVoir [FAQ](#FAQ).\n";
+    const warnings: string[] = [];
+    expect(checkSurvival(en, fr, { lang: "fr", warnings })).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("respects disable: ['link-target'] and disable: ['url'] in checkLinks (F8.3)", () => {
+    const en = "Read [Guide](./docs/guide.md) and visit [Ollama](https://ollama.com).";
+    const frLocalized = "Lisez [Guide](./docs/guide.fr.md) et visitez [Ollama](https://ollama.com).";
+    const frUrlChanged = "Lisez [Guide](./docs/guide.md) et visitez [Ollama](https://ollama.org).";
+
+    expect(
+      checkLinks(en, frLocalized, "fr", { terms: buildProtectedTerms({ disable: ["link-target"] }) }),
+    ).toEqual([]);
+    expect(
+      checkLinks(en, frUrlChanged, "fr", { terms: buildProtectedTerms({ disable: ["link-target"] }) }),
+    ).toHaveLength(1);
+    expect(
+      checkLinks(en, frUrlChanged, "fr", { terms: buildProtectedTerms({ disable: ["url"] }) }),
+    ).toEqual([]);
+  });
+
+  it("reports a link that drops or gains '#' ([Text](#slug) ↔ [Text](slug)) once, not 2–3 times (F9)", () => {
+    const enAnchor = "## Slug\n\nSee [Text](#slug).\n";
+    const frDroppedHash = "## Slug\n\nVoir [Text](slug).\n";
+    expect(checkLinks("See [Text](#slug).", "Voir [Text](slug).", "fr")).toHaveLength(1);
+    expect(checkSurvival(enAnchor, frDroppedHash, { lang: "fr" })).toHaveLength(1);
+
+    const enRel = "## Slug\n\nSee [Text](slug).\n";
+    const frGainedHash = "## Slug\n\nVoir [Text](#slug).\n";
+    expect(checkLinks("See [Text](slug).", "Voir [Text](#slug).", "fr")).toHaveLength(1);
+    expect(checkSurvival(enRel, frGainedHash, { lang: "fr" })).toHaveLength(1);
+  });
+
+  it("finishes F1's parenthesised-title and whitespace-run cases in under 100 ms each at N = 32,000 (round 3 F1)", () => {
+    const N = 32_000;
+    const cases: Array<() => unknown> = [
+      () => findProtectedSpans("[a](b (".repeat(N)),
+      () => findProtectedSpans("[a](#b (".repeat(N)),
+      () => extractLinks("[a](b (".repeat(N) + ")"),
+      () => {
+        const s = "[a](" + " ".repeat(N) + "x";
+        findProtectedSpans(s);
+        return extractLinks(s);
+      },
+      () => {
+        const s = "[a]:" + " ".repeat(N) + "x";
+        findProtectedSpans(s);
+        return extractLinks(s);
+      },
+    ];
+    for (const run of cases) {
+      const start = performance.now();
+      run();
+      const elapsedMs = performance.now() - start;
+      expect(elapsedMs).toBeLessThan(100);
+    }
+  });
+
+  it("checks multi-line links and '\\[text\\](…)' cases when extractLinks does not extract them, failing under fail (round 3 F2)", () => {
+    const multiEn = "Read [the complete\nguide](docs/Kimi-K3.md).";
+    const multiHiBad = "पढ़ें [पूरा\nगाइड](docs/किमी-के3.md)।";
+    expect(extractLinks(multiEn).nonAnchorTargets).toEqual([]);
+    const multiLost = checkSegment(multiEn, multiHiBad, "hi");
+    expect(multiLost).toEqual([
+      {
+        lang: "hi",
+        segment: "Read [the complete guide](docs/Kimi-K3.md).",
+        span: "docs/Kimi-K3.md",
+        kind: "link-target",
+      },
+    ]);
+    expect(() => enforceLostSpanPolicy(multiLost, "fail")).toThrow(LostSpanError);
+
+    // Whole-file fallback path when segment alignment diverges
+    const fallbackLost = checkSurvival(`${multiEn}\n\nExtra paragraph.\n`, multiHiBad, { lang: "hi" });
+    expect(fallbackLost).toContainEqual({
+      lang: "hi",
+      segment: "(whole file)",
+      span: "docs/Kimi-K3.md",
+      kind: "link-target",
+    });
+
+    for (const escapedEn of ["Read \\[text\\](docs/Kimi-K3.md).", "Read \\[text](docs/Kimi-K3.md)."]) {
+      const escapedHiBad = escapedEn.replace("Kimi-K3", "किमी-के3");
+      const lost = checkSegment(escapedEn, escapedHiBad, "hi");
+      expect(lost.length).toBeGreaterThan(0);
+      expect(() => enforceLostSpanPolicy(lost, "fail")).toThrow(LostSpanError);
+    }
+  });
+
+  it("either extracts or checks as exact text '[ ]: docs/Kimi-K3.md' and '[ref]: <docs/Kimi-K3\\>guide.md>', never neither (round 3 F2)", () => {
+    const blankLabelEn = "[ ]: docs/Kimi-K3.md";
+    const blankLabelHiBad = "[ ]: docs/किमी-के3.md";
+    expect(extractLinks(blankLabelEn).nonAnchorTargets).toEqual([]);
+    expect(expectedSpans(blankLabelEn).get("Kimi-K3.md")).toEqual({ kind: "term", count: 1 });
+    const blankLost = checkSegment(blankLabelEn, blankLabelHiBad, "hi");
+    expect(blankLost).toEqual([
+      { lang: "hi", segment: blankLabelEn, span: "Kimi-K3.md", kind: "term" },
+    ]);
+    expect(() => enforceLostSpanPolicy(blankLost, "fail")).toThrow(LostSpanError);
+
+    const escapedAngleEn = "[ref]: <docs/Kimi-K3\\>guide.md>";
+    const escapedAngleHiBad = "[ref]: <docs/किमी-के3\\>guide.md>";
+    expect(extractLinks(escapedAngleEn).nonAnchorTargets).toEqual(["docs/Kimi-K3\\>guide.md"]);
+    expect(expectedSpans(escapedAngleEn).size).toBe(0);
+    const angleLost = checkSegment(escapedAngleEn, escapedAngleHiBad, "hi");
+    expect(angleLost).toEqual([
+      {
+        lang: "hi",
+        segment: escapedAngleEn,
+        span: "docs/Kimi-K3\\>guide.md",
+        kind: "link",
+        found: "docs/किमी-के3\\>guide.md",
+      },
+    ]);
+    expect(() => enforceLostSpanPolicy(angleLost, "fail")).toThrow(LostSpanError);
+  });
+
+  it("does not allow a backslash to escape whitespace in a bare destination: '[a](C:\\ \"title\")' (round 3 F3)", () => {
+    expect(extractLinks('[a](C:\\ "title")').nonAnchorTargets).toEqual(["C:\\"]);
+  });
+});
+
+function PINS_50_LOOKUP(key: string) {
+  const entry = PINS_99B69E6.pins[key];
+  if (!entry) throw new Error(`Missing pin ${key}`);
+  return entry;
+}

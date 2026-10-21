@@ -20,9 +20,13 @@ import { createPins, getPin, loadPins, type PinFile } from "./pins.js";
 import {
   checkAnchors,
   checkCodeStructure,
+  checkLinks,
+  checkPlaceholders,
   checkSegment,
   enforceLostSpanPolicy,
   expectedSpans,
+  extractLinks,
+  extractRefDefinitions,
   safeDecodeSlug,
   stripHeadingMarkup,
   type LostSpan,
@@ -125,7 +129,7 @@ export interface TranslateMarkdownResult {
  */
 export function segmentMarkdown(md: string): Segment[] {
   const segments: Segment[] = [];
-  const lines = md.split("\n");
+  const lines = md.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
   let i = 0;
 
   while (i < lines.length) {
@@ -178,7 +182,7 @@ export function segmentMarkdown(md: string): Segment[] {
       while (
         i < lines.length &&
         lines[i].trim() !== "" &&
-        !/^(---|##)/.test(lines[i])
+        !/^(---|#{1,6}\s)/.test(lines[i])
       ) {
         block.push(lines[i]);
         i++;
@@ -271,7 +275,7 @@ export function isTranslatableCell(trimmed: string): boolean {
 
 /** Parse a markdown table into rows/cells, identifying translatable cells. */
 export function parseTable(tableText: string): { parsed: ParsedRow[]; translatableCells: TranslatableCell[] } {
-  const rows = tableText.split("\n");
+  const rows = tableText.split("\n").map((r) => (r.endsWith("\r") ? r.slice(0, -1) : r));
   const parsed: ParsedRow[] = [];
   const translatableCells: TranslatableCell[] = [];
 
@@ -426,7 +430,7 @@ export function buildHeadingSlugMap(
   for (let s = 0; s < segments.length; s++) {
     const seg = segments[s];
     if (seg.type !== "heading") continue;
-    const srcSlug = safeDecodeSlug(sourceSlugger.slug(stripHeadingMarkup(seg.text)));
+    const srcSlug = safeDecodeSlug(sourceSlugger.slug(stripHeadingMarkup(seg.text))).toLowerCase();
     const tgtText = translationMap.get(s) ?? seg.text;
     const tgtSlug = targetSlugger.slug(stripHeadingMarkup(tgtText));
     if (srcSlug && tgtSlug) {
@@ -442,7 +446,7 @@ export function buildHeadingSlugMap(
  * `href="#…"` attribute (F6).
  */
 const REWRITE_LINE_PATTERN =
-  /(`[^`\n]+`)|(\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$)|(\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
+  /(`[^`\n]+`)|(\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\r\n]*\)))?\s*\))|(^[ \t>]*\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\r\n]*\)))?[ \t]*\r?$)|(\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
 
 /**
  * Rewrite in-page anchors across an assembled Markdown document in a single
@@ -452,7 +456,7 @@ const REWRITE_LINE_PATTERN =
  */
 export function rewriteAnchors(markdown: string, slugMap: ReadonlyMap<string, string>): string {
   if (slugMap.size === 0) return markdown;
-  const lines = markdown.split("\n");
+  const lines = markdown.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
   let inFence = false;
   let inComment = false;
 
@@ -488,7 +492,7 @@ export function rewriteAnchors(markdown: string, slugMap: ReadonlyMap<string, st
         if (codeSpan !== undefined) return match;
         const prefix = inlinePrefix ?? refPrefix ?? hrefPrefix ?? "";
         const rawSlug = (inlineSlug ?? refSlug ?? hrefSlug)!;
-        const targetSlug = slugMap.get(safeDecodeSlug(rawSlug));
+        const targetSlug = slugMap.get(safeDecodeSlug(rawSlug).toLowerCase());
         return targetSlug !== undefined ? `${prefix}#${targetSlug}` : match;
       },
     );
@@ -517,11 +521,20 @@ export function checkSurvival(
   const terms = options.terms ?? DEFAULT_PROTECTED_TERMS;
   const { lang } = options;
   const lost: LostSpan[] = [];
+  const sourceDefs = extractRefDefinitions(source);
+  const targetDefs = extractRefDefinitions(translation);
 
   const aligned = alignUnits(source, translation);
   if (aligned) {
     for (const { unit, target } of aligned) {
-      lost.push(...checkSegment(unit.text, target, lang, { terms, isCell: unit.kind === "cell" }));
+      lost.push(
+        ...checkSegment(unit.text, target, lang, {
+          terms,
+          isCell: unit.kind === "cell",
+          sourceDefs,
+          targetDefs,
+        }),
+      );
     }
   } else {
     const total = new Map<string, { kind: LostSpan["kind"]; count: number }>();
@@ -536,11 +549,39 @@ export function checkSurvival(
     for (const [span, { kind, count }] of total) {
       if (translation.split(span).length - 1 < count) lost.push({ lang, segment: "(whole file)", span, kind });
     }
+    lost.push(
+      ...checkLinks(source, translation, lang, {
+        sourceDefs,
+        targetDefs,
+        segment: "(whole file)",
+        terms,
+      }),
+      ...checkPlaceholders(source, translation, lang, {
+        segment: "(whole file)",
+      }),
+    );
   }
 
   lost.push(...checkCodeStructure(source, translation, lang));
   if (anchorsEnabled(terms)) {
-    lost.push(...checkAnchors(source, translation, lang, { warnings: options.warnings }));
+    const srcAnchorTotal = extractLinks(source, sourceDefs).anchorCount;
+    const tgtAnchorTotal = extractLinks(translation, targetDefs).anchorCount;
+    const fileAnchorDiff = srcAnchorTotal - tgtAnchorTotal;
+    const segAnchorLosses = lost.filter((l) => l.kind === "link" && l.span.endsWith(" anchor links"));
+    let segAnchorDiff = 0;
+    for (const l of segAnchorLosses) {
+      segAnchorDiff += Number.parseInt(l.span, 10) - Number(l.found ?? 0);
+    }
+    const skipCountMismatch =
+      segAnchorLosses.length > 0 &&
+      segAnchorLosses.every((l) => Number.parseInt(l.span, 10) > Number(l.found ?? 0)) &&
+      segAnchorDiff === fileAnchorDiff;
+    lost.push(
+      ...checkAnchors(source, translation, lang, {
+        warnings: options.warnings,
+        skipCountMismatch,
+      }),
+    );
   }
   return lost;
 }

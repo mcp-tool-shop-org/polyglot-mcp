@@ -87,7 +87,7 @@ export function pinCorrections(
     const tgtSlugger = new GithubSlugger();
     for (const { unit, target } of aligned) {
       if (unit.kind !== "heading") continue;
-      const srcSlug = safeDecodeSlug(srcSlugger.slug(stripHeadingMarkup(unit.text)));
+      const srcSlug = safeDecodeSlug(srcSlugger.slug(stripHeadingMarkup(unit.text))).toLowerCase();
       const cachedHeading = currentTranslation(unit, lang, model, terms, cache, getPin(pins, unit.text, lang));
       const tgtSlug = tgtSlugger.slug(stripHeadingMarkup(cachedHeading ?? target));
       if (srcSlug && tgtSlug) slugMap.set(srcSlug, tgtSlug);

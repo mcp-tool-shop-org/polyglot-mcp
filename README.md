@@ -161,11 +161,12 @@ TranslateGemma respells bare identifiers in another script: a Hindi README wrote
 
 | Pattern | Masks | Leaves alone |
 |---------|-------|--------------|
-| `url` | `https://…` up to whitespace, a quote, a bracket or a backtick | |
+| `url` | `https://…` up to whitespace, a quote, a bracket or a backtick (allowing one level of balanced parentheses such as `https://en.wikipedia.org/wiki/Foo_(bar)`) | |
+| `anchor` | In-page `#slug` targets in Markdown links (`[text](#slug)`, `[text](#slug "title")`), reference definitions (`[label]: #slug`), and HTML `href="#slug"` attributes, so the model translates the link text without mangling the fragment | `#123` in prose, `#heading` lines, external `https://…#frag` URLs (covered by `url`) |
+| `link-target` | Non-HTTP(S), non-anchor targets in Markdown inline links, images, and reference definitions: relative paths (`../facet`, `docs/Kimi-K3.md`), bare filenames (`LICENSE`), `mailto:`, `<path with spaces>`, and paths with one level of balanced parentheses (`docs/Foo_(bar).md`) | Link titles (`"MIT License"`), HTML attributes (`href="…"`, `src="…"`) |
 | `caps-id` | ALL-CAPS tokens with a digit, or capitals joined by `-` or `_`: `XLS-30`, `HOST_REJECTED`, `SHA-256`, `ARM64` | `README`, `API`, `NASA` |
 | `camel-case` | CamelCase and mixedCase words: `DepositAuth`, `AMMCreate`, `mixedCase`, `SoulX-Singer` | `URLs`, `IDs`, `GPUs`, ordinary capitalised words |
 | `model-id` | Model and product IDs with a letter-and-digit part: `Kimi-K3`, `gemma4:31b`, `Qwen2.5-32B` | `Node.js`, `top-10` |
-| `anchor` | In-page `#slug` targets in Markdown links (`[text](#slug)`, `[text](#slug "title")`) and reference definitions (`[label]: #slug`), so the model translates the link text without mangling the fragment | `#123` in prose, `#heading` lines, external `https://…#frag` URLs (covered by `url`) |
 
 After all segments are translated and reassembled, each source ATX heading is paired with its translated ATX heading and slugged in document order with `github-slugger` (matching GitHub's own heading IDs, including `-1`, `-2` suffixes for duplicate headings), and every non-code in-page anchor (`[text](#slug)`, `[label]: #slug`, and HTML `href="#slug"`) is rewritten to the translated heading's slug.
 
@@ -182,10 +183,10 @@ A repository adds its own terms in `.polyglot-terms.json` beside the README. Eve
 }
 ```
 
-`terms` are exact, case-sensitive strings matched as whole words; `patterns` are JavaScript regular expressions. Both add to the defaults. `disable` switches defaults off by name (for example, `"disable": ["anchor"]` switches off in-page anchor masking, post-assembly slug rewriting, and the anchor survival check), and `"nOfM": false` switches the count rule off. A file that cannot be parsed stops the run with `CONFIG_ERROR` instead of translating without the terms it asked for.
+`terms` are exact, case-sensitive strings matched as whole words; `patterns` are JavaScript regular expressions. Both add to the defaults. `disable` switches defaults off by name (for example, `"disable": ["anchor"]` switches off in-page anchor masking, post-assembly slug rewriting, and the anchor survival check; `"disable": ["link-target"]` switches off non-HTTP link-target masking and skips relative/non-HTTP targets in the link survival check so links to localized files like `./docs/guide.fr.md` pass), and `"nOfM": false` switches the count rule off. A file that cannot be parsed stops the run with `CONFIG_ERROR` instead of translating without the terms it asked for.
 
 ### Survival Check (`--on-lost-span`)
-After translating, every target file is checked against the English: each protected span (inline code span, protected term, and each count as `N/M`) must be present in the translation of its segment, character for character, and every in-page `#slug` anchor that resolved in the English source must resolve in the translation to a translated ATX heading slug or an explicit HTML `id=`/`name=` anchor (an anchor that was already unresolved in the English source is reported as a warning and never fails the run). Each table cell must carry the same numbers as its source cell, compared as a multiset, not in order: correct Chinese for "218 of 224" puts the total first (`224 首中的 218 首`), so an order check would flag the right answer. Digits from other scripts are normalised before comparing. The file must also keep its fenced code blocks and inline code spans.
+After translating, every target file is checked against the English: each protected span (inline code span, protected term, and each count as `N/M`) must be present in the translation of its segment, character for character, and every in-page `#slug` anchor that resolved in the English source must resolve in the translation to a translated ATX heading slug or an explicit HTML `id=`/`name=` anchor (an anchor that was already unresolved in the English source is reported as a warning and never fails the run; if source and translation anchor counts differ and a source-valid anchor was involved, the mismatch is also reported as a `LostSpan` of kind `"anchor"` unless already flagged by the segment link check). Each segment's Markdown links (`[text](target)`, `[text](target "title")`, images `![alt](src)`, reference links `[text][label]`, collapsed `[text][]`, and shortcut `[label]` resolved against their file's `[label]: target` definitions) must preserve the exact multiset of non-anchor link targets and the exact count of in-page `#slug` links (reported as kind `"link"` when a link is broken, unclosed, or dropped). Any unreplaced `⟦` or `⟧` placeholder delimiter left outside code in a translated segment beyond what the source carried is reported as kind `"placeholder"`. Each table cell must carry the same numbers as its source cell, compared as a multiset, not in order: correct Chinese for "218 of 224" puts the total first (`224 首中的 218 首`), so an order check would flag the right answer. Digits from other scripts are normalised before comparing. The file must also keep its fenced code blocks and inline code spans.
 
 `--on-lost-span=fail|report` picks what happens when something is lost:
 
@@ -329,7 +330,7 @@ See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy.
 ```bash
 npm install             # install deps
 npm run typecheck       # type-check without emitting
-npm test                # run 467 tests (vitest)
+npm test                # run 481 tests (vitest)
 npm run build           # compile TypeScript to dist/
 npm run verify          # typecheck + test + build + pack (full gate)
 ```
