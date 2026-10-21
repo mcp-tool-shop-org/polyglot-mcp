@@ -10,17 +10,21 @@
  * and the `scripts/translate-all.mjs` CLI.
  */
 
+import GithubSlugger from "github-slugger";
 import { translateBatch, type TranslateBatchOptions, type BatchItem } from "./translate.js";
-import { resolveLanguage, type Language } from "./languages.js";
+import { resolveLanguage } from "./languages.js";
 import { validateTranslation } from "./validate.js";
 import { maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
-import { DEFAULT_PROTECTED_TERMS, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
+import { anchorsEnabled, DEFAULT_PROTECTED_TERMS, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
 import { createPins, getPin, loadPins, type PinFile } from "./pins.js";
 import {
+  checkAnchors,
   checkCodeStructure,
   checkSegment,
   enforceLostSpanPolicy,
   expectedSpans,
+  safeDecodeSlug,
+  stripHeadingMarkup,
   type LostSpan,
   type LostSpanPolicy,
 } from "./survival.js";
@@ -404,12 +408,104 @@ export function alignUnits(source: string, translation: string): AlignedUnit[] |
   return aligned;
 }
 
+// ─── §2 Anchor rewriting ──────────────────────────────────────────
+
+/**
+ * Pair each source ATX heading with its translated ATX heading by segment index
+ * (`segIndex`), slugging both in heading order with one `GithubSlugger` per
+ * document so duplicate headings receive GitHub's `-1`, `-2` suffixes.
+ */
+export function buildHeadingSlugMap(
+  segments: readonly Segment[],
+  translationMap: ReadonlyMap<number, string>,
+): Map<string, string> {
+  const sourceSlugger = new GithubSlugger();
+  const targetSlugger = new GithubSlugger();
+  const slugMap = new Map<string, string>();
+
+  for (let s = 0; s < segments.length; s++) {
+    const seg = segments[s];
+    if (seg.type !== "heading") continue;
+    const srcSlug = safeDecodeSlug(sourceSlugger.slug(stripHeadingMarkup(seg.text)));
+    const tgtText = translationMap.get(s) ?? seg.text;
+    const tgtSlug = targetSlugger.slug(stripHeadingMarkup(tgtText));
+    if (srcSlug && tgtSlug) {
+      slugMap.set(srcSlug, tgtSlug);
+    }
+  }
+  return slugMap;
+}
+
+/**
+ * Single-pass line regex matching either an inline code span (kept verbatim) or
+ * an in-page anchor target in an inline link, reference definition, or HTML
+ * `href="#…"` attribute (F6).
+ */
+const REWRITE_LINE_PATTERN =
+  /((`+)[^`\n]*?\2)|(\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$)|(\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
+
+/**
+ * Rewrite in-page anchors across an assembled Markdown document in a single
+ * regex pass per non-fenced line, skipping fenced and inline code (F6).
+ * Each matched slug is decoded via `safeDecodeSlug` (F4) and looked up once in
+ * `slugMap`, preventing double rewrites when headings swap slugs.
+ */
+export function rewriteAnchors(markdown: string, slugMap: ReadonlyMap<string, string>): string {
+  if (slugMap.size === 0) return markdown;
+  const lines = markdown.split("\n");
+  let inFence = false;
+  let inComment = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+
+    if (inComment) {
+      if (line.includes("-->")) inComment = false;
+      continue;
+    }
+    if (/^<!--/.test(line.trim())) {
+      if (!line.includes("-->")) inComment = true;
+      continue;
+    }
+
+    lines[i] = line.replace(
+      REWRITE_LINE_PATTERN,
+      (
+        match,
+        codeSpan: string | undefined,
+        _ticks: string | undefined,
+        inlinePrefix: string | undefined,
+        inlineSlug: string | undefined,
+        refPrefix: string | undefined,
+        refSlug: string | undefined,
+        hrefPrefix: string | undefined,
+        hrefSlug: string | undefined,
+      ) => {
+        if (codeSpan !== undefined) return match;
+        const prefix = inlinePrefix ?? refPrefix ?? hrefPrefix ?? "";
+        const rawSlug = (inlineSlug ?? refSlug ?? hrefSlug)!;
+        const targetSlug = slugMap.get(safeDecodeSlug(rawSlug));
+        return targetSlug !== undefined ? `${prefix}#${targetSlug}` : match;
+      },
+    );
+  }
+
+  return lines.join("\n");
+}
+
 /**
  * The survival check for one translated file: every protected span in the
  * English (inline code spans, protected terms, and "N of M" counts as `N/M`)
  * must be present, character for character, in the translation of its
- * segment; each table cell must carry the same numbers as its source cell; and
- * the file must keep its fenced blocks and inline code spans.
+ * segment; each table cell must carry the same numbers as its source cell;
+ * the file must keep its fenced blocks and inline code spans; and when the
+ * `anchor` rule is enabled, every source-valid in-page anchor must resolve in
+ * the translation.
  *
  * When the translation's structure no longer lines up with the source's, the
  * spans are checked against the whole file instead.
@@ -417,7 +513,7 @@ export function alignUnits(source: string, translation: string): AlignedUnit[] |
 export function checkSurvival(
   source: string,
   translation: string,
-  options: { lang: string; terms?: ProtectedTermSet },
+  options: { lang: string; terms?: ProtectedTermSet; warnings?: string[] },
 ): LostSpan[] {
   const terms = options.terms ?? DEFAULT_PROTECTED_TERMS;
   const { lang } = options;
@@ -432,6 +528,7 @@ export function checkSurvival(
     const total = new Map<string, { kind: LostSpan["kind"]; count: number }>();
     for (const unit of collectUnits(segmentMarkdown(source))) {
       for (const [span, { kind, count }] of expectedSpans(unit.text, terms)) {
+        if (kind === "anchor") continue;
         const entry = total.get(span);
         if (entry) entry.count += count;
         else total.set(span, { kind, count });
@@ -443,6 +540,9 @@ export function checkSurvival(
   }
 
   lost.push(...checkCodeStructure(source, translation, lang));
+  if (anchorsEnabled(terms)) {
+    lost.push(...checkAnchors(source, translation, lang, { warnings: options.warnings }));
+  }
   return lost;
 }
 
@@ -782,11 +882,17 @@ export async function translateMarkdown(
     saveCache(options.filePath, cache);
   }
 
-  const translatedMarkdown = output.join("\n");
+  // §2: Rewrite restored English anchor slugs to the translated headings' slugs
+  // before the survival check runs, unless `anchor` was switched off in terms (F7).
+  let translatedMarkdown = output.join("\n");
+  if (anchorsEnabled(terms)) {
+    const slugMap = buildHeadingSlugMap(segments, translationMap);
+    translatedMarkdown = rewriteAnchors(translatedMarkdown, slugMap);
+  }
 
   // The survival check reads the finished file, so it covers every road a
   // segment took to get there: the model, the cache, a pin, or a fallback.
-  const lostSpans = checkSurvival(markdown, translatedMarkdown, { lang: targetLang, terms });
+  const lostSpans = checkSurvival(markdown, translatedMarkdown, { lang: targetLang, terms, warnings });
 
   const result: TranslateMarkdownResult = {
     markdown: translatedMarkdown,

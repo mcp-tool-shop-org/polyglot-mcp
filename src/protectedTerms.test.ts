@@ -15,6 +15,7 @@ import {
   DEFAULT_PATTERNS,
   DEFAULT_PROTECTED_TERMS,
   TERMS_FILE,
+  anchorsEnabled,
   buildProtectedTerms,
   findProtectedSpans,
   hashRules,
@@ -29,7 +30,8 @@ describe("protected terms — default patterns", () => {
   for (const d of DEFAULT_PATTERNS) {
     for (const example of d.examples) {
       it(`${d.name} masks ${example}`, () => {
-        const matches = findProtectedSpans(`See ${example} in the docs.`);
+        const sample = d.name === "anchor" ? `See [the section](${example}) in the docs.` : `See ${example} in the docs.`;
+        const matches = findProtectedSpans(sample);
         expect(matches.map((m) => m.source)).toEqual([example]);
         expect(matches[0].rule.startsWith(`default:${d.name}:`)).toBe(true);
       });
@@ -75,6 +77,39 @@ describe("protected terms — default patterns", () => {
   it("ends a URL at the closing parenthesis of a Markdown link", () => {
     const md = "See [the singer](https://github.com/Soul-AILab/SoulX-Singer).";
     expect(spansIn(md)).toEqual(["https://github.com/Soul-AILab/SoulX-Singer"]);
+  });
+});
+
+describe("protected terms — anchor", () => {
+  it("masks inline link #slug targets (with or without title) and leaves link text translatable", () => {
+    const masked = maskCodeSpans(
+      'See [Ollama Cloud](#ollama-cloud-optional) and [Survival Check](#survival-check---on-lost-span "check").',
+      DEFAULT_PROTECTED_TERMS,
+    );
+    expect(masked.text).toBe('See [Ollama Cloud](⟦0⟧) and [Survival Check](⟦1⟧ "check").');
+    expect(masked.spans).toEqual(["#ollama-cloud-optional", "#survival-check---on-lost-span"]);
+    expect(masked.kinds).toEqual(["anchor", "anchor"]);
+  });
+
+  it("masks reference definition #slug targets", () => {
+    const masked = maskCodeSpans(
+      "[cloud]: #ollama-cloud-optional\n[check]: #survival-check---on-lost-span \"Survival\"",
+      DEFAULT_PROTECTED_TERMS,
+    );
+    expect(masked.text).toBe("[cloud]: ⟦0⟧\n[check]: ⟦1⟧ \"Survival\"");
+    expect(masked.spans).toEqual(["#ollama-cloud-optional", "#survival-check---on-lost-span"]);
+    expect(masked.kinds).toEqual(["anchor", "anchor"]);
+  });
+
+  it("leaves cross-file links alone", () => {
+    expect(spansIn("See [guide](docs/x.md#y) and [readme](README.md#y).")).toEqual([]);
+  });
+
+  it("is on by default and switched off by disable: ['anchor']", () => {
+    expect(anchorsEnabled(DEFAULT_PROTECTED_TERMS)).toBe(true);
+    const off = buildProtectedTerms({ disable: ["anchor"] });
+    expect(anchorsEnabled(off)).toBe(false);
+    expect(spansIn("See [Ollama Cloud](#ollama-cloud-optional).", off)).toEqual([]);
   });
 });
 
@@ -156,9 +191,9 @@ describe("protected terms — .polyglot-terms.json", () => {
   });
 
   it("switches defaults off with disable, and counts off with nOfM: false", () => {
-    writeTerms({ disable: ["camel-case", "model-id"], nOfM: false });
+    writeTerms({ disable: ["camel-case", "model-id", "anchor"], nOfM: false });
     const set = loadProtectedTerms(readme());
-    expect(spansIn("DepositAuth by Kimi-K3, 218 of 224, XLS-30.", set)).toEqual(["XLS-30"]);
+    expect(spansIn("DepositAuth by Kimi-K3, 218 of 224, [cloud](#ollama), XLS-30.", set)).toEqual(["XLS-30"]);
   });
 
   it("rejects a file it cannot use, with CONFIG_ERROR", () => {
