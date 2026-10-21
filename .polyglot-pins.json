@@ -7,6 +7,12 @@
       "translation": "Téléchargez-le à partir de [ollama.com](https://ollama.com) et démarrez-le :",
       "pinnedAt": "2026-10-21T02:27:01.784Z"
     },
+    "753daec0127509ba:es": {
+      "lang": "es",
+      "source": "Translates text between 57 languages using [TranslateGemma](https://ollama.com/library/translategemma) running locally on your GPU via [Ollama](https://ollama.com). No API keys, no cloud, no rate limits — by default everything stays on your machine. You can opt in to a remote Ollama such as [Ollama Cloud](#ollama-cloud-optional).\r",
+      "translation": "Traduce texto entre 57 idiomas utilizando [TranslateGemma](https://ollama.com/library/translategemma) que se ejecuta localmente en su GPU a través de [Ollama](https://ollama.com). No hay claves de API, ni nube, ni límites de frecuencia; de forma predeterminada, todo permanece en su máquina. Puede optar por utilizar un Ollama remoto, como [Ollama Cloud](#ollama-cloud-opcional).",
+      "pinnedAt": "2026-10-21T02:29:36.071Z"
+    },
     "753daec0127509ba:fr": {
       "lang": "fr",
       "source": "Translates text between 57 languages using [TranslateGemma](https://ollama.com/library/translategemma) running locally on your GPU via [Ollama](https://ollama.com). No API keys, no cloud, no rate limits — by default everything stays on your machine. You can opt in to a remote Ollama such as [Ollama Cloud](#ollama-cloud-optional).\r",
