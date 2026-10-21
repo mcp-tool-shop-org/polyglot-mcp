@@ -168,6 +168,41 @@ describe("protected terms — link-target", () => {
     expect(linkTargetsEnabled(buildProtectedTerms({ disable: ["link-target"] }))).toBe(false);
     expect(urlsEnabled(buildProtectedTerms({ disable: ["url"] }))).toBe(false);
   });
+
+  it("finishes parenthesised-title and whitespace-lookbehind inputs in under 100 ms at N = 32,000 (round 3 F1)", () => {
+    const N = 32_000;
+    for (const [label, input, expected] of [
+      ["[a](b (", "[a](b (".repeat(N), []],
+      ["[a](#b (", "[a](#b (".repeat(N), []],
+      ["[a]( spaces", "[a](" + " ".repeat(N) + "x", []],
+      ["[a]: spaces", "[a]:" + " ".repeat(N) + "x", ["x"]],
+    ] as const) {
+      const start = performance.now();
+      const spans = spansIn(input);
+      const elapsedMs = performance.now() - start;
+      expect(spans, label).toEqual(expected);
+      expect(elapsedMs, `${label}: ${elapsedMs.toFixed(1)}ms`).toBeLessThan(100);
+    }
+  });
+
+  it("requires an unescaped '](' and a non-whitespace reference label in LINK_TARGET_PATTERN and ANCHOR_PATTERN (round 3 F2)", () => {
+    expect(findProtectedSpans("Read \\[text\\](docs/Kimi-K3.md).").map((m) => [m.kind, m.source])).toEqual([
+      ["term", "Kimi-K3.md"],
+    ]);
+    expect(findProtectedSpans("See \\[text\\](#kimi-k3).").map((m) => [m.kind, m.source])).toEqual([
+      ["term", "kimi-k3"],
+    ]);
+    expect(findProtectedSpans("[ ]: docs/Kimi-K3.md").map((m) => [m.kind, m.source])).toEqual([
+      ["term", "Kimi-K3.md"],
+    ]);
+    expect(findProtectedSpans("[ ]: #kimi-k3").map((m) => [m.kind, m.source])).toEqual([
+      ["term", "kimi-k3"],
+    ]);
+  });
+
+  it("does not allow a backslash to escape whitespace in a bare destination: '[a](C:\\ \"title\")' (round 3 F3)", () => {
+    expect(spansIn('[a](C:\\ "title")')).not.toContain('C:\\ "title"');
+  });
 });
 
 describe("protected terms — N of M", () => {

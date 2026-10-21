@@ -71,9 +71,16 @@ export function expectedSpans(
   terms: ProtectedTermSet = DEFAULT_PROTECTED_TERMS,
 ): Map<string, { kind: MaskedSpanKind; count: number }> {
   const { spans, kinds } = maskCodeSpans(source, terms);
+  const extracted = new Set(extractLinks(source).nonAnchorTargets);
   const expected = new Map<string, { kind: MaskedSpanKind; count: number }>();
   spans.forEach((span, i) => {
-    if (kinds[i] === "anchor" || kinds[i] === "link-target") return;
+    if (kinds[i] === "anchor") return;
+    if (
+      kinds[i] === "link-target" &&
+      extracted.has(span.startsWith("<") && span.endsWith(">") ? span.slice(1, -1) : span)
+    ) {
+      return;
+    }
     const entry = expected.get(span);
     if (entry) entry.count++;
     else expected.set(span, { kind: kinds[i], count: 1 });
@@ -162,7 +169,7 @@ function nonCodeLines(markdown: string): string[] {
 }
 
 const REF_DEF_LINE_PATTERN =
-  /^[ \t>]*\[([^\][\n]+)\]:[ \t]*(?:<([^<>\n]+)>|([^\s<>]+))(?:[ \t]+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\((?:\\.|[^)\\\n])*\)))?[ \t]*\r?$/;
+  /^[ \t>]*\[([^\][\n]+)\]:[ \t]*(?:<((?:\\.|[^<>\\\n])+)>|((?:\\[^\s]|[^\s<>\\])+))(?:[ \t]+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\((?:\\.|[^()\\\n])*\)))?[ \t]*\r?$/;
 
 /**
  * Parse a reference link definition line (`[label]: target` with optional
@@ -229,7 +236,7 @@ function parseInlineTarget(
   } else {
     let depth = 1;
     while (k < L && line[k] !== " " && line[k] !== "\t") {
-      if (line[k] === "\\") {
+      if (line[k] === "\\" && k + 1 < L && line[k + 1] !== " " && line[k + 1] !== "\t") {
         k += 2;
         continue;
       }
@@ -257,8 +264,12 @@ function parseInlineTarget(
     const closeQuote = line[k] === "(" ? ")" : line[k];
     k++;
     while (k < L && line[k] !== closeQuote) {
-      if (line[k] === "\\") k += 2;
-      else k++;
+      if (line[k] === "\\") {
+        k += 2;
+        continue;
+      }
+      if (closeQuote === ")" && line[k] === "(") return null;
+      k++;
     }
     if (k >= L) {
       if (closeQuote === ")") state.deadFrom = openParenIdx;
@@ -548,7 +559,7 @@ export function checkSegment(
   const lost: LostSpan[] = [];
   const segment = segmentLabel(source);
   for (const [span, { kind, count }] of expectedSpans(source, options.terms)) {
-    if (kind === "anchor" || kind === "link-target") continue;
+    if (kind === "anchor") continue;
     if (occurrences(translation, span) < count) lost.push({ lang, segment, span, kind });
   }
   if (options.isCell && !cellNumbersMatch(source, translation)) {
@@ -670,7 +681,7 @@ export interface DocumentAnchors {
 }
 
 const DOC_ANCHOR_PATTERN =
-  /(?<=\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(?<=^[ \t>]*\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*\r?$)|(?<=\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
+  /(?=#)(?<=\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\r\n]*\)))?\s*\))|(?=#)(?<=^[ \t>]*\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\r\n]*\)))?[ \t]*\r?$)|(?=#)(?<=\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
 
 /**
  * Extract ATX headings, explicit HTML `id=`/`name=` anchors, and in-page

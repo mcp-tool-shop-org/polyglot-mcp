@@ -446,7 +446,7 @@ export function buildHeadingSlugMap(
  * `href="#…"` attribute (F6).
  */
 const REWRITE_LINE_PATTERN =
-  /(`[^`\n]+`)|(\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(^[ \t>]*\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*\r?$)|(\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
+  /(`[^`\n]+`)|(\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\r\n]*\)))?\s*\))|(^[ \t>]*\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\r\n]*\)))?[ \t]*\r?$)|(\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
 
 /**
  * Rewrite in-page anchors across an assembled Markdown document in a single
@@ -540,7 +540,7 @@ export function checkSurvival(
     const total = new Map<string, { kind: LostSpan["kind"]; count: number }>();
     for (const unit of collectUnits(segmentMarkdown(source))) {
       for (const [span, { kind, count }] of expectedSpans(unit.text, terms)) {
-        if (kind === "anchor" || kind === "link-target") continue;
+        if (kind === "anchor") continue;
         const entry = total.get(span);
         if (entry) entry.count += count;
         else total.set(span, { kind, count });

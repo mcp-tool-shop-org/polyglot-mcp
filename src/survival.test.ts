@@ -39,7 +39,7 @@ import {
   slugifyHeadings,
   stripHeadingMarkup,
 } from "./survival.js";
-import { buildProtectedTerms } from "./protectedTerms.js";
+import { buildProtectedTerms, findProtectedSpans } from "./protectedTerms.js";
 import { PolyglotError } from "./errors.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "issue-44");
@@ -815,6 +815,95 @@ describe("survival check — broken links and placeholder leakage (#50)", () => 
     const frGainedHash = "## Slug\n\nVoir [Text](#slug).\n";
     expect(checkLinks("See [Text](slug).", "Voir [Text](#slug).", "fr")).toHaveLength(1);
     expect(checkSurvival(enRel, frGainedHash, { lang: "fr" })).toHaveLength(1);
+  });
+
+  it("finishes F1's parenthesised-title and whitespace-run cases in under 100 ms each at N = 32,000 (round 3 F1)", () => {
+    const N = 32_000;
+    const cases: Array<() => unknown> = [
+      () => findProtectedSpans("[a](b (".repeat(N)),
+      () => findProtectedSpans("[a](#b (".repeat(N)),
+      () => extractLinks("[a](b (".repeat(N) + ")"),
+      () => {
+        const s = "[a](" + " ".repeat(N) + "x";
+        findProtectedSpans(s);
+        return extractLinks(s);
+      },
+      () => {
+        const s = "[a]:" + " ".repeat(N) + "x";
+        findProtectedSpans(s);
+        return extractLinks(s);
+      },
+    ];
+    for (const run of cases) {
+      const start = performance.now();
+      run();
+      const elapsedMs = performance.now() - start;
+      expect(elapsedMs).toBeLessThan(100);
+    }
+  });
+
+  it("checks multi-line links and '\\[text\\](…)' cases when extractLinks does not extract them, failing under fail (round 3 F2)", () => {
+    const multiEn = "Read [the complete\nguide](docs/Kimi-K3.md).";
+    const multiHiBad = "पढ़ें [पूरा\nगाइड](docs/किमी-के3.md)।";
+    expect(extractLinks(multiEn).nonAnchorTargets).toEqual([]);
+    const multiLost = checkSegment(multiEn, multiHiBad, "hi");
+    expect(multiLost).toEqual([
+      {
+        lang: "hi",
+        segment: "Read [the complete guide](docs/Kimi-K3.md).",
+        span: "docs/Kimi-K3.md",
+        kind: "link-target",
+      },
+    ]);
+    expect(() => enforceLostSpanPolicy(multiLost, "fail")).toThrow(LostSpanError);
+
+    // Whole-file fallback path when segment alignment diverges
+    const fallbackLost = checkSurvival(`${multiEn}\n\nExtra paragraph.\n`, multiHiBad, { lang: "hi" });
+    expect(fallbackLost).toContainEqual({
+      lang: "hi",
+      segment: "(whole file)",
+      span: "docs/Kimi-K3.md",
+      kind: "link-target",
+    });
+
+    for (const escapedEn of ["Read \\[text\\](docs/Kimi-K3.md).", "Read \\[text](docs/Kimi-K3.md)."]) {
+      const escapedHiBad = escapedEn.replace("Kimi-K3", "किमी-के3");
+      const lost = checkSegment(escapedEn, escapedHiBad, "hi");
+      expect(lost.length).toBeGreaterThan(0);
+      expect(() => enforceLostSpanPolicy(lost, "fail")).toThrow(LostSpanError);
+    }
+  });
+
+  it("either extracts or checks as exact text '[ ]: docs/Kimi-K3.md' and '[ref]: <docs/Kimi-K3\\>guide.md>', never neither (round 3 F2)", () => {
+    const blankLabelEn = "[ ]: docs/Kimi-K3.md";
+    const blankLabelHiBad = "[ ]: docs/किमी-के3.md";
+    expect(extractLinks(blankLabelEn).nonAnchorTargets).toEqual([]);
+    expect(expectedSpans(blankLabelEn).get("Kimi-K3.md")).toEqual({ kind: "term", count: 1 });
+    const blankLost = checkSegment(blankLabelEn, blankLabelHiBad, "hi");
+    expect(blankLost).toEqual([
+      { lang: "hi", segment: blankLabelEn, span: "Kimi-K3.md", kind: "term" },
+    ]);
+    expect(() => enforceLostSpanPolicy(blankLost, "fail")).toThrow(LostSpanError);
+
+    const escapedAngleEn = "[ref]: <docs/Kimi-K3\\>guide.md>";
+    const escapedAngleHiBad = "[ref]: <docs/किमी-के3\\>guide.md>";
+    expect(extractLinks(escapedAngleEn).nonAnchorTargets).toEqual(["docs/Kimi-K3\\>guide.md"]);
+    expect(expectedSpans(escapedAngleEn).size).toBe(0);
+    const angleLost = checkSegment(escapedAngleEn, escapedAngleHiBad, "hi");
+    expect(angleLost).toEqual([
+      {
+        lang: "hi",
+        segment: escapedAngleEn,
+        span: "docs/Kimi-K3\\>guide.md",
+        kind: "link",
+        found: "docs/किमी-के3\\>guide.md",
+      },
+    ]);
+    expect(() => enforceLostSpanPolicy(angleLost, "fail")).toThrow(LostSpanError);
+  });
+
+  it("does not allow a backslash to escape whitespace in a bare destination: '[a](C:\\ \"title\")' (round 3 F3)", () => {
+    expect(extractLinks('[a](C:\\ "title")').nonAnchorTargets).toEqual(["C:\\"]);
   });
 });
 
