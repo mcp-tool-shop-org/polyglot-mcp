@@ -189,13 +189,13 @@ export function stripHeadingMarkup(raw: string): string {
   do {
     prev = text;
     text = text
-      .replace(/!\[([^\][\n]*)\](?:\([^)\n]*\)|\[[^\][\n]*\])/g, "$1")
-      .replace(/\[([^\][\n]*)\](?:\([^)\n]*\)|\[[^\][\n]*\])/g, "$1");
+      .replace(/!\[([^\][\n]*)\](?:\([^()\n]*\)|\[[^\][\n]*\])/g, "$1")
+      .replace(/\[([^\][\n]*)\](?:\([^()\n]*\)|\[[^\][\n]*\])/g, "$1");
   } while (text !== prev);
 
   do {
     prev = text;
-    text = text.replace(/<\/?[A-Za-z!][^>\n]*>/g, "");
+    text = text.replace(/<\/?[A-Za-z!][^<>\n]*>/g, "");
   } while (text !== prev);
 
   text = text
@@ -290,7 +290,7 @@ export function extractDocumentAnchors(markdown: string): DocumentAnchors {
     // F3: strip inline code spans before scanning for explicit ids and anchors.
     const lineNoCode = line.replace(CODE_SPAN_PATTERN, "");
 
-    for (const tagMatch of lineNoCode.matchAll(/<[A-Za-z][^>\n]*>/g)) {
+    for (const tagMatch of lineNoCode.matchAll(/<[A-Za-z][^<>\n]*>/g)) {
       const tag = tagMatch[0];
       for (const attrMatch of tag.matchAll(/\b(?:id|name)\s*=\s*(?:"([^"\n]+)"|'([^'\n]+)'|([^\s>"'=]+))/gi)) {
         const val = attrMatch[1] ?? attrMatch[2] ?? attrMatch[3];
