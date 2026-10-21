@@ -442,7 +442,7 @@ export function buildHeadingSlugMap(
  * `href="#…"` attribute (F6).
  */
 const REWRITE_LINE_PATTERN =
-  /((`+)[^`\n]*?\2)|(\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$)|(\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
+  /(`[^`\n]+`)|(\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$)|(\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
 
 /**
  * Rewrite in-page anchors across an assembled Markdown document in a single
@@ -478,7 +478,6 @@ export function rewriteAnchors(markdown: string, slugMap: ReadonlyMap<string, st
       (
         match,
         codeSpan: string | undefined,
-        _ticks: string | undefined,
         inlinePrefix: string | undefined,
         inlineSlug: string | undefined,
         refPrefix: string | undefined,

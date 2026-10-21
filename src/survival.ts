@@ -168,10 +168,15 @@ export function safeDecodeSlug(s: string): string {
  * 4. Restore inline code content and `.trim()`.
  */
 export function stripHeadingMarkup(raw: string): string {
-  let text = raw.replace(/^#{1,6}\s+/, "").replace(/\s+#+\s*$/, "");
+  let text = raw.trim().replace(/^#{1,6}\s+/, "");
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "#") end--;
+  if (end < text.length && end > 0 && /\s/.test(text[end - 1])) {
+    text = text.slice(0, end).trimEnd();
+  }
 
   const codeSpans: string[] = [];
-  text = text.replace(/(`+)([^`\n]*?)\1/g, (_m, _ticks: string, content: string) => {
+  text = text.replace(/`([^`\n]+)`/g, (_m, content: string) => {
     const inner =
       content.length >= 2 && content.startsWith(" ") && content.endsWith(" ") && /[^ ]/.test(content)
         ? content.slice(1, -1)
@@ -188,7 +193,11 @@ export function stripHeadingMarkup(raw: string): string {
       .replace(/\[([^\][\n]*)\](?:\([^)\n]*\)|\[[^\][\n]*\])/g, "$1");
   } while (text !== prev);
 
-  text = text.replace(/<\/?[A-Za-z!][^>\n]*>/g, "");
+  do {
+    prev = text;
+    text = text.replace(/<\/?[A-Za-z!][^>\n]*>/g, "");
+  } while (text !== prev);
+
   text = text
     .replace(/[*~]+/g, "")
     .replace(/(?<![\p{L}\p{N}])_+|_{1,}(?![\p{L}\p{N}])/gu, "");
@@ -279,7 +288,7 @@ export function extractDocumentAnchors(markdown: string): DocumentAnchors {
     }
 
     // F3: strip inline code spans before scanning for explicit ids and anchors.
-    const lineNoCode = line.replace(/(`+)([^`\n]*?)\1/g, "");
+    const lineNoCode = line.replace(CODE_SPAN_PATTERN, "");
 
     for (const tagMatch of lineNoCode.matchAll(/<[A-Za-z][^>\n]*>/g)) {
       const tag = tagMatch[0];
