@@ -31,14 +31,26 @@ import { PolyglotError } from "./errors.js";
 // ─── Default patterns ─────────────────────────────────────────────
 
 /** Name of a default pattern, as used by `disable` in the terms file. */
-export type DefaultPatternName = "url" | "caps-id" | "camel-case" | "model-id";
+export type DefaultPatternName = "url" | "anchor" | "caps-id" | "camel-case" | "model-id";
 
 export interface DefaultPattern {
   name: DefaultPatternName;
+  kind?: ProtectedSpanKind;
   pattern: RegExp;
   /** Examples it must mask; documentation, and pinned by the tests. */
   examples: string[];
 }
+
+/**
+ * In-page anchor link targets:
+ * - inline links: `](#slug)`, including `](#slug "title")`
+ * - reference definitions: `[label]: #slug`
+ *
+ * Masks the `#slug` only so the link text stays translatable and the model
+ * never sees or rewrites a slug.
+ */
+export const ANCHOR_PATTERN =
+  /(?<=\]\(\s*)#[^\s)<>"'`[\]]+(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(?<=(?:^|\n)[ \t]{0,3}\[[^\][\n]+\]:[ \t]*)#[^\s)<>"'`[\]]+(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*(?:\r?\n|$))/gu;
 
 /**
  * The default protected-term patterns.
@@ -49,6 +61,9 @@ export interface DefaultPattern {
  * - `url` — `http://` or `https://` up to whitespace, a quote, a bracket or a
  *   backtick, minus trailing sentence punctuation. A Markdown link's target
  *   ends at its `)`.
+ * - `anchor` — in-page link target `#slug` in `](#slug)`, `](#slug "title")`
+ *   or `[label]: #slug`. Rewritten after assembly to the translated heading's
+ *   slug.
  * - `caps-id` — an ALL-CAPS token that carries a digit, or joins capitals with
  *   a hyphen or underscore: `XLS-30`, `HOST_REJECTED`, `SHA-256`, `ARM64`.
  *   `README`, `API` and `NASA` have neither, so they stay prose.
@@ -66,6 +81,12 @@ export const DEFAULT_PATTERNS: readonly DefaultPattern[] = [
     name: "url",
     pattern: /\bhttps?:\/\/[^\s<>"'`()[\]{}]*[^\s<>"'`()[\]{}.,;:!?]/g,
     examples: ["https://github.com/mcp-tool-shop-org/polyglot-mcp"],
+  },
+  {
+    name: "anchor",
+    kind: "anchor",
+    pattern: ANCHOR_PATTERN,
+    examples: ["#ollama-cloud-optional", "#survival-check---on-lost-span"],
   },
   {
     name: "caps-id",
@@ -109,7 +130,7 @@ export interface ProtectedTermsConfig {
 }
 
 /** What a span stands for once restored. */
-export type ProtectedSpanKind = "term" | "count";
+export type ProtectedSpanKind = "term" | "count" | "anchor";
 
 interface Rule {
   /** Stable identity, hashed into the cache key of segments it fires in. */
@@ -186,7 +207,12 @@ export function buildProtectedTerms(config: ProtectedTermsConfig = {}): Protecte
   const disabled = new Set(config.disable ?? []);
   for (const d of DEFAULT_PATTERNS) {
     if (disabled.has(d.name)) continue;
-    rules.push({ id: `default:${d.name}:${d.pattern.source}`, kind: "term", pattern: d.pattern, priority: priority++ });
+    rules.push({
+      id: `default:${d.name}:${d.pattern.source}`,
+      kind: d.kind ?? "term",
+      pattern: d.pattern,
+      priority: priority++,
+    });
   }
 
   return { rules };
@@ -194,6 +220,11 @@ export function buildProtectedTerms(config: ProtectedTermsConfig = {}): Protecte
 
 /** The default set, with no terms file. */
 export const DEFAULT_PROTECTED_TERMS: ProtectedTermSet = buildProtectedTerms();
+
+/** True when the `anchor` rule is active in `set` (not switched off via `disable: ["anchor"]`). */
+export function anchorsEnabled(set: ProtectedTermSet = DEFAULT_PROTECTED_TERMS): boolean {
+  return set.rules.some((r) => r.kind === "anchor");
+}
 
 /** Path of the terms file beside `readmePath`. */
 export function getTermsPath(readmePath: string): string {

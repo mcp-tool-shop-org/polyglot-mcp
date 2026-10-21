@@ -15,7 +15,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const mock = vi.hoisted(() => ({ mode: "respell" as "respell" | "counts" }));
+const mock = vi.hoisted(() => ({
+  mode: "respell" as "respell" | "counts" | "anchors-fr" | "anchors-hi" | "anchors-swap",
+}));
 
 /** The respellings the Hindi README shipped (xrpl-lab 7acc67c, ai-jam-sessions e4cd2fb/5f8d1e2). */
 const RESPELLINGS: Array<[RegExp, string]> = [
@@ -25,6 +27,28 @@ const RESPELLINGS: Array<[RegExp, string]> = [
   [/Kimi-K3/g, "किमी-के3"],
 ];
 
+/** The slug corruptions the French and Hindi READMEs shipped at 9fbe43a (#46). */
+const ANCHOR_CORRUPTIONS_FR: Array<[RegExp, string]> = [
+  [/#ollama-cloud-optional/g, "#ollama-cloud-optionnel"],
+  [/#configurable-default-model/g, "#modèle-par-défaut-configurable"],
+  [/#protected-terms-polyglot-termsjson/g, "#termes-protégés-polyglot-termsjson"],
+  [/#survival-check---on-lost-span/g, "#vérification-de-survie---en-cas-de-portion-manquante"],
+];
+
+const HEADING_TRANSLATIONS_FR: Record<string, string> = {
+  "Ollama Cloud (optional)": "Ollama Cloud (optionnel)",
+  "Configurable Default Model": "Modèle par défaut configurable",
+  "Protected Terms (⟦0⟧)": "Termes protégés (⟦0⟧)",
+  "Survival Check (⟦0⟧)": "Vérification de survie (⟦0⟧)",
+};
+
+const HEADING_TRANSLATIONS_HI: Record<string, string> = {
+  "Ollama Cloud (optional)": "ओलामा क्लाउड (वैकल्पिक)",
+  "Configurable Default Model": "कॉन्फ़िगर करने योग्य डिफ़ॉल्ट मॉडल",
+  "Protected Terms (⟦0⟧)": "संरक्षित शब्द (⟦0⟧)",
+  "Survival Check (⟦0⟧)": "उत्तरजीविता जाँच (⟦0⟧)",
+};
+
 vi.mock("./translate.js", () => ({
   translateBatch: vi.fn(async (items: Array<{ text: string }>) => ({
     translations: items.map(({ text }) => {
@@ -32,6 +56,21 @@ vi.mock("./translate.js", () => ({
         // The two Chinese slips: the first count reversed, any other ordinalised.
         let n = 0;
         return `【zh】${text.replace(/(\d+) of (\d+)/g, (_m, a, b) => (n++ === 0 ? `${a} 首中的 ${b} 首` : `${b}个中的第${a}个`))}`;
+      }
+      if (mock.mode === "anchors-fr") {
+        if (text in HEADING_TRANSLATIONS_FR) return HEADING_TRANSLATIONS_FR[text];
+        let out = text;
+        for (const [re, bad] of ANCHOR_CORRUPTIONS_FR) out = out.replace(re, bad);
+        return `【fr】${out}`;
+      }
+      if (mock.mode === "anchors-hi") {
+        if (text in HEADING_TRANSLATIONS_HI) return HEADING_TRANSLATIONS_HI[text];
+        return `【hi】${text.replace(/#configurable-default-model/g, "#कनफ़िगर-करने-योग्य-डिफ़ॉल्ट-मॉडल")}`;
+      }
+      if (mock.mode === "anchors-swap") {
+        if (text === "[Options](⟦0⟧)") return "[Options de ligne de commande](⟦0⟧)";
+        if (text === "Options") return "Options";
+        return `【fr】${text}`;
       }
       let out = text;
       for (const [re, hi] of RESPELLINGS) out = out.replace(re, hi);
@@ -264,5 +303,163 @@ describe("translateMarkdown — --on-lost-span", () => {
   it("fail: passes a clean translation", async () => {
     const result = await translateMarkdown(MD, "en", "hi", { cache: false, onLostSpan: "fail" });
     expect(result.lostSpans).toEqual([]);
+  });
+});
+
+describe("translateMarkdown — in-page anchor links", () => {
+  const MD_FR = [
+    "You can opt in to [Ollama Cloud](#ollama-cloud-optional).",
+    "",
+    '> **Tip:** Set `POLYGLOT_MODEL=translategemma:12b` first (see [Configurable Default Model](#configurable-default-model)).',
+    "",
+    "Inline code spans and [protected terms](#protected-terms-polyglot-termsjson) are swapped for placeholders.",
+    "",
+    "| `onLostSpan` | no | See [Survival Check](#survival-check---on-lost-span) |",
+    "",
+    "### Protected Terms (`.polyglot-terms.json`)",
+    "",
+    "### Survival Check (`--on-lost-span`)",
+    "",
+    "### Ollama Cloud (optional)",
+    "",
+    "### Configurable Default Model",
+    "",
+  ].join("\n");
+
+  beforeEach(() => {
+    mock.mode = "anchors-fr";
+    vi.mocked(translateBatch).mockClear();
+  });
+
+  it("masks anchor targets before the model sees them and rewrites them to translated heading slugs", async () => {
+    const result = await translateMarkdown(MD_FR, "en", "fr", { cache: false, onLostSpan: "fail" });
+
+    // The model never saw any of the raw #slug targets.
+    expect(sentToModel().join("\n")).not.toMatch(
+      /#ollama-cloud-optional|#configurable-default-model|#protected-terms-polyglot-termsjson|#survival-check---on-lost-span/,
+    );
+    // And the finished page carries the exact GitHub slugs of the translated French headings.
+    expect(result.markdown).toContain("](#ollama-cloud-optionnel)");
+    expect(result.markdown).toContain("](#modèle-par-défaut-configurable)");
+    expect(result.markdown).toContain("](#termes-protégés-polyglot-termsjson)");
+    expect(result.markdown).toContain("](#vérification-de-survie---on-lost-span)");
+    expect(result.markdown).not.toContain("#vérification-de-survie---en-cas-de-portion-manquante");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("rewrites Hindi anchors to Devanagari slugs and preserves combining marks", async () => {
+    mock.mode = "anchors-hi";
+    const result = await translateMarkdown(MD_FR, "en", "hi", { cache: false, onLostSpan: "fail" });
+    expect(result.markdown).toContain("](#ओलामा-क्लाउड-वैकल्पिक)");
+    expect(result.markdown).toContain("](#कॉन्फ़िगर-करने-योग्य-डिफ़ॉल्ट-मॉडल)");
+    expect(result.markdown).toContain("](#संरक्षित-शब्द-polyglot-termsjson)");
+    expect(result.markdown).toContain("](#उत्तरजीविता-जाँच---on-lost-span)");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("rewrites inline links with titles, reference definitions, and HTML href='#…' while skipping code", async () => {
+    const md = [
+      'See [Cloud](#ollama-cloud-optional "cloud section"), [ref][cloud-ref], and <a href="#configurable-default-model">model</a>.',
+      "",
+      'Inline code `[Cloud](#ollama-cloud-optional)` and `<a href="#ollama-cloud-optional">` stay literal.',
+      "",
+      "[cloud-ref]: #ollama-cloud-optional",
+      "",
+      "```markdown",
+      "[Cloud](#ollama-cloud-optional)",
+      "```",
+      "",
+      "### Ollama Cloud (optional)",
+      "",
+      "### Configurable Default Model",
+      "",
+    ].join("\n");
+
+    const result = await translateMarkdown(md, "en", "fr", { cache: false, onLostSpan: "fail" });
+    expect(result.markdown).toContain('(#ollama-cloud-optionnel "cloud section")');
+    expect(result.markdown).toContain('<a href="#modèle-par-défaut-configurable">');
+    expect(result.markdown).toContain("[cloud-ref]: #ollama-cloud-optionnel");
+    expect(result.markdown).toContain("`[Cloud](#ollama-cloud-optional)`");
+    expect(result.markdown).toContain('`<a href="#ollama-cloud-optional">`');
+    expect(result.markdown).toContain("```markdown\n[Cloud](#ollama-cloud-optional)\n```");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("single-pass rewrite prevents double-rewriting when two headings swap slugs (F6)", async () => {
+    mock.mode = "anchors-swap";
+    const md = [
+      "Compare [first](#options) and [second](#options-1).",
+      "",
+      "### [Options](https://example.com)",
+      "",
+      "### Options",
+      "",
+    ].join("\n");
+
+    const result = await translateMarkdown(md, "en", "fr", { cache: false, onLostSpan: "fail" });
+    // First heading (#options) -> #options-de-ligne-de-commande; second (#options-1) -> #options.
+    // A multi-pass replaceAll would turn #options-1 into #options and then into #options-de-ligne-de-commande.
+    expect(result.markdown).toContain("[first](#options-de-ligne-de-commande)");
+    expect(result.markdown).toContain("[second](#options)");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("decodes percent-encoded source anchors and never throws URIError on malformed % slugs (F4)", async () => {
+    const md = [
+      "See [Cloud](#ollama-cloud-%6Fptional) and broken [100%](#100%-coverage).",
+      "",
+      "### Ollama Cloud (optional)",
+      "",
+    ].join("\n");
+
+    const result = await translateMarkdown(md, "en", "fr", { cache: false, onLostSpan: "fail" });
+    expect(result.markdown).toContain("](#ollama-cloud-optionnel)");
+    expect(result.markdown).toContain("](#100%-coverage)");
+    expect(result.lostSpans).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("anchor #100%-coverage is unresolved in source"),
+    ]);
+  });
+
+  it("rewrites pinned segments' English slugs to the translated heading slugs", async () => {
+    const pins = createPins();
+    setPin(
+      pins,
+      "You can opt in to [Ollama Cloud](#ollama-cloud-optional).",
+      "fr",
+      "Vous pouvez activer [Ollama Cloud](#ollama-cloud-optional).",
+    );
+    const result = await translateMarkdown(MD_FR, "en", "fr", { cache: false, pins, onLostSpan: "fail" });
+    expect(result.pinned).toBe(1);
+    expect(result.markdown).toContain("Vous pouvez activer [Ollama Cloud](#ollama-cloud-optionnel).");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("disable: ['anchor'] switches off §1 masking, §2 rewriting, and §3 survival checking (F7)", async () => {
+    const terms = buildProtectedTerms({ disable: ["anchor"] });
+    const result = await translateMarkdown(MD_FR, "en", "fr", { cache: false, terms, onLostSpan: "fail" });
+    // Without §1 masking, the mock sees and corrupts #survival-check---on-lost-span;
+    // without §2 rewriting or §3 anchor checking, the corrupted slug stays and does not throw LOST_SPAN.
+    expect(result.markdown).toContain("](#vérification-de-survie---en-cas-de-portion-manquante)");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("adding the anchor rule changes the cache key for segments with an anchor and leaves other segments untouched", () => {
+    const withoutAnchor = buildProtectedTerms({ disable: ["anchor"] });
+    const withAnchor = DEFAULT_PROTECTED_TERMS;
+    const segWithAnchor = "See [Ollama Cloud](#ollama-cloud-optional).";
+    const segWithoutAnchor = "Runs locally on your GPU.";
+
+    const mWith1 = maskCodeSpans(segWithAnchor, withoutAnchor);
+    const mWith2 = maskCodeSpans(segWithAnchor, withAnchor);
+    expect(cacheKey(mWith1.text, "fr", MODEL, mWith1.termsHash)).not.toBe(
+      cacheKey(mWith2.text, "fr", MODEL, mWith2.termsHash),
+    );
+
+    const mPlain1 = maskCodeSpans(segWithoutAnchor, withoutAnchor);
+    const mPlain2 = maskCodeSpans(segWithoutAnchor, withAnchor);
+    expect(cacheKey(mPlain1.text, "fr", MODEL, mPlain1.termsHash)).toBe(
+      cacheKey(mPlain2.text, "fr", MODEL, mPlain2.termsHash),
+    );
   });
 });

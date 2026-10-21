@@ -1,34 +1,54 @@
 /**
  * The survival check — every protected span in the English is on the page in
- * the translation, character for character, and every table cell keeps its
- * numbers (as a multiset, not in order).
+ * the translation, character for character, every table cell keeps its
+ * numbers (as a multiset, not in order), and every source-valid in-page
+ * anchor resolves in the translation.
  *
- * Fixtures are extracts of the real slips (src/fixtures/issue-44):
- * - xrpl-lab README.hi.md at 7acc67c: XLS-nn IDs and DepositAuth /
- *   DepositPreauth respelled in Devanagari.
- * - ai-jam-sessions README.zh.md at 5f8d1e2^: "218 of 224" as 218 首中的 224 首.
+ * Fixtures are extracts of the real slips:
+ * - src/fixtures/issue-44:
+ *   - xrpl-lab README.hi.md at 7acc67c: XLS-nn IDs and DepositAuth /
+ *     DepositPreauth respelled in Devanagari.
+ *   - ai-jam-sessions README.zh.md at 5f8d1e2^: "218 of 224" as 218 首中的 224 首.
+ * - src/fixtures/issue-46:
+ *   - polyglot-mcp README.{es,fr,hi,ja,zh}.md at 9fbe43a: broken in-page anchors
+ *     from both Cause 1 (English slug kept) and Cause 2 (slug translated by model).
+ *   - github-slugs.json: ground-truth `id="user-content-…"` slugs rendered by GitHub.
  */
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkSurvival } from "./translateMarkdown.js";
+import { buildHeadingSlugMap, checkSurvival, rewriteAnchors, segmentMarkdown } from "./translateMarkdown.js";
 import {
   LostSpanError,
   cellNumbersMatch,
+  checkAnchors,
   checkSegment,
   countCodeStructure,
   enforceLostSpanPolicy,
+  expectedSpans,
+  extractDocumentAnchors,
   formatLostSpans,
   normalizeDigits,
   parseLostSpanPolicy,
+  safeDecodeSlug,
+  slugifyHeadings,
+  stripHeadingMarkup,
 } from "./survival.js";
 import { buildProtectedTerms } from "./protectedTerms.js";
 import { PolyglotError } from "./errors.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "issue-44");
 const fixture = (name: string) => readFileSync(join(FIXTURES, name), "utf-8").replace(/\r\n/g, "\n");
+
+const FIXTURES_46 = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "issue-46");
+const fixture46 = (name: string) => readFileSync(join(FIXTURES_46, name), "utf-8").replace(/\r\n/g, "\n");
+const GITHUB_SLUGS = JSON.parse(fixture46("github-slugs.json")) as {
+  ref: string;
+  sourceRef: string;
+  fixtures: Record<string, string[]>;
+};
 
 const KIMI_EN =
   "The piano arrangements were written for this project by Kimi-K3 and are dedicated to the public domain (CC0).";
@@ -171,5 +191,245 @@ describe("survival check — policy flag", () => {
     expect(
       formatLostSpans([{ lang: "zh", segment: "285 of 414", span: "285 414", kind: "number", found: "283 414" }]),
     ).toEqual([`[zh] "285 of 414": missing number "285 414" (found 283 414)`]);
+  });
+});
+
+describe("survival check — GitHub-rendered heading slugs", () => {
+  for (const [file, expectedSlugs] of Object.entries(GITHUB_SLUGS.fixtures)) {
+    it(`matches GitHub's rendered user-content- ids for ${file} (${expectedSlugs.length} headings)`, () => {
+      const md = fixture46(file);
+      const { headings } = extractDocumentAnchors(md);
+      expect(headings).toEqual(expectedSlugs);
+    });
+  }
+
+  it("strips inline markup in the F6 order: inline code masked first, then links/images/HTML/emphasis, then closing # and trim", () => {
+    expect(stripHeadingMarkup("## Type `<T>` and `__init__`")).toBe("Type <T> and __init__");
+    expect(stripHeadingMarkup("## Built by [MCP Tool Shop](https://mcp-tool-shop.github.io/)")).toBe(
+      "Built by MCP Tool Shop",
+    );
+    expect(stripHeadingMarkup("## ![Logo](logo.png) Guide")).toBe("Logo Guide");
+    expect(stripHeadingMarkup("## <span>HTML</span> *italic* **bold** _under_ __strong__ foo_bar")).toBe(
+      "HTML italic bold under strong foo_bar",
+    );
+    expect(stripHeadingMarkup("## Closing Hash ##")).toBe("Closing Hash");
+    expect(stripHeadingMarkup("## C#")).toBe("C#");
+    expect(slugifyHeadings(["## Options", "### Options", "## C#"])).toEqual(["options", "options-1", "c"]);
+  });
+});
+
+describe("survival check — in-page anchors", () => {
+  const EN_9FBE43A = fixture46("polyglot-mcp.README.9fbe43a.md");
+
+  it("exempts anchor spans from expectedSpans, checkSegment, and whole-file fallback (§1)", () => {
+    const line = "See [Ollama Cloud](#ollama-cloud-optional).";
+    expect([...expectedSpans(line).keys()]).toEqual([]);
+    expect(checkSegment(line, "Voir [Ollama Cloud](#ollama-cloud-facultatif).", "fr")).toEqual([]);
+  });
+
+  it("detects the broken anchors in polyglot-mcp's 1.9.0 translations at 9fbe43a (Cause 1 and Cause 2)", () => {
+    // es, hi, ja, zh: all 4 anchors kept the English slug while headings were translated (Cause 1).
+    for (const [lang, expectedFound] of [
+      [
+        "es",
+        [
+          "#ollama-cloud-opcional",
+          "#modelo-predeterminado-configurable",
+          "#términos-protegidos-polyglot-termsjson",
+          "#comprobación-de-supervivencia---on-lost-span",
+        ],
+      ],
+      [
+        "hi",
+        [
+          "#ओलामा-क्लाउड-वैकल्पिक",
+          "#कॉन्फ़िगर-करने-योग्य-डिफ़ॉल्ट-मॉडल",
+          "#सुरक्षित-शब्द-polyglot-termsjson",
+          "#उत्तरजीविता-जाँच---on-lost-span",
+        ],
+      ],
+      [
+        "ja",
+        [
+          "#ollama-cloudオプション",
+          "#構成可能なデフォルトモデル",
+          "#保護された用語polyglot-termsjson",
+          "#生存チェック--on-lost-span",
+        ],
+      ],
+      [
+        "zh",
+        [
+          "#ollama-cloud可选",
+          "#可配置的默认模型",
+          "#受保护的术语polyglot-termsjson",
+          "#生存检查--on-lost-span",
+        ],
+      ],
+    ] as const) {
+      const tr = fixture46(`polyglot-mcp.README.${lang}.9fbe43a.md`);
+      const lost = checkAnchors(EN_9FBE43A, tr, lang);
+      expect(lost.map((l) => l.span)).toEqual([
+        "#ollama-cloud-optional",
+        "#configurable-default-model",
+        "#protected-terms-polyglot-termsjson",
+        "#survival-check---on-lost-span",
+      ]);
+      expect(lost.map((l) => l.found)).toEqual(expectedFound);
+      expect(lost.every((l) => l.kind === "anchor")).toBe(true);
+    }
+
+    // fr: 3 of 4 broken — 1 Cause 1 (#ollama-cloud-optional) + 2 Cause 2 (corrupted foreign slugs).
+    const fr = fixture46("polyglot-mcp.README.fr.9fbe43a.md");
+    const frLost = checkAnchors(EN_9FBE43A, fr, "fr");
+    expect(frLost).toEqual([
+      {
+        lang: "fr",
+        segment: "Translates text between 57 languages using [TranslateGemma](…",
+        span: "#ollama-cloud-optional",
+        kind: "anchor",
+        found: "#ollama-cloud-facultatif",
+      },
+      {
+        lang: "fr",
+        segment: "Translate an entire markdown document while preserving struc…",
+        span: "#termes-protégés-polyglot-terms.json",
+        kind: "anchor",
+        found: "#termes-protégés-polyglot-termsjson",
+      },
+      {
+        lang: "fr",
+        segment: "| `onLostSpan` | no | `report` (default) lists protected spa…",
+        span: "#vérification-de-survie---en-cas-de-portion-manquante",
+        kind: "anchor",
+        found: "#vérification-de-la-survie---on-lost-span",
+      },
+    ]);
+  });
+
+  it("passes a correctly rewritten file under fail, with no LOST_SPAN for any rewritten anchor", () => {
+    const enSegs = segmentMarkdown(EN_9FBE43A);
+    const frSegs = segmentMarkdown(fixture46("polyglot-mcp.README.fr.9fbe43a.md"));
+    const translationMap = new Map<number, string>();
+    enSegs.forEach((seg, i) => {
+      if (seg.type === "heading") translationMap.set(i, frSegs[i].text);
+    });
+    const slugMap = buildHeadingSlugMap(enSegs, translationMap);
+    // Start from the French file with English slugs restored (as §1 masking produces), then run §2 rewrite.
+    const frRestored = fixture46("polyglot-mcp.README.fr.9fbe43a.md")
+      .replace("#termes-protégés-polyglot-terms.json", "#protected-terms-polyglot-termsjson")
+      .replace("#vérification-de-survie---en-cas-de-portion-manquante", "#survival-check---on-lost-span")
+      .replace("⟦1⟧", "Ollama");
+    const rewritten = rewriteAnchors(frRestored, slugMap);
+
+    const warnings: string[] = [];
+    const lost = checkSurvival(EN_9FBE43A, rewritten, { lang: "fr", warnings });
+    expect(lost).toEqual([]);
+    expect(warnings).toEqual([]);
+    expect(() => enforceLostSpanPolicy(lost, "fail")).not.toThrow();
+  });
+
+  it("fails a translated file with a broken anchor under fail and lists the span under report", () => {
+    const en = "## Usage\n\nSee [Usage](#usage).\n";
+    const frBroken = "## Utilisation\n\nVoir [Utilisation](#usage).\n";
+    const lost = checkSurvival(en, frBroken, { lang: "fr" });
+
+    expect(lost).toEqual([
+      { lang: "fr", segment: "See [Usage](#usage).", span: "#usage", kind: "anchor", found: "#utilisation" },
+    ]);
+    expect(() => enforceLostSpanPolicy(lost, "report")).not.toThrow();
+    expect(() => enforceLostSpanPolicy(lost, "fail")).toThrow(LostSpanError);
+  });
+
+  it("reports a link to a setext heading as a warning and does not fail under fail (F5)", () => {
+    const en = "Setext Title\n============\n\nSee [the title](#setext-title).\n";
+    const fr = "Titre Setext\n============\n\nVoir [le titre](#setext-title).\n";
+    const warnings: string[] = [];
+    const lost = checkSurvival(en, fr, { lang: "fr", warnings });
+
+    expect(lost).toEqual([]);
+    expect(() => enforceLostSpanPolicy(lost, "fail")).not.toThrow();
+    expect(warnings).toEqual([
+      expect.stringContaining("anchor #setext-title is unresolved in source"),
+    ]);
+  });
+
+  it("reports an anchor broken in the English source once as a warning and never fails (F5)", () => {
+    const en = "## Usage\n\nSee [missing](#no-such-heading) and [again](#no-such-heading).\n";
+    const fr = "## Utilisation\n\nVoir [manquant](#no-such-heading) et [encore](#no-such-heading).\n";
+    const warnings: string[] = [];
+    const lost = checkSurvival(en, fr, { lang: "fr", warnings });
+
+    expect(lost).toEqual([]);
+    expect(() => enforceLostSpanPolicy(lost, "fail")).not.toThrow();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("anchor #no-such-heading is unresolved in source");
+  });
+
+  it("resolves percent-encoded links and safely handles malformed % sequences without URIError (F4)", () => {
+    expect(safeDecodeSlug("100%-coverage")).toBe("100%-coverage");
+    expect(safeDecodeSlug("%E3")).toBe("%E3");
+    expect(safeDecodeSlug("%E7%94%9F%E5%AD%98")).toBe("生存");
+
+    const en = "## 生存\n\nSee [section](#%E7%94%9F%E5%AD%98) and [bad](#100%-coverage).\n";
+    const ja = "## 生存チェック\n\n[セクション](#%E7%94%9F%E5%AD%98%E3%83%81%E3%82%A7%E3%83%83%E3%82%AF) と [bad](#100%-coverage) を参照。\n";
+    const warnings: string[] = [];
+    const lost = checkSurvival(en, ja, { lang: "ja", warnings });
+    expect(lost).toEqual([]);
+    expect(warnings).toEqual([expect.stringContaining("anchor #100%-coverage is unresolved in source")]);
+  });
+
+  it("passes an explicit <a id> or name= anchor", () => {
+    const en = '<p><a id="custom-top"></a><a name="legacy-top"></a></p>\n\n## Intro\n\nBack to [top](#custom-top) or [legacy](#legacy-top).\n';
+    const es = '<p><a id="custom-top"></a><a name="legacy-top"></a></p>\n\n## Introducción\n\nVolver [arriba](#custom-top) o [legacy](#legacy-top).\n';
+    const warnings: string[] = [];
+    expect(checkSurvival(en, es, { lang: "es", warnings })).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("skips fenced code blocks and inline code when extracting headings, explicit ids, and anchors (F3)", () => {
+    const en = [
+      "```sh",
+      "# comment inside fenced block — not a heading",
+      "# another [fake](#fake-fence-anchor)",
+      "```",
+      "",
+      "## Usage",
+      "",
+      "Inline example `[Usage](#usage)` and `<a id=\"fake\">` stay untouched; real link [Usage](#usage).",
+      "",
+    ].join("\n");
+    const fr = [
+      "```sh",
+      "# comment inside fenced block — not a heading",
+      "# another [fake](#fake-fence-anchor)",
+      "```",
+      "",
+      "## Utilisation",
+      "",
+      "Exemple en ligne `[Usage](#usage)` et `<a id=\"fake\">` intacts ; vrai lien [Utilisation](#utilisation).",
+      "",
+    ].join("\n");
+
+    const warnings: string[] = [];
+    expect(checkSurvival(en, fr, { lang: "fr", warnings })).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("falls back to a plain resolve check and warns when anchor counts differ (F2 step 4)", () => {
+    const en = "## Usage\n\nSee [Usage](#usage).\n";
+    const frExtra = "## Utilisation\n\nVoir [Utilisation](#utilisation) et [Extra](#missing-target).\n";
+    const warnings: string[] = [];
+    const lost = checkAnchors(en, frExtra, "fr", { warnings });
+
+    expect(warnings).toEqual([expect.stringContaining("anchor count mismatch (source has 1, translation has 2)")]);
+    expect(lost).toEqual([
+      {
+        lang: "fr",
+        segment: "Voir [Utilisation](#utilisation) et [Extra](#missing-target)…",
+        span: "#missing-target",
+        kind: "anchor",
+      },
+    ]);
   });
 });

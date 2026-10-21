@@ -11,15 +11,16 @@
  * This is the engine behind `scripts/pin-translation.mjs`.
  */
 
+import GithubSlugger from "github-slugger";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cacheKey, getCached, getFuzzyCached, loadCache } from "./cache.js";
 import { maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
 import { PolyglotError } from "./errors.js";
 import { getPin, getPinsPath, loadPins, savePins, setPin } from "./pins.js";
-import { loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
-import { segmentLabel } from "./survival.js";
-import { alignUnits, cleanTranslation, type TranslatableUnit } from "./translateMarkdown.js";
+import { anchorsEnabled, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
+import { safeDecodeSlug, segmentLabel, stripHeadingMarkup } from "./survival.js";
+import { alignUnits, cleanTranslation, rewriteAnchors, type TranslatableUnit } from "./translateMarkdown.js";
 
 export interface PinCorrectionsOptions {
   /**
@@ -80,10 +81,26 @@ export function pinCorrections(
 
   const cache = loadCache(absPath);
   const pins = loadPins(absPath);
+  const slugMap = new Map<string, string>();
+  if (anchorsEnabled(terms)) {
+    const srcSlugger = new GithubSlugger();
+    const tgtSlugger = new GithubSlugger();
+    for (const { unit, target } of aligned) {
+      if (unit.kind !== "heading") continue;
+      const srcSlug = safeDecodeSlug(srcSlugger.slug(stripHeadingMarkup(unit.text)));
+      const cachedHeading = currentTranslation(unit, lang, model, terms, cache, getPin(pins, unit.text, lang));
+      const tgtSlug = tgtSlugger.slug(stripHeadingMarkup(cachedHeading ?? target));
+      if (srcSlug && tgtSlug) slugMap.set(srcSlug, tgtSlug);
+    }
+  }
+
   const result: PinCorrectionsResult = { pinsPath: getPinsPath(absPath), pinned: [], unchanged: 0, uncached: 0, written: false };
 
   for (const { unit, target } of aligned) {
-    const current = currentTranslation(unit, lang, model, terms, cache, getPin(pins, unit.text, lang));
+    let current = currentTranslation(unit, lang, model, terms, cache, getPin(pins, unit.text, lang));
+    if (current !== undefined && slugMap.size > 0) {
+      current = rewriteAnchors(current, slugMap);
+    }
     if (current === undefined) {
       result.uncached++;
       if (!options.includeUncached) continue;
