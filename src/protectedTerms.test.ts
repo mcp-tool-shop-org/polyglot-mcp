@@ -19,7 +19,9 @@ import {
   buildProtectedTerms,
   findProtectedSpans,
   hashRules,
+  linkTargetsEnabled,
   loadProtectedTerms,
+  urlsEnabled,
 } from "./protectedTerms.js";
 import { maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
 import { PolyglotError } from "./errors.js";
@@ -30,7 +32,10 @@ describe("protected terms — default patterns", () => {
   for (const d of DEFAULT_PATTERNS) {
     for (const example of d.examples) {
       it(`${d.name} masks ${example}`, () => {
-        const sample = d.name === "anchor" ? `See [the section](${example}) in the docs.` : `See ${example} in the docs.`;
+        const sample =
+          d.name === "anchor" || d.name === "link-target"
+            ? `See [the section](${example}) in the docs.`
+            : `See ${example} in the docs.`;
         const matches = findProtectedSpans(sample);
         expect(matches.map((m) => m.source)).toEqual([example]);
         expect(matches[0].rule.startsWith(`default:${d.name}:`)).toBe(true);
@@ -74,9 +79,12 @@ describe("protected terms — default patterns", () => {
     expect(spansIn("hashed with FNV-1a, XLS-85-compliant")).toEqual(["FNV-1a", "XLS-85"]);
   });
 
-  it("ends a URL at the closing parenthesis of a Markdown link", () => {
-    const md = "See [the singer](https://github.com/Soul-AILab/SoulX-Singer).";
-    expect(spansIn(md)).toEqual(["https://github.com/Soul-AILab/SoulX-Singer"]);
+  it("ends a URL at the closing parenthesis of a Markdown link and masks balanced-paren URLs whole", () => {
+    const md = "See [the singer](https://github.com/Soul-AILab/SoulX-Singer) and [Foo](https://en.wikipedia.org/wiki/Foo_(bar)).";
+    expect(spansIn(md)).toEqual([
+      "https://github.com/Soul-AILab/SoulX-Singer",
+      "https://en.wikipedia.org/wiki/Foo_(bar)",
+    ]);
   });
 });
 
@@ -91,18 +99,30 @@ describe("protected terms — anchor", () => {
     expect(masked.kinds).toEqual(["anchor", "anchor"]);
   });
 
-  it("masks reference definition #slug targets", () => {
+  it("masks reference definition #slug targets (including blockquote and CRLF definitions) and HTML href='#slug'", () => {
     const masked = maskCodeSpans(
-      "[cloud]: #ollama-cloud-optional\n[check]: #survival-check---on-lost-span \"Survival\"",
+      '[cloud]: #ollama-cloud-optional\r\n> [check]: #survival-check---on-lost-span "Survival"\r\nJump to <a href="#kimi-k3-guide">guide</a>.',
       DEFAULT_PROTECTED_TERMS,
     );
-    expect(masked.text).toBe("[cloud]: ⟦0⟧\n[check]: ⟦1⟧ \"Survival\"");
-    expect(masked.spans).toEqual(["#ollama-cloud-optional", "#survival-check---on-lost-span"]);
-    expect(masked.kinds).toEqual(["anchor", "anchor"]);
+    expect(masked.text).toBe('[cloud]: ⟦0⟧\r\n> [check]: ⟦1⟧ "Survival"\r\nJump to <a href="⟦2⟧">guide</a>.');
+    expect(masked.spans).toEqual([
+      "#ollama-cloud-optional",
+      "#survival-check---on-lost-span",
+      "#kimi-k3-guide",
+    ]);
+    expect(masked.kinds).toEqual(["anchor", "anchor", "anchor"]);
   });
 
-  it("leaves cross-file links alone", () => {
-    expect(spansIn("See [guide](docs/x.md#y) and [readme](README.md#y).")).toEqual([]);
+  it("does not treat prose ending in 'See [issue]: #46' as a reference definition", () => {
+    expect(spansIn("See [issue]: #46")).toEqual([]);
+  });
+
+  it("masks cross-file links as link-target, not anchor", () => {
+    const matches = findProtectedSpans("See [guide](docs/x.md#y) and [readme](README.md#y).");
+    expect(matches.map((m) => [m.kind, m.source])).toEqual([
+      ["link-target", "docs/x.md#y"],
+      ["link-target", "README.md#y"],
+    ]);
   });
 
   it("is on by default and switched off by disable: ['anchor']", () => {
@@ -110,6 +130,43 @@ describe("protected terms — anchor", () => {
     const off = buildProtectedTerms({ disable: ["anchor"] });
     expect(anchorsEnabled(off)).toBe(false);
     expect(spansIn("See [Ollama Cloud](#ollama-cloud-optional).", off)).toEqual([]);
+  });
+});
+
+describe("protected terms — link-target", () => {
+  it("masks relative paths, bare files, mailto:, <path with spaces>, and balanced-paren paths as one link-target span", () => {
+    const sample = [
+      'See [facet](../facet), [MIT](LICENSE "MIT License"), [Kimi](docs/Kimi-K3.md),',
+      '[mail](mailto:dev@example.com), [spaces](<path with spaces/file.md>), and [paren](docs/Foo_(bar).md).',
+      "",
+      '[ref-space]: <path with spaces/ref.md> "Ref"',
+      "[ref-paren]: ./specs/XLS-30_(draft).md",
+    ].join("\n");
+    const matches = findProtectedSpans(sample);
+    expect(matches.map((m) => [m.kind, m.source])).toEqual([
+      ["link-target", "../facet"],
+      ["link-target", "LICENSE"],
+      ["link-target", "docs/Kimi-K3.md"],
+      ["link-target", "mailto:dev@example.com"],
+      ["link-target", "<path with spaces/file.md>"],
+      ["link-target", "docs/Foo_(bar).md"],
+      ["link-target", "<path with spaces/ref.md>"],
+      ["link-target", "./specs/XLS-30_(draft).md"],
+    ]);
+  });
+
+  it("never matches link titles or HTML attributes", () => {
+    const html = '<a href="docs/guide.md"><img src="assets/logo.png" alt="Logo"></a>';
+    expect(spansIn(html)).toEqual([]);
+    const titled = 'Read [Guide](docs/guide.md "See guide for details").';
+    expect(spansIn(titled)).toEqual(["docs/guide.md"]);
+  });
+
+  it("reports linkTargetsEnabled and urlsEnabled accurately when disabled", () => {
+    expect(linkTargetsEnabled(DEFAULT_PROTECTED_TERMS)).toBe(true);
+    expect(urlsEnabled(DEFAULT_PROTECTED_TERMS)).toBe(true);
+    expect(linkTargetsEnabled(buildProtectedTerms({ disable: ["link-target"] }))).toBe(false);
+    expect(urlsEnabled(buildProtectedTerms({ disable: ["url"] }))).toBe(false);
   });
 });
 
@@ -191,9 +248,9 @@ describe("protected terms — .polyglot-terms.json", () => {
   });
 
   it("switches defaults off with disable, and counts off with nOfM: false", () => {
-    writeTerms({ disable: ["camel-case", "model-id", "anchor"], nOfM: false });
+    writeTerms({ disable: ["camel-case", "model-id", "anchor", "link-target"], nOfM: false });
     const set = loadProtectedTerms(readme());
-    expect(spansIn("DepositAuth by Kimi-K3, 218 of 224, [cloud](#ollama), XLS-30.", set)).toEqual(["XLS-30"]);
+    expect(spansIn("DepositAuth by Kimi-K3, 218 of 224, [cloud](#ollama), [lic](LICENSE), XLS-30.", set)).toEqual(["XLS-30"]);
   });
 
   it("rejects a file it cannot use, with CONFIG_ERROR", () => {

@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const mock = vi.hoisted(() => ({
-  mode: "respell" as "respell" | "counts" | "anchors-fr" | "anchors-hi" | "anchors-swap",
+  mode: "respell" as "respell" | "counts" | "anchors-fr" | "anchors-hi" | "anchors-swap" | "links-hi",
 }));
 
 /** The respellings the Hindi README shipped (xrpl-lab 7acc67c, ai-jam-sessions e4cd2fb/5f8d1e2). */
@@ -25,6 +25,16 @@ const RESPELLINGS: Array<[RegExp, string]> = [
   [/DepositAuth/g, "डिपॉजिटऑथ"],
   [/XLS-/g, "एक्सएलएस-"],
   [/Kimi-K3/g, "किमी-के3"],
+];
+
+/** The relative-path and bare-file translations found in armature and aspire-si Hindi READMEs. */
+const LINK_TARGET_CORRUPTIONS_HI: Array<[RegExp, string]> = [
+  [/\.\.\/facet/g, "../फेसट"],
+  [/\bLICENSE\b/g, "लाइसेंस"],
+  [/\bMIT\b/g, "एमआईटी"],
+  [/mailto:support@example\.com/g, "mailto:सहायता@उदाहरण.कॉम"],
+  [/path with spaces\/file\.md/g, "स्पेस वाला पथ/फ़ाइल.md"],
+  [/docs\/Foo_\(bar\)\.md/g, "दस्तावेज़/फ़ू_(बार).md"],
 ];
 
 /** The slug corruptions the French and Hindi READMEs shipped at 9fbe43a (#46). */
@@ -40,6 +50,8 @@ const HEADING_TRANSLATIONS_FR: Record<string, string> = {
   "Configurable Default Model": "Modèle par défaut configurable",
   "Protected Terms (⟦0⟧)": "Termes protégés (⟦0⟧)",
   "Survival Check (⟦0⟧)": "Vérification de survie (⟦0⟧)",
+  "⟦0⟧ Guide": "Guide ⟦0⟧",
+  FAQ: "Foire aux questions",
 };
 
 const HEADING_TRANSLATIONS_HI: Record<string, string> = {
@@ -49,32 +61,44 @@ const HEADING_TRANSLATIONS_HI: Record<string, string> = {
   "Survival Check (⟦0⟧)": "उत्तरजीविता जाँच (⟦0⟧)",
 };
 
+const prefixProse = (tag: string, text: string): string =>
+  /^[ \t>]*\[[^\][\r\n]+\]:/.test(text) ? `${text} "${tag}"` : `【${tag}】${text}`;
+
 vi.mock("./translate.js", () => ({
   translateBatch: vi.fn(async (items: Array<{ text: string }>) => ({
     translations: items.map(({ text }) => {
       if (mock.mode === "counts") {
         // The two Chinese slips: the first count reversed, any other ordinalised.
         let n = 0;
-        return `【zh】${text.replace(/(\d+) of (\d+)/g, (_m, a, b) => (n++ === 0 ? `${a} 首中的 ${b} 首` : `${b}个中的第${a}个`))}`;
+        return prefixProse(
+          "zh",
+          text.replace(/(\d+) of (\d+)/g, (_m, a, b) => (n++ === 0 ? `${a} 首中的 ${b} 首` : `${b}个中的第${a}个`)),
+        );
       }
       if (mock.mode === "anchors-fr") {
         if (text in HEADING_TRANSLATIONS_FR) return HEADING_TRANSLATIONS_FR[text];
         let out = text;
         for (const [re, bad] of ANCHOR_CORRUPTIONS_FR) out = out.replace(re, bad);
-        return `【fr】${out}`;
+        for (const [re, hi] of RESPELLINGS) out = out.replace(re, hi);
+        return prefixProse("fr", out);
       }
       if (mock.mode === "anchors-hi") {
         if (text in HEADING_TRANSLATIONS_HI) return HEADING_TRANSLATIONS_HI[text];
-        return `【hi】${text.replace(/#configurable-default-model/g, "#कनफ़िगर-करने-योग्य-डिफ़ॉल्ट-मॉडल")}`;
+        return prefixProse("hi", text.replace(/#configurable-default-model/g, "#कनफ़िगर-करने-योग्य-डिफ़ॉल्ट-मॉडल"));
       }
       if (mock.mode === "anchors-swap") {
         if (text === "[Options](⟦0⟧)") return "[Options de ligne de commande](⟦0⟧)";
         if (text === "Options") return "Options";
-        return `【fr】${text}`;
+        return prefixProse("fr", text);
+      }
+      if (mock.mode === "links-hi") {
+        let out = text;
+        for (const [re, bad] of LINK_TARGET_CORRUPTIONS_HI) out = out.replace(re, bad);
+        return prefixProse("hi", out);
       }
       let out = text;
       for (const [re, hi] of RESPELLINGS) out = out.replace(re, hi);
-      return `【hi】${out}`;
+      return prefixProse("hi", out);
     }),
     model: "mock",
     ollamaCalls: 1,
@@ -385,6 +409,48 @@ describe("translateMarkdown — in-page anchor links", () => {
     expect(result.lostSpans).toEqual([]);
   });
 
+  it("masks href='#kimi-k3-guide' and blockquote definitions as anchor rather than term (F3)", async () => {
+    const md = [
+      'Jump to <a href="#kimi-k3-guide">the guide</a> or [Cloud][cloud-ref].',
+      "",
+      "> [cloud-ref]: #ollama-cloud-optional",
+      "",
+      "### Kimi-K3 Guide",
+      "",
+      "### Ollama Cloud (optional)",
+      "",
+    ].join("\n");
+
+    const result = await translateMarkdown(md, "en", "fr", { cache: false, onLostSpan: "fail" });
+    expect(result.markdown).toContain('<a href="#guide-kimi-k3">');
+    expect(result.markdown).toContain("> [cloud-ref]: #ollama-cloud-optionnel");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("resolves and rewrites uppercase source anchors like [FAQ](#FAQ) beside ## FAQ (F6)", async () => {
+    const md = ["See [FAQ](#FAQ) for details.", "", "## FAQ", ""].join("\n");
+    const result = await translateMarkdown(md, "en", "fr", { cache: false, onLostSpan: "fail" });
+    expect(result.markdown).toContain("](#foire-aux-questions)");
+    expect(result.warnings).toEqual([]);
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("handles a CRLF file with a reference-definition anchor end to end (F7)", async () => {
+    const md = [
+      "Read the [Cloud section][cloud-ref].",
+      "",
+      "[cloud-ref]: #ollama-cloud-optional",
+      "",
+      "### Ollama Cloud (optional)",
+      "",
+    ].join("\r\n");
+
+    const result = await translateMarkdown(md, "en", "fr", { cache: false, onLostSpan: "fail" });
+    expect(result.markdown).toContain("[cloud-ref]: #ollama-cloud-optionnel");
+    expect(result.warnings).toEqual([]);
+    expect(result.lostSpans).toEqual([]);
+  });
+
   it("single-pass rewrite prevents double-rewriting when two headings swap slugs (F6)", async () => {
     mock.mode = "anchors-swap";
     const md = [
@@ -460,6 +526,82 @@ describe("translateMarkdown — in-page anchor links", () => {
     const mPlain2 = maskCodeSpans(segWithoutAnchor, withAnchor);
     expect(cacheKey(mPlain1.text, "fr", MODEL, mPlain1.termsHash)).toBe(
       cacheKey(mPlain2.text, "fr", MODEL, mPlain2.termsHash),
+    );
+  });
+});
+
+describe("translateMarkdown — link-target protection (F8.3)", () => {
+  beforeEach(() => {
+    mock.mode = "links-hi";
+    vi.mocked(translateBatch).mockClear();
+  });
+
+  it("protects armature's ../facet and aspire-si's [MIT](LICENSE) from a model that translates link targets", async () => {
+    const md = "Built on [facet](../facet) and released under [MIT](LICENSE).";
+    const result = await translateMarkdown(md, "en", "hi", { cache: false, onLostSpan: "fail" });
+
+    expect(sentToModel().join("\n")).not.toMatch(/\.\.\/facet|\bLICENSE\b/);
+    expect(result.markdown).toContain("(../facet)");
+    expect(result.markdown).toContain("[एमआईटी](LICENSE)");
+    expect(result.markdown).not.toContain("../फेसट");
+    expect(result.markdown).not.toContain("(लाइसेंस)");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("protects mailto:, <path with spaces>, and balanced-paren paths end to end", async () => {
+    const md =
+      "Contact [support](mailto:support@example.com), read [the doc](<path with spaces/file.md>), or check [spec](docs/Foo_(bar).md).";
+    const result = await translateMarkdown(md, "en", "hi", { cache: false, onLostSpan: "fail" });
+
+    expect(result.markdown).toContain("(mailto:support@example.com)");
+    expect(result.markdown).toContain("(<path with spaces/file.md>)");
+    expect(result.markdown).toContain("(docs/Foo_(bar).md)");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("disable: ['link-target'] allows a localized relative target to pass --on-lost-span=fail", async () => {
+    const terms = buildProtectedTerms({ disable: ["link-target"] });
+    const pins = createPins();
+    setPin(
+      pins,
+      "Read the [Guide](./docs/guide.md) and visit [Ollama](https://ollama.com).",
+      "fr",
+      "Lisez le [Guide](./docs/guide.fr.md) et visitez [Ollama](https://ollama.com).",
+    );
+
+    const result = await translateMarkdown(
+      "Read the [Guide](./docs/guide.md) and visit [Ollama](https://ollama.com).",
+      "en",
+      "fr",
+      { cache: false, terms, pins, onLostSpan: "fail" },
+    );
+    expect(result.markdown).toContain("](./docs/guide.fr.md)");
+    expect(result.lostSpans).toEqual([]);
+  });
+
+  it("changes the cache key only for segments with a relative link-target", () => {
+    const withoutLinkTarget = buildProtectedTerms({ disable: ["link-target"] });
+    const withLinkTarget = DEFAULT_PROTECTED_TERMS;
+    const segWithRel = "See [Guide](./docs/guide.md) and [MIT](LICENSE).";
+    const segWithUrlOnly = "Visit [Ollama](https://ollama.com) for details.";
+    const segPlain = "Runs locally on your GPU.";
+
+    const mRel1 = maskCodeSpans(segWithRel, withoutLinkTarget);
+    const mRel2 = maskCodeSpans(segWithRel, withLinkTarget);
+    expect(cacheKey(mRel1.text, "hi", MODEL, mRel1.termsHash)).not.toBe(
+      cacheKey(mRel2.text, "hi", MODEL, mRel2.termsHash),
+    );
+
+    const mUrl1 = maskCodeSpans(segWithUrlOnly, withoutLinkTarget);
+    const mUrl2 = maskCodeSpans(segWithUrlOnly, withLinkTarget);
+    expect(cacheKey(mUrl1.text, "hi", MODEL, mUrl1.termsHash)).toBe(
+      cacheKey(mUrl2.text, "hi", MODEL, mUrl2.termsHash),
+    );
+
+    const mPlain1 = maskCodeSpans(segPlain, withoutLinkTarget);
+    const mPlain2 = maskCodeSpans(segPlain, withLinkTarget);
+    expect(cacheKey(mPlain1.text, "hi", MODEL, mPlain1.termsHash)).toBe(
+      cacheKey(mPlain2.text, "hi", MODEL, mPlain2.termsHash),
     );
   });
 });

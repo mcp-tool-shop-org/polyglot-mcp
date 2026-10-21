@@ -20,7 +20,7 @@
 import GithubSlugger from "github-slugger";
 import { CODE_SPAN_PATTERN, maskCodeSpans, type MaskedSpanKind } from "./codeSpans.js";
 import { PolyglotError } from "./errors.js";
-import { DEFAULT_PROTECTED_TERMS, type ProtectedTermSet } from "./protectedTerms.js";
+import { DEFAULT_PROTECTED_TERMS, linkTargetsEnabled, urlsEnabled, type ProtectedTermSet } from "./protectedTerms.js";
 
 /** What a lost span was. */
 export type LostSpanKind =
@@ -73,7 +73,7 @@ export function expectedSpans(
   const { spans, kinds } = maskCodeSpans(source, terms);
   const expected = new Map<string, { kind: MaskedSpanKind; count: number }>();
   spans.forEach((span, i) => {
-    if (kinds[i] === "anchor") return;
+    if (kinds[i] === "anchor" || kinds[i] === "link-target") return;
     const entry = expected.get(span);
     if (entry) entry.count++;
     else expected.set(span, { kind: kinds[i], count: 1 });
@@ -130,7 +130,7 @@ export function normalizeRefLabel(label: string): string {
  * (e.g. ``[`foo`](https://example.com)``).
  */
 function maskInlineCodeForScan(line: string): string {
-  return line.replace(CODE_SPAN_PATTERN, (m) => m.replace(/[\[\]()⟦⟧<>]/g, "_"));
+  return line.replace(CODE_SPAN_PATTERN, (m) => m.replace(/[\[\]()⟦⟧<>"'#]/g, "_"));
 }
 
 /**
@@ -162,7 +162,7 @@ function nonCodeLines(markdown: string): string[] {
 }
 
 const REF_DEF_LINE_PATTERN =
-  /^[ \t>]*(?:【[^】\n]{1,8}】[ \t]*)?\[([^\][\n]+)\]:[ \t]*(?:<([^<>\s]+)>|([^\s<>]+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$/;
+  /^[ \t>]*\[([^\][\n]+)\]:[ \t]*(?:<([^<>\n]+)>|([^\s<>]+))(?:[ \t]+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\((?:\\.|[^)\\\n])*\)))?[ \t]*\r?$/;
 
 /**
  * Parse a reference link definition line (`[label]: target` with optional
@@ -211,34 +211,60 @@ function parseInlineTarget(
   let k = openParenIdx + 1;
   while (k < L && (line[k] === " " || line[k] === "\t")) k++;
   const start = k;
-  let depth = 1;
-  while (k < L && line[k] !== " " && line[k] !== "\t" && line[k] !== "[" && line[k] !== "]") {
-    if (line[k] === "(") {
-      depth++;
-    } else if (line[k] === ")") {
-      depth--;
-      if (depth === 0) {
-        const raw = line.slice(start, k);
-        const target = raw.startsWith("<") && raw.endsWith(">") ? raw.slice(1, -1) : raw;
-        return { target, endIdx: k };
-      }
-    }
+  let target: string;
+
+  if (k < L && line[start] === "<") {
     k++;
+    while (k < L && line[k] !== ">") {
+      if (line[k] === "\\") {
+        k += 2;
+        continue;
+      }
+      if (line[k] === "<") return null;
+      k++;
+    }
+    if (k >= L || k === start + 1) return null;
+    target = line.slice(start + 1, k);
+    k++;
+  } else {
+    let depth = 1;
+    while (k < L && line[k] !== " " && line[k] !== "\t") {
+      if (line[k] === "\\") {
+        k += 2;
+        continue;
+      }
+      if (line[k] === "(") {
+        depth++;
+      } else if (line[k] === ")") {
+        depth--;
+        if (depth === 0) {
+          target = line.slice(start, k);
+          return target.length > 0 ? { target, endIdx: k } : null;
+        }
+      }
+      k++;
+    }
+    if (k >= L && depth > 0) {
+      state.deadFrom = openParenIdx;
+      return null;
+    }
+    if (depth !== 1 || k === start) return null;
+    target = line.slice(start, k);
   }
-  if (k >= L && depth > 0) {
-    state.deadFrom = openParenIdx;
-    return null;
-  }
-  if (depth !== 1 || k === start) return null;
-  const raw = line.slice(start, k);
-  const target = raw.startsWith("<") && raw.endsWith(">") ? raw.slice(1, -1) : raw;
 
   while (k < L && (line[k] === " " || line[k] === "\t")) k++;
   if (k < L && (line[k] === '"' || line[k] === "'" || line[k] === "(")) {
     const closeQuote = line[k] === "(" ? ")" : line[k];
-    const closeIdx = line.indexOf(closeQuote, k + 1);
-    if (closeIdx === -1) return null;
-    k = closeIdx + 1;
+    k++;
+    while (k < L && line[k] !== closeQuote) {
+      if (line[k] === "\\") k += 2;
+      else k++;
+    }
+    if (k >= L) {
+      if (closeQuote === ")") state.deadFrom = openParenIdx;
+      return null;
+    }
+    k++;
     while (k < L && (line[k] === " " || line[k] === "\t")) k++;
   }
   return k < L && line[k] === ")" ? { target, endIdx: k } : null;
@@ -253,8 +279,9 @@ export interface ExtractedLinks {
 
 /**
  * Extract all Markdown links (inline links, images, resolved reference links,
- * and reference definitions) from `markdown` in linear time, skipping fenced
- * code blocks, HTML comments, and inline code spans.
+ * and reference definitions) and HTML `href="#…"` anchor links from `markdown`
+ * in linear time, skipping fenced code blocks, HTML comments, and inline code
+ * spans.
  */
 export function extractLinks(
   markdown: string,
@@ -277,11 +304,18 @@ export function extractLinks(
       continue;
     }
 
-    // Pass 1: pair every unescaped '[' and ']' in O(L) with a stack.
+    for (const m of line.matchAll(/\bhref\s*=\s*["'](#[^"'\s<>]+)["']/giu)) {
+      recordTarget(m[1]);
+    }
+
+    // Pass 1: pair every unescaped '[' and ']' in O(L) with a stack, stepping
+    // over valid inline `(target "title")` destinations so brackets inside
+    // URLs or image titles (e.g. `"a ] b"`) do not close an outer link.
     const L = line.length;
     const closeBracketFor = new Int32Array(L).fill(-1);
     const hasInnerBracket = new Uint8Array(L);
     const stack: number[] = [];
+    const parenState = { deadFrom: L };
 
     for (let i = 0; i < L; i++) {
       if (line[i] === "\\" && i + 1 < L) {
@@ -298,13 +332,17 @@ export function extractLinks(
           if (stack.length > 0 && hasInnerBracket[openIdx]) {
             hasInnerBracket[stack[stack.length - 1]] = 1;
           }
+          if (i + 1 < L && line[i + 1] === "(") {
+            const inline = parseInlineTarget(line, i + 1, parenState);
+            if (inline !== null) i = inline.endIdx;
+          }
         }
       }
     }
 
     // Pass 2: visit paired brackets in O(L).
     const skipBracketAt = new Uint8Array(L);
-    const parenState = { deadFrom: L };
+    parenState.deadFrom = L;
 
     for (let i = 0; i < L; i++) {
       if (line[i] !== "[" || skipBracketAt[i]) continue;
@@ -328,14 +366,18 @@ export function extractLinks(
       // 2. Full `[text][label]` or collapsed `[text][]` reference link
       if (j + 1 < L && line[j + 1] === "[") {
         const k = closeBracketFor[j + 1];
-        if (k !== -1 && !hasInnerBracket[j + 1]) {
-          skipBracketAt[j + 1] = 1;
+        if (
+          k !== -1 &&
+          !hasInnerBracket[j + 1] &&
+          !(k + 1 < L && line[k + 1] === "(" && parseInlineTarget(line, k + 1, parenState) !== null)
+        ) {
           const rawLabel = k === j + 2 ? line.slice(i + 1, j) : line.slice(j + 2, k);
           const norm = normalizeRefLabel(rawLabel);
           if (norm && resolvedDefs.has(norm)) {
+            skipBracketAt[j + 1] = 1;
             recordTarget(resolvedDefs.get(norm)!);
+            continue;
           }
-          continue;
         }
       }
 
@@ -356,12 +398,13 @@ export interface LinkCheckOptions {
   sourceDefs?: ReadonlyMap<string, string>;
   targetDefs?: ReadonlyMap<string, string>;
   segment?: string;
+  terms?: ProtectedTermSet;
 }
 
 /**
  * §1 link structure check:
  * - the multiset of non-anchor link targets in the translation must equal the
- *   source's, compared exactly;
+ *   source's, compared exactly (filtered by active `url` and `link-target` rules);
  * - the number of in-page anchor links must equal the source's.
  */
 export function checkLinks(
@@ -371,8 +414,15 @@ export function checkLinks(
   options: LinkCheckOptions = {},
 ): LostSpan[] {
   const segment = options.segment ?? segmentLabel(source);
+  const terms = options.terms ?? DEFAULT_PROTECTED_TERMS;
+  const checkUrls = urlsEnabled(terms);
+  const checkLinkTargets = linkTargetsEnabled(terms);
+  const keepTarget = (t: string): boolean => (/^https?:\/\//i.test(t) ? checkUrls : checkLinkTargets);
+
   const srcLinks = extractLinks(source, options.sourceDefs);
   const tgtLinks = extractLinks(translation, options.targetDefs);
+  const srcNonAnchor = srcLinks.nonAnchorTargets.filter(keepTarget);
+  const tgtNonAnchor = tgtLinks.nonAnchorTargets.filter(keepTarget);
   const lost: LostSpan[] = [];
 
   const countMultiset = (items: readonly string[]): Map<string, number> => {
@@ -381,9 +431,9 @@ export function checkLinks(
     return counts;
   };
 
-  const srcCounts = countMultiset(srcLinks.nonAnchorTargets);
-  const tgtCounts = countMultiset(tgtLinks.nonAnchorTargets);
-  const foundNonAnchor = tgtLinks.nonAnchorTargets.join(" ") || "(no links)";
+  const srcCounts = countMultiset(srcNonAnchor);
+  const tgtCounts = countMultiset(tgtNonAnchor);
+  const foundNonAnchor = tgtNonAnchor.join(" ") || "(no links)";
 
   let missingNonAnchor = 0;
   for (const [target, srcCount] of srcCounts) {
@@ -399,17 +449,21 @@ export function checkLinks(
     }
   }
 
-  if (missingNonAnchor === 0 && tgtLinks.nonAnchorTargets.length !== srcLinks.nonAnchorTargets.length) {
+  const totalSrc = srcNonAnchor.length + srcLinks.anchorCount;
+  const totalTgt = tgtNonAnchor.length + tgtLinks.anchorCount;
+  const anchorShift = totalSrc === totalTgt && srcLinks.anchorCount !== tgtLinks.anchorCount;
+
+  if (missingNonAnchor === 0 && !anchorShift && tgtNonAnchor.length !== srcNonAnchor.length) {
     lost.push({
       lang,
       segment,
-      span: srcLinks.nonAnchorTargets.join(" ") || "(no links)",
+      span: srcNonAnchor.join(" ") || "(no links)",
       kind: "link",
       found: foundNonAnchor,
     });
   }
 
-  if (srcLinks.anchorCount !== tgtLinks.anchorCount) {
+  if (srcLinks.anchorCount !== tgtLinks.anchorCount && !(anchorShift && missingNonAnchor > 0)) {
     lost.push({
       lang,
       segment,
@@ -494,7 +548,7 @@ export function checkSegment(
   const lost: LostSpan[] = [];
   const segment = segmentLabel(source);
   for (const [span, { kind, count }] of expectedSpans(source, options.terms)) {
-    if (kind === "anchor") continue;
+    if (kind === "anchor" || kind === "link-target") continue;
     if (occurrences(translation, span) < count) lost.push({ lang, segment, span, kind });
   }
   if (options.isCell && !cellNumbersMatch(source, translation)) {
@@ -511,6 +565,7 @@ export function checkSegment(
       sourceDefs: options.sourceDefs,
       targetDefs: options.targetDefs,
       segment,
+      terms: options.terms,
     }),
     ...checkPlaceholders(source, translation, lang, { segment }),
   );
@@ -615,7 +670,7 @@ export interface DocumentAnchors {
 }
 
 const DOC_ANCHOR_PATTERN =
-  /(?<=\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(?<=\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$)|(?<=\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
+  /(?<=\]\(\s*)#([^\s)<>"'`[\]]+)(?=(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))|(?<=^[ \t>]*\[[^\][\n]+\]:[ \t]*)#([^\s)<>"'`[\]]+)(?=(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*\r?$)|(?<=\bhref\s*=\s*["'])#([^"'\s<>]+)(?=["'])/giu;
 
 /**
  * Extract ATX headings, explicit HTML `id=`/`name=` anchors, and in-page
@@ -632,7 +687,7 @@ export function extractDocumentAnchors(markdown: string): DocumentAnchors {
 
   for (const line of nonCodeLines(markdown)) {
     if (/^#{1,6}\s/.test(line)) {
-      const slug = safeDecodeSlug(slugger.slug(stripHeadingMarkup(line)));
+      const slug = safeDecodeSlug(slugger.slug(stripHeadingMarkup(line))).toLowerCase();
       const idx = headings.length;
       headings.push(slug);
       if (slug) {
@@ -642,7 +697,7 @@ export function extractDocumentAnchors(markdown: string): DocumentAnchors {
     }
 
     // F3: strip inline code spans before scanning for explicit ids and anchors.
-    const lineNoCode = line.replace(CODE_SPAN_PATTERN, "");
+    const lineNoCode = line.replace(CODE_SPAN_PATTERN, "_");
 
     for (const tagMatch of lineNoCode.matchAll(/<[A-Za-z][^<>\n]*>/g)) {
       const tag = tagMatch[0];
@@ -695,8 +750,9 @@ export function checkAnchors(
   // F2 step 1: Index the source's anchors in document order.
   const reportedSourceBroken = new Set<string>();
   const srcStates = src.anchors.map((a) => {
-    if (src.headingIndex.has(a.decoded)) {
-      return { status: "heading" as const, headingIdx: src.headingIndex.get(a.decoded)! };
+    const lower = a.decoded.toLowerCase();
+    if (src.headingIndex.has(lower)) {
+      return { status: "heading" as const, headingIdx: src.headingIndex.get(lower)! };
     }
     if (src.explicitIds.has(a.decoded)) {
       return { status: "explicit" as const };
@@ -710,28 +766,28 @@ export function checkAnchors(
     return { status: "broken" as const };
   });
 
+  const srcBrokenDecoded = new Set(
+    src.anchors.filter((_, idx) => srcStates[idx].status === "broken").map((a) => a.decoded.toLowerCase()),
+  );
+
   const resolvesInTarget = (decoded: string): boolean =>
-    tgt.headingSet.has(decoded) || tgt.explicitIds.has(decoded);
+    tgt.headingSet.has(decoded.toLowerCase()) || tgt.explicitIds.has(decoded);
 
   // F2 step 4 / #50 §3: If link counts differ, report the mismatch in warnings,
-  // run the plain resolve check, and also push a LostSpan when at least one
-  // source anchor resolved in the source and the mismatch was not caused solely
-  // by source-broken links (unless §1 already flagged the segment mismatch).
+  // run the plain resolve check, and also push a LostSpan when a source-valid
+  // anchor was lost (unless §1 already accounted for the whole difference).
   if (src.anchors.length !== tgt.anchors.length) {
     warnings?.push(
       `[${lang}]: anchor count mismatch (source has ${src.anchors.length}, translation has ${tgt.anchors.length}); falling back to plain resolve check.`,
     );
-    const srcBrokenDecoded = new Set(
-      src.anchors.filter((_, idx) => srcStates[idx].status === "broken").map((a) => a.decoded),
-    );
     const srcValidCount = srcStates.filter((s) => s.status !== "broken").length;
-    const tgtNonSourceBrokenCount = tgt.anchors.filter((a) => !srcBrokenDecoded.has(a.decoded)).length;
+    const tgtNonSourceBrokenCount = tgt.anchors.filter((a) => !srcBrokenDecoded.has(a.decoded.toLowerCase())).length;
 
     const plainLost: LostSpan[] = [];
     for (const tgtA of tgt.anchors) {
-      if (srcBrokenDecoded.has(tgtA.decoded)) continue;
+      if (srcBrokenDecoded.has(tgtA.decoded.toLowerCase())) continue;
       if (!resolvesInTarget(tgtA.decoded)) {
-        const srcIdx = src.headingIndex.get(tgtA.decoded);
+        const srcIdx = src.headingIndex.get(tgtA.decoded.toLowerCase());
         const foundSlug = srcIdx !== undefined ? tgt.headings[srcIdx] : undefined;
         plainLost.push({
           lang,
@@ -743,13 +799,35 @@ export function checkAnchors(
       }
     }
 
-    const alreadyReportedByPlain =
-      tgtNonSourceBrokenCount > srcValidCount && plainLost.length >= tgtNonSourceBrokenCount - srcValidCount;
+    const expectedTargetCounts = new Map<string, number>();
+    srcStates.forEach((s, idx) => {
+      if (s.status === "heading") {
+        const slug = (tgt.headings[s.headingIdx] ?? src.anchors[idx].decoded).toLowerCase();
+        expectedTargetCounts.set(slug, (expectedTargetCounts.get(slug) ?? 0) + 1);
+      } else if (s.status === "explicit") {
+        const slug = src.anchors[idx].decoded;
+        expectedTargetCounts.set(slug, (expectedTargetCounts.get(slug) ?? 0) + 1);
+      }
+    });
+    const actualTargetCounts = new Map<string, number>();
+    for (const tgtA of tgt.anchors) {
+      if (srcBrokenDecoded.has(tgtA.decoded.toLowerCase()) || !resolvesInTarget(tgtA.decoded)) continue;
+      const key = tgt.headingSet.has(tgtA.decoded.toLowerCase()) ? tgtA.decoded.toLowerCase() : tgtA.decoded;
+      actualTargetCounts.set(key, (actualTargetCounts.get(key) ?? 0) + 1);
+    }
+    let missingExpectedTarget = false;
+    for (const [slug, count] of expectedTargetCounts) {
+      if ((actualTargetCounts.get(slug) ?? 0) < count) {
+        missingExpectedTarget = true;
+        break;
+      }
+    }
+
+    const tgtResolvedCount = tgtNonSourceBrokenCount - plainLost.length;
     if (
       !options.skipCountMismatch &&
-      !alreadyReportedByPlain &&
       srcValidCount > 0 &&
-      srcValidCount !== tgtNonSourceBrokenCount
+      (tgtResolvedCount < srcValidCount || missingExpectedTarget)
     ) {
       lost.push({
         lang,
@@ -764,18 +842,22 @@ export function checkAnchors(
     return lost;
   }
 
-  // F2 steps 2 & 3: Pair each translated anchor with its source anchor by link order.
-  for (let i = 0; i < src.anchors.length; i++) {
-    const state = srcStates[i];
-    if (state.status === "broken") continue; // F5: non-fatal source warning, never a LostSpan.
-
-    const srcA = src.anchors[i];
+  // F2 steps 2 & 3 / F4: Pair each translated anchor with its source anchor by link order,
+  // skipping source-broken slugs by slug rather than position.
+  for (let i = 0; i < tgt.anchors.length; i++) {
     const tgtA = tgt.anchors[i];
+    if (srcBrokenDecoded.has(tgtA.decoded.toLowerCase())) continue; // F5: non-fatal source warning, never a LostSpan.
+
     if (!resolvesInTarget(tgtA.decoded)) {
-      const foundSlug = state.status === "heading" ? tgt.headings[state.headingIdx] : undefined;
+      const state = srcStates[i];
+      const srcIdx =
+        src.headingIndex.get(tgtA.decoded.toLowerCase()) ??
+        (state.status === "heading" ? state.headingIdx : undefined);
+      const foundSlug = srcIdx !== undefined ? tgt.headings[srcIdx] : undefined;
+      const segment = state.status !== "broken" ? src.anchors[i].segment : tgtA.segment;
       lost.push({
         lang,
-        segment: srcA.segment,
+        segment,
         span: tgtA.raw,
         kind: "anchor",
         ...(foundSlug ? { found: `#${foundSlug}` } : {}),

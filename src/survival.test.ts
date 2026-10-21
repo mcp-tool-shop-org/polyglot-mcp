@@ -243,10 +243,10 @@ describe("survival check — GitHub-rendered heading slugs", () => {
 describe("survival check — in-page anchors", () => {
   const EN_9FBE43A = fixture46("polyglot-mcp.README.9fbe43a.md");
 
-  it("exempts anchor spans from expectedSpans, checkSegment, and whole-file fallback (§1)", () => {
-    const line = "See [Ollama Cloud](#ollama-cloud-optional).";
+  it("exempts anchor and link-target spans from expectedSpans, checkSegment, and whole-file fallback (§1, F8.3)", () => {
+    const line = "See [Ollama Cloud](#ollama-cloud-optional) and [MIT](LICENSE).";
     expect([...expectedSpans(line).keys()]).toEqual([]);
-    expect(checkSegment(line, "Voir [Ollama Cloud](#ollama-cloud-facultatif).", "fr")).toEqual([]);
+    expect(checkSegment(line, "Voir [Ollama Cloud](#ollama-cloud-facultatif) et [MIT](LICENSE).", "fr")).toEqual([]);
   });
 
   it("detects the broken anchors in polyglot-mcp's 1.9.0 translations at 9fbe43a (Cause 1 and Cause 2)", () => {
@@ -703,6 +703,118 @@ describe("survival check — broken links and placeholder leakage (#50)", () => 
         kind: "placeholder",
       },
     ]);
+  });
+
+  it("extracts [WIP][Ollama](https://ollama.com) without dropping the inline link (F1)", () => {
+    expect(extractLinks("[WIP][Ollama](https://ollama.com)").nonAnchorTargets).toEqual(["https://ollama.com"]);
+  });
+
+  it("extracts angle-bracketed destinations with spaces and unbalanced parens, brackets, escapes, and escaped quotes in titles (F2)", () => {
+    expect(extractLinks("[doc](<path with spaces/file.md>)").nonAnchorTargets).toEqual(["path with spaces/file.md"]);
+    expect(extractLinks("[doc](<https://example.com/a)b>)").nonAnchorTargets).toEqual(["https://example.com/a)b"]);
+    expect(extractLinks("[doc](<https://example.com/a(b>)").nonAnchorTargets).toEqual(["https://example.com/a(b"]);
+    expect(extractLinks("[api](https://example.com/api?filter[a]=1)").nonAnchorTargets).toEqual([
+      "https://example.com/api?filter[a]=1",
+    ]);
+    expect(extractLinks("[doc](https://example.com/a\\)b)").nonAnchorTargets).toEqual(["https://example.com/a\\)b"]);
+    expect(extractLinks('[doc](https://example.com "say \\"hi\\"")').nonAnchorTargets).toEqual([
+      "https://example.com",
+    ]);
+    expect(
+      extractLinks('[![CI](https://example.com/badge.svg "a ] b")](https://example.com/actions)')
+        .nonAnchorTargets.sort(),
+    ).toEqual(["https://example.com/actions", "https://example.com/badge.svg"]);
+  });
+
+  it("finishes '[a](b ('.repeat(32000) in under 100 ms (F2 linear-time deadFrom)", () => {
+    const input = "[a](b (".repeat(32_000);
+    const start = performance.now();
+    const res = extractLinks(input);
+    const elapsedMs = performance.now() - start;
+    expect(res).toEqual({ nonAnchorTargets: [], anchorCount: 0 });
+    expect(elapsedMs).toBeLessThan(100);
+  });
+
+  it("passes F4's reordered sentence with a source-broken link, and fails when #イントロ in it is broken (F4)", () => {
+    const en = "## Intro\n\nSee [Intro](#intro) and [Broken](#no-such-heading).\n";
+    const jaOk = "## イントロ\n\n[Broken](#no-such-heading) と [Intro](#イントロ) を参照してください。\n";
+    const jaBroken = "## はじめに\n\n[Broken](#no-such-heading) と [Intro](#イントロ) を参照してください。\n";
+
+    const warningsOk: string[] = [];
+    expect(checkSurvival(en, jaOk, { lang: "ja", warnings: warningsOk })).toEqual([]);
+    expect(warningsOk).toEqual([expect.stringContaining("anchor #no-such-heading is unresolved in source")]);
+
+    const warningsBroken: string[] = [];
+    const lost = checkSurvival(en, jaBroken, { lang: "ja", warnings: warningsBroken });
+    expect(lost).toEqual([
+      {
+        lang: "ja",
+        segment: "[Broken](#no-such-heading) と [Intro](#イントロ) を参照してください。",
+        span: "#イントロ",
+        kind: "anchor",
+      },
+    ]);
+    expect(() => enforceLostSpanPolicy(lost, "fail")).toThrow(LostSpanError);
+  });
+
+  it("fails both of Argon's F5 count-mismatch cases (#a dropped + 2 broken added; #b and source-broken dropped + #a duplicated)", () => {
+    // Case 1: #a dropped, #b kept, and two broken anchors added.
+    const en1 = "## A\n\n## B\n\nSee [A](#a) and [B](#b).\n";
+    const fr1 = "## A\n\n## B\n\nVoir [B](#b), [X](#broken-1) et [Y](#broken-2).\n";
+    const lost1 = checkAnchors(en1, fr1, "fr");
+    expect(lost1).toEqual([
+      { lang: "fr", segment: "(whole file)", span: "anchor count 2 → 3", kind: "anchor", found: "3" },
+      { lang: "fr", segment: "Voir [B](#b), [X](#broken-1) et [Y](#broken-2).", span: "#broken-1", kind: "anchor" },
+      { lang: "fr", segment: "Voir [B](#b), [X](#broken-1) et [Y](#broken-2).", span: "#broken-2", kind: "anchor" },
+    ]);
+    expect(() => enforceLostSpanPolicy(checkSurvival(en1, fr1, { lang: "fr" }), "fail")).toThrow(LostSpanError);
+
+    // Case 2: #b and a link broken in the source dropped, and #a duplicated.
+    const en2 = '## A\n\n## B\n\nSee [A](#a) and [Broken](#no-such).\n\nJump to <a href="#b">B</a>.\n';
+    const fr2 = "## A\n\n## B\n\nVoir [A](#a) et [A](#a).\n\nAller à B.\n";
+    const lost2 = checkAnchors(en2, fr2, "fr");
+    expect(lost2).toEqual([
+      { lang: "fr", segment: "(whole file)", span: "anchor count 3 → 2", kind: "anchor", found: "2" },
+    ]);
+    const survivalLost2 = checkSurvival(en2, fr2, { lang: "fr" });
+    expect(survivalLost2.length).toBeGreaterThan(0);
+    expect(() => enforceLostSpanPolicy(survivalLost2, "fail")).toThrow(LostSpanError);
+  });
+
+  it("resolves [FAQ](#FAQ) beside ## FAQ without warning 'unresolved in source' (F6)", () => {
+    const en = "## FAQ\n\nSee [FAQ](#FAQ).\n";
+    const fr = "## FAQ\n\nVoir [FAQ](#FAQ).\n";
+    const warnings: string[] = [];
+    expect(checkSurvival(en, fr, { lang: "fr", warnings })).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("respects disable: ['link-target'] and disable: ['url'] in checkLinks (F8.3)", () => {
+    const en = "Read [Guide](./docs/guide.md) and visit [Ollama](https://ollama.com).";
+    const frLocalized = "Lisez [Guide](./docs/guide.fr.md) et visitez [Ollama](https://ollama.com).";
+    const frUrlChanged = "Lisez [Guide](./docs/guide.md) et visitez [Ollama](https://ollama.org).";
+
+    expect(
+      checkLinks(en, frLocalized, "fr", { terms: buildProtectedTerms({ disable: ["link-target"] }) }),
+    ).toEqual([]);
+    expect(
+      checkLinks(en, frUrlChanged, "fr", { terms: buildProtectedTerms({ disable: ["link-target"] }) }),
+    ).toHaveLength(1);
+    expect(
+      checkLinks(en, frUrlChanged, "fr", { terms: buildProtectedTerms({ disable: ["url"] }) }),
+    ).toEqual([]);
+  });
+
+  it("reports a link that drops or gains '#' ([Text](#slug) ↔ [Text](slug)) once, not 2–3 times (F9)", () => {
+    const enAnchor = "## Slug\n\nSee [Text](#slug).\n";
+    const frDroppedHash = "## Slug\n\nVoir [Text](slug).\n";
+    expect(checkLinks("See [Text](#slug).", "Voir [Text](slug).", "fr")).toHaveLength(1);
+    expect(checkSurvival(enAnchor, frDroppedHash, { lang: "fr" })).toHaveLength(1);
+
+    const enRel = "## Slug\n\nSee [Text](slug).\n";
+    const frGainedHash = "## Slug\n\nVoir [Text](#slug).\n";
+    expect(checkLinks("See [Text](slug).", "Voir [Text](#slug).", "fr")).toHaveLength(1);
+    expect(checkSurvival(enRel, frGainedHash, { lang: "fr" })).toHaveLength(1);
   });
 });
 
