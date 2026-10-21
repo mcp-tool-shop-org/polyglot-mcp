@@ -67,7 +67,7 @@ const SLIPS_50 = JSON.parse(readFileSync(join(FIXTURES_50, "slips.json"), "utf-8
   }>;
 };
 const PINS_99B69E6 = JSON.parse(
-  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", ".polyglot-pins.json"), "utf-8"),
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "issue-50", "pins-99b69e6.json"), "utf-8"),
 ) as {
   pins: Record<string, { lang: string; source: string; translation: string }>;
 };
