@@ -1,6 +1,12 @@
 {
   "version": 1,
   "pins": {
+    "08fba76d217d9784:ja": {
+      "lang": "ja",
+      "source": "Non-HTTP(S), non-anchor targets in Markdown inline links, images, and reference definitions: relative paths (`../facet`, `docs/Kimi-K3.md`), bare filenames (`LICENSE`), `mailto:`, `<path with spaces>`, and paths with one level of balanced parentheses (`docs/Foo_(bar).md`)",
+      "translation": "Markdown のインラインリンク、画像、および参照定義における HTTP(S) 以外の、アンカー以外のターゲット：相対パス（`../facet`、`docs/Kimi-K3.md`）、ベアファイル名（`LICENSE`）、`mailto:`、`<path with spaces>`、およびバランスの取れた括弧を一段階含むパス（`docs/Foo_(bar).md`）",
+      "pinnedAt": "2026-10-21T05:19:19.854Z"
+    },
     "3c98b370fc2fe227:fr": {
       "lang": "fr",
       "source": "Download from [ollama.com](https://ollama.com) and start it:\r",
@@ -33,9 +39,15 @@
     },
     "d6e0b08243e33581:ja": {
       "lang": "ja",
-      "source": "> **Tip:** You can skip this step — Polyglot auto-pulls the default model (27B, 17 GB) on first use. On a smaller GPU, set `POLYGLOT_MODEL=translategemma:12b` first (see [Configurable Default Model](#configurable-default-model)).\r",
-      "translation": "> **ヒント:** この手順をスキップできます。Polyglot は、初回使用時にデフォルトのモデル (27B、17 GB) を自動的にダウンロードします。GPU が小さい場合は、最初に `POLYGLOT_MODEL=translategemma:12b` を設定してください ([構成可能なデフォルトモデル](#構成可能なデフォルトモデル) を参照)。",
-      "pinnedAt": "2026-10-21T02:27:01.915Z"
+      "source": "> **Tip:** You can skip this step — Polyglot auto-pulls the default model (27B, 17 GB) on first use. On a smaller GPU, set `POLYGLOT_MODEL=translategemma:12b` first (see [Configurable Default Model](#configurable-default-model)).",
+      "translation": "> **ヒント:** この手順をスキップできます。Polyglot は、初回使用時にデフォルトのモデル (27B、17 GB) を自動的にダウンロードします。GPU が小さい場合は、最初に `POLYGLOT_MODEL=translategemma:12b` を設定してください ([構成可能なデフォルトモデル](#設定可能なデフォルトモデル) を参照)。",
+      "pinnedAt": "2026-10-21T05:19:19.851Z"
+    },
+    "f554d0290aa12189:ja": {
+      "lang": "ja",
+      "source": "`https://…` up to whitespace, a quote, a bracket or a backtick (allowing one level of balanced parentheses such as `https://en.wikipedia.org/wiki/Foo_(bar)`)",
+      "translation": "`https://…`（空白、引用符、角括弧、またはバッククォートまで。バランスの取れた括弧を一段階まで許可します。例：`https://en.wikipedia.org/wiki/Foo_(bar)`）",
+      "pinnedAt": "2026-10-21T05:19:19.853Z"
     }
   }
 }
