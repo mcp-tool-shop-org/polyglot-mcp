@@ -24,13 +24,20 @@ import {
   checkPlaceholders,
   checkSegment,
   enforceLostSpanPolicy,
+  enforceUntranslatedPolicy,
   expectedSpans,
   extractLinks,
   extractRefDefinitions,
+  proseWords,
   safeDecodeSlug,
+  segmentLabel,
   stripHeadingMarkup,
+  survivingProse,
   type LostSpan,
   type LostSpanPolicy,
+  type SegmentFallback,
+  type UntranslatedPolicy,
+  type UntranslatedSegment,
 } from "./survival.js";
 import {
   loadCache,
@@ -102,6 +109,12 @@ export interface TranslateMarkdownOptions extends TranslateBatchOptions {
    * a LostSpanError carrying the list and this result.
    */
   onLostSpan?: LostSpanPolicy;
+  /**
+   * What to do when prose comes back in English after its one retry: "report"
+   * lists it in `untranslated` (default), "fail" throws an UntranslatedError
+   * that carries the result.
+   */
+  onUntranslated?: UntranslatedPolicy;
 }
 
 export interface TranslateMarkdownResult {
@@ -119,6 +132,12 @@ export interface TranslateMarkdownResult {
   warnings: string[];
   /** Protected spans in the source that the translation does not carry. */
   lostSpans: LostSpan[];
+  /** Prose lines still identical to the English after the segment was retried on its own. */
+  untranslated: UntranslatedSegment[];
+  /** Segments that left the plain batch path: a separator mismatch, an echo, an empty part. */
+  fallbacks: SegmentFallback[];
+  /** How many segments were re-sent on their own after coming back as the English. */
+  retries: number;
 }
 
 // ─── Segmentation ─────────────────────────────────────────────────
@@ -649,6 +668,7 @@ export async function translateMarkdown(
   const useCache = options.cache !== false;
   const model = options.model ?? undefined; // let translateBatch pick default
   const onLostSpan = options.onLostSpan ?? "report";
+  const onUntranslated = options.onUntranslated ?? "report";
 
   // Protected terms and pins live beside the source file, when there is one.
   // Both load before the cache is touched, so a broken file fails the run
@@ -733,10 +753,14 @@ export async function translateMarkdown(
       return;
     }
 
-    const cached = useCache ? getCached(cache, key) : undefined;
-    const fuzzy = (!cached && useCache)
+    // An entry that is still the English was written by an earlier run that
+    // echoed the segment. It is not a translation, so it is not reused.
+    let cached = useCache ? getCached(cache, key) : undefined;
+    if (cached !== undefined && (cached.trim() === "" || survivingProse(masked, cached).length > 0)) cached = undefined;
+    let fuzzy = (!cached && useCache)
       ? getFuzzyCached(cache, masked, targetLang, modelStr)
       : undefined;
+    if (fuzzy && (fuzzy.translation.trim() === "" || survivingProse(masked, fuzzy.translation).length > 0)) fuzzy = undefined;
     batchItems.push({
       segIndex,
       kind,
@@ -785,6 +809,12 @@ export async function translateMarkdown(
   // Translate unique misses
   let uniqueTranslations: string[] = [];
   let ollamaCalls = 0;
+  const fallbacks: SegmentFallback[] = [];
+  const untranslated: UntranslatedSegment[] = [];
+  /** Why a masked segment left the plain path, and whether it was retried. */
+  const reasonByMasked = new Map<string, string>();
+  const retriedMasked = new Set<string>();
+  let retries = 0;
 
   if (uniqueItems.length > 0) {
     const result = await translateBatch(uniqueItems, sourceLang, targetLang, {
@@ -799,11 +829,63 @@ export async function translateMarkdown(
     uniqueTranslations = result.translations;
     ollamaCalls = result.ollamaCalls;
 
+    // A translation that is the English (echoed by the model, or an empty part)
+    // is retried once on its own. A segment that took the one-call-per-item
+    // fallback after a separator-count mismatch is reported either way.
+    for (let i = 0; i < uniqueItems.length; i++) {
+      const item = uniqueItems[i];
+      const via = result.details?.[i]?.via ?? "batch";
+      const empty = uniqueTranslations[i].trim() === "";
+      const echoed = empty || survivingProse(item.text, uniqueTranslations[i]).length > 0;
+      if (!echoed && via !== "fallback") continue;
+
+      const how =
+        via === "fallback" ? "after a separator-count mismatch" : via === "single" ? "as a single item" : "in a batch";
+      if (!echoed) {
+        fallbacks.push({
+          lang: targetLang,
+          segment: segmentLabel(item.text),
+          reason: "separator-count mismatch (re-sent on its own)",
+          retried: false,
+          recovered: true,
+        });
+        continue;
+      }
+
+      const reason = empty ? `empty output ${how}` : `echoed ${how}`;
+      reasonByMasked.set(item.text, reason);
+      retriedMasked.add(item.text);
+      const retry = await translateBatch([item], sourceLang, targetLang, {
+        model: options.model,
+        temperature: options.temperature,
+        ollamaUrl: options.ollamaUrl,
+        glossary: options.glossary,
+        softwareGlossary: options.softwareGlossary,
+        polish: options.polish,
+        batchCharLimit: options.batchCharLimit,
+      });
+      ollamaCalls += retry.ollamaCalls;
+      retries++;
+      const again = retry.translations[0] ?? "";
+      const recovered = again.trim() !== "" && survivingProse(item.text, again).length === 0;
+      if (recovered) uniqueTranslations[i] = again;
+      fallbacks.push({
+        lang: targetLang,
+        segment: segmentLabel(item.text),
+        reason,
+        retried: true,
+        recovered,
+      });
+    }
+
     // Cache the results, under each miss's own key: two misses can share a
-    // masked text but differ in which protected-term rules fired.
+    // masked text but differ in which protected-term rules fired. A segment
+    // that is still the English is never cached.
     if (useCache) {
       misses.forEach((m, i) => {
-        setCached(cache, m.key, uniqueTranslations[missToUnique[i]], modelStr, m.text, targetLang);
+        const translation = uniqueTranslations[missToUnique[i]];
+        if (translation.trim() === "" || survivingProse(m.text, translation).length > 0) return;
+        setCached(cache, m.key, translation, modelStr, m.text, targetLang);
       });
     }
 
@@ -863,7 +945,22 @@ export async function translateMarkdown(
             `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
           );
           cleaned = restoreCodeSpans(item.text, item.spans).text;
+          reasonByMasked.set(item.text, "code-span placeholders did not survive; the source text was kept");
         }
+      }
+
+      // The finished segment, whatever road it took (model, retry, an empty
+      // part, the placeholder fallback): any prose line still identical to the
+      // English is untranslated. A pinned segment never reaches here.
+      for (const line of survivingProse(item.original, cleaned)) {
+        untranslated.push({
+          lang: targetLang,
+          segment: segmentLabel(item.original),
+          line: segmentLabel(line),
+          words: proseWords(line).length,
+          reason: reasonByMasked.get(item.text) ?? (item.cacheHit ? "kept from the cache" : "returned as the English"),
+          retried: retriedMasked.has(item.text),
+        });
       }
     }
 
@@ -946,10 +1043,14 @@ export async function translateMarkdown(
     durationMs: Date.now() - start,
     warnings,
     lostSpans,
+    untranslated,
+    fallbacks,
+    retries,
   };
 
   // After the cache is saved: a failed check must not cost the translations.
   enforceLostSpanPolicy(lostSpans, onLostSpan, result);
+  enforceUntranslatedPolicy(untranslated, onUntranslated, result);
   return result;
 }
 

@@ -18,7 +18,14 @@ import { fileURLToPath } from "node:url";
 
 vi.mock("./translate.js", () => ({
   translateBatch: vi.fn(async (items: Array<{ text: string }>) => ({
-    translations: items.map(({ text }) => `【hi】${text.replace(/Kimi-K3/g, "किमी-के3")}`),
+    // Every line is tagged: a wrapped paragraph translated as a whole has no line left as the English.
+    translations: items.map(({ text }) =>
+      text
+        .replace(/Kimi-K3/g, "किमी-के3")
+        .split("\n")
+        .map((line) => `【hi】${line}`)
+        .join("\n"),
+    ),
     model: "mock",
     ollamaCalls: 1,
     durationMs: 0,

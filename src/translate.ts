@@ -69,11 +69,25 @@ export interface TranslateBatchOptions extends TranslateOptions {
   batchCharLimit?: number;
 }
 
+/**
+ * How one item of a batch was translated, so a caller can tell why an item
+ * looks the way it does:
+ * - `single`: it was alone in its batch and went out with the plain prompt;
+ * - `batch`: it was one part of a joined batch whose separators came back intact;
+ * - `fallback`: its batch came back with the wrong number of separators, so it
+ *   was re-sent on its own.
+ */
+export interface BatchItemDetail {
+  via: "single" | "batch" | "fallback";
+}
+
 export interface TranslateBatchResult {
   translations: string[];
   model: string;
   ollamaCalls: number;
   durationMs: number;
+  /** One entry per item, in order. */
+  details?: BatchItemDetail[];
 }
 
 /**
@@ -313,6 +327,7 @@ export async function translateBatch(
   const batchLimit = options.batchCharLimit ?? getChunkSize(model);
   const start = Date.now();
   const results: string[] = new Array(items.length);
+  const details: BatchItemDetail[] = new Array(items.length);
   let ollamaCalls = 0;
 
   // Group items into batches that fit within the char limit
@@ -342,6 +357,7 @@ export async function translateBatch(
       let translated = response.response.trim();
       if (options.polish !== false) translated = polish(translated);
       results[item.index] = translated;
+      details[item.index] = { via: "single" };
     } else {
       // Multiple items — join with separator
       const joinedText = batchItems.map((b) => b.text).join(BATCH_SEPARATOR);
@@ -362,6 +378,7 @@ export async function translateBatch(
           let translated = outputParts[j].trim();
           if (options.polish !== false) translated = polish(translated);
           results[batchItems[j].index] = translated;
+          details[batchItems[j].index] = { via: "batch" };
         }
       } else {
         // Fallback: re-translate each item individually
@@ -377,6 +394,7 @@ export async function translateBatch(
           let translated = fallbackResponse.response.trim();
           if (options.polish !== false) translated = polish(translated);
           results[item.index] = translated;
+          details[item.index] = { via: "fallback" };
         }
       }
     }
@@ -389,5 +407,6 @@ export async function translateBatch(
     model,
     ollamaCalls,
     durationMs: Date.now() - start,
+    details,
   };
 }

@@ -57,6 +57,12 @@ After translating, each file is checked against the English. Every protected spa
 
 `--on-lost-span=fail|report` chooses what happens when something is lost. `fail` exits non-zero with the language, segment and missing span; it's the default for `translate-all.mjs` and `translate-readme.mjs`, which run before releases. `report` lists the losses and exits 0; it's the default for the MCP tools and the library API. Files are written either way, so they can be fixed and pinned.
 
+### Untranslated prose
+
+The check above asks whether protected text survived; this one asks whether prose that should have been translated is still English. A model can return a paragraph unchanged while the batch still splits correctly, and every other check passes. Each prose line of the English (6 or more words outside code spans, links, URLs and protected spans, and not a list of proper names) is looked for verbatim in the translation of its segment. Short names, code-only lines and name lists are exempt by that rule, and a pinned segment is never flagged.
+
+A segment that comes back as English or empty is re-sent once on its own before the language fails, and one that is still English is never cached. `--on-untranslated=fail|report` chooses what happens with what is left: `fail` (the default for `translate-all.mjs` and `translate-readme.mjs`) writes the files, marks the language `untranslated` and exits non-zero (`translate-readme.mjs` exits 3); `report` lists the lines and exits 0. The per-language result and the console summary also list the segments that took the one-call-per-item fallback after a separator-count mismatch, and how many were retried and recovered.
+
 ## Pinned translations
 
 A pinned translation always wins. `.polyglot-pins.json` holds hand-fixed translations keyed by a hash of the English segment plus the language. A pin beats the cache and the model and survives every rerun; when the English changes, its hash changes, so a pin can't outlive the text it was written for.

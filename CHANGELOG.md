@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Untranslated-prose check (`--on-untranslated=fail|report`)** (`isProseLine`, `survivingProse`, `UntranslatedError`, `enforceUntranslatedPolicy`, `parseUntranslatedPolicy` in `src/survival.ts`; `translateMarkdown` in `src/translateMarkdown.ts`; `scripts/translate-readme.mjs`, `scripts/translate-all.mjs`) — a prose line of 6 or more words (outside code spans, links, URLs and protected spans, and not a list of proper names) that is identical to the English after translation fails its language, with status `untranslated` in `translate-all` and exit code 3 in `translate-readme`. Default `fail` in the scripts, `report` in the library. Before it fails, each such segment is re-sent once on its own. The result carries `untranslated`, `fallbacks` and `retries`; `translateBatch` returns per-item `details` (`single`, `batch` or `fallback`).
+
+### Fixed
+
+- **`translate-all` no longer reports a language "ok" while prose segments are still English.** A part the model echoed back unchanged was accepted as-is when the batch separators still matched, and again in the one-call-per-item fallback; an empty part and a broken-placeholder part fall back to the source text. All of these are now caught, retried once, and reported with their reason. A segment that is still English is no longer written to the cache, and a cached English entry from an earlier run is no longer reused.
+
 ## [1.10.1] - 2026-10-21
 
 Survival check catches broken Markdown links, leaked `⟦n⟧` placeholders, and anchor-count mismatches, and `link-target` masks relative and non-HTTP link targets (#50, #51).

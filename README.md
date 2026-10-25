@@ -198,6 +198,21 @@ node scripts/translate-all.mjs README.md                       # --on-lost-span=
 node scripts/translate-all.mjs README.md --on-lost-span=report
 ```
 
+### Untranslated Prose Check (`--on-untranslated`)
+A model can hand a paragraph back in English while the batch still splits correctly, so every other check passes. After translating, each prose line of the English (6 or more words, outside code spans, links, URLs and protected spans, and not a list of proper names) is looked for verbatim in the translation of its segment. Short names, code-only lines and name lists are exempt by that rule, not by a list, and a pinned segment is never flagged.
+
+Before a language is failed, each segment that came back as the English (or as an empty part) is re-sent once on its own. A segment that is still English after that is reported as untranslated, and it is never written to the cache; a cached English entry from an earlier run is not reused. Segments that took the one-call-per-item fallback after a separator-count mismatch are listed with that reason, with how many were retried and how many the retry translated.
+
+`--on-untranslated=fail|report` picks what happens with what is left:
+
+- **`fail`** (default for `translate-all.mjs` and `translate-readme.mjs`): the files are written, the language is marked `untranslated` instead of `ok`, the lines are listed, and the run exits non-zero (`translate-readme.mjs` exits 3). The summary JSON carries `untranslated`, `fallbacks` and an `UNTRANSLATED` error.
+- **`report`**: the list is written and the run exits 0. This is the default for the library API (`onUntranslated` option; result fields `untranslated`, `fallbacks`, `retries`).
+
+```bash
+node scripts/translate-all.mjs README.md                          # --on-untranslated=fail
+node scripts/translate-all.mjs README.md --on-untranslated=report
+```
+
 ### Pinned Translations (`.polyglot-pins.json`)
 A pinned translation always wins. `.polyglot-pins.json` sits beside the cache; each entry is keyed by a hash of the English segment plus the target language, and holds the hand-fixed translation. A pin beats the cache and the model and survives every rerun, `--cache-clear` included. When the English changes, the hash changes, so a pin cannot outlive the text it was written for.
 
