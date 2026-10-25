@@ -1018,8 +1018,6 @@ export interface SegmentFallback {
 /** What to do when prose comes back untranslated: fail the run, or report it and carry on. */
 export type UntranslatedPolicy = "fail" | "report";
 
-const LINK_INLINE = /!?\[([^\]\n]*)\]\([^)\n]*\)/g;
-const LINK_REFERENCE = /!?\[([^\]\n]*)\]\[[^\]\n]*\]/g;
 const AUTOLINK = /<(?:https?:\/\/|mailto:)[^>\s]*>/gi;
 const BARE_URL = /\b(?:https?:\/\/|www\.)\S+/gi;
 const HTML_TAG = /<\/?[A-Za-z][^>\n]*>/g;
@@ -1029,16 +1027,50 @@ const LINE_MARKER = /^\s*(?:>\s*)*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)?/;
 const WORD = /\p{L}[\p{L}\p{M}\p{N}'’]*/gu;
 
 /**
+ * `[label](target)`, `![alt](src)` and `[label][ref]` reduced to their label. One
+ * linear scan: the index of the next `]` or `)` (or line end) is worked out once
+ * per position, so a long run of `[` with no closing bracket costs nothing extra.
+ * A regex for this backtracks polynomially (CodeQL js/polynomial-redos).
+ */
+function linkLabels(text: string): string {
+  const n = text.length;
+  const nextClose = new Int32Array(n + 2).fill(n); // next "]" or newline at or after i
+  const nextParen = new Int32Array(n + 2).fill(n); // next ")" or newline at or after i
+  for (let i = n - 1; i >= 0; i--) {
+    const c = text[i]!;
+    nextClose[i] = c === "]" || c === "\n" ? i : nextClose[i + 1]!;
+    nextParen[i] = c === ")" || c === "\n" ? i : nextParen[i + 1]!;
+  }
+  let out = "";
+  let i = 0;
+  while (i < n) {
+    const c = text[i]!;
+    const open = c === "[" ? i : c === "!" && text[i + 1] === "[" ? i + 1 : -1;
+    if (open >= 0) {
+      const close = nextClose[open + 1]!;
+      if (close < n && text[close] === "]") {
+        const after = text[close + 1];
+        const end = after === "(" ? nextParen[close + 2]! : after === "[" ? nextClose[close + 2]! : -1;
+        const closer = after === "(" ? ")" : "]";
+        if (end >= 0 && end < n && text[end] === closer) {
+          out += text.slice(open + 1, close);
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/**
  * A line with its Markdown furniture, code spans, URLs, tags and placeholders
  * taken out. A link keeps its label (the words a reader sees) and loses its target.
  */
 function proseText(line: string): string {
-  return line
-    .replace(LINE_MARKER, "")
-    .replace(CODE_SPAN_PATTERN, " ")
-    .replace(PLACEHOLDER_TOKEN, " ")
-    .replace(LINK_INLINE, "$1")
-    .replace(LINK_REFERENCE, "$1")
+  return linkLabels(line.replace(LINE_MARKER, "").replace(CODE_SPAN_PATTERN, " ").replace(PLACEHOLDER_TOKEN, " "))
     .replace(AUTOLINK, " ")
     .replace(BARE_URL, " ")
     .replace(HTML_TAG, " ");
@@ -1097,7 +1129,7 @@ export function isProseLine(line: string): boolean {
  * (CodeQL js/polynomial-redos).
  */
 function normalised(text: string): string {
-  const flat = text.replace(LINK_INLINE, "$1").replace(LINK_REFERENCE, "$1").toLowerCase().split(/\s/).filter(Boolean).join(" ");
+  const flat = linkLabels(text).toLowerCase().split(/\s/).filter(Boolean).join(" ");
   let end = flat.length;
   while (end > 0 && ".。．:;!?！？".includes(flat[end - 1]!)) end--;
   return flat.slice(0, end);

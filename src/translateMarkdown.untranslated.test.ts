@@ -236,6 +236,45 @@ describe("prose rules", () => {
     ]);
     expect(survivingProse(src, "- El enrutador elige un dispositivo para cada trabajo.")).toEqual([]);
   });
+
+  it("reads link markup in linear time, whatever the brackets look like", () => {
+    // A regex for [label](target) backtracks polynomially on these (CodeQL js/polynomial-redos). A quadratic
+    // scan over 100,000 characters takes many seconds; a linear one a few milliseconds, so 2 s is a wide margin.
+    for (const input of ["[".repeat(100_000), "[](".repeat(34_000), "[a](b (".repeat(15_000), "![".repeat(50_000)]) {
+      const start = performance.now();
+      proseWords(input);
+      survivingProse(input, input);
+      expect(performance.now() - start).toBeLessThan(2000);
+    }
+  });
+
+  it("reduces inline, image and reference links to their labels, and leaves unclosed brackets alone", () => {
+    expect(proseWords("See [the guide](g.md) and ![a diagram of it](d.png) or [the spec][s] today")).toEqual([
+      "See",
+      "the",
+      "guide",
+      "and",
+      "a",
+      "diagram",
+      "of",
+      "it",
+      "or",
+      "the",
+      "spec",
+      "today",
+    ]);
+    expect(proseWords("An [unclosed bracket and (stray paren) stay as words")).toEqual([
+      "An",
+      "unclosed",
+      "bracket",
+      "and",
+      "stray",
+      "paren",
+      "stay",
+      "as",
+      "words",
+    ]);
+  });
 });
 
 describe("untranslated policy and report lines", () => {
