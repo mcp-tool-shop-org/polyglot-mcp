@@ -181,7 +181,8 @@ describe("protected terms — link-target", () => {
       const spans = spansIn(input);
       const elapsedMs = performance.now() - start;
       expect(spans, label).toEqual(expected);
-      expect(elapsedMs, `${label}: ${elapsedMs.toFixed(1)}ms`).toBeLessThan(100);
+      // A linear-time budget, not a benchmark: slow CI runners need ~150 ms where the quadratic scan needs seconds.
+      expect(elapsedMs, `${label}: ${elapsedMs.toFixed(1)}ms`).toBeLessThan(1000);
     }
   });
 

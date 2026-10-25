@@ -726,13 +726,16 @@ describe("survival check — broken links and placeholder leakage (#50)", () => 
     ).toEqual(["https://example.com/actions", "https://example.com/badge.svg"]);
   });
 
-  it("finishes '[a](b ('.repeat(32000) in under 100 ms (F2 linear-time deadFrom)", () => {
+  it("finishes '[a](b ('.repeat(32000) within a linear-time budget of 1 s (F2 linear-time deadFrom)", () => {
     const input = "[a](b (".repeat(32_000);
     const start = performance.now();
     const res = extractLinks(input);
     const elapsedMs = performance.now() - start;
     expect(res).toEqual({ nonAnchorTargets: [], anchorCount: 0 });
-    expect(elapsedMs).toBeLessThan(100);
+    // A budget, not a benchmark: linear work at this size takes a few milliseconds to ~150 ms on a slow CI runner
+    // (Node 20 measured 145-156 ms against the old 100 ms), while the quadratic scan these tests guard against takes
+    // many seconds. 1 s keeps the guard and stops it failing on runner speed.
+    expect(elapsedMs).toBeLessThan(1000);
   });
 
   it("passes F4's reordered sentence with a source-broken link, and fails when #イントロ in it is broken (F4)", () => {
@@ -817,7 +820,7 @@ describe("survival check — broken links and placeholder leakage (#50)", () => 
     expect(checkSurvival(enRel, frGainedHash, { lang: "fr" })).toHaveLength(1);
   });
 
-  it("finishes F1's parenthesised-title and whitespace-run cases in under 100 ms each at N = 32,000 (round 3 F1)", () => {
+  it("finishes F1's parenthesised-title and whitespace-run cases within a linear-time budget of 1 s each at N = 32,000 (round 3 F1)", () => {
     const N = 32_000;
     const cases: Array<() => unknown> = [
       () => findProtectedSpans("[a](b (".repeat(N)),
@@ -838,7 +841,7 @@ describe("survival check — broken links and placeholder leakage (#50)", () => 
       const start = performance.now();
       run();
       const elapsedMs = performance.now() - start;
-      expect(elapsedMs).toBeLessThan(100);
+      expect(elapsedMs).toBeLessThan(1000); // see the budget note at the first timing test
     }
   });
 
