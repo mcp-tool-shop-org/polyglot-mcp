@@ -372,7 +372,9 @@ console.log(JSON.stringify({
   polyglot: "complete",
   readme: absReadmePath,
   languages: results.length,
-  succeeded: results.length - failed,
+  // A language marked "untranslated" wrote its file but is not a clean success.
+  succeeded: results.filter((r) => r.status !== "error" && r.status !== "untranslated").length,
+  untranslatedLanguages: results.filter((r) => r.status === "untranslated").length,
   failed,
   totalTime: `${totalElapsed}s`,
   onLostSpan,

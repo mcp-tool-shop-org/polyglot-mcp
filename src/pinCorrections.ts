@@ -19,7 +19,7 @@ import { maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
 import { PolyglotError } from "./errors.js";
 import { getPin, getPinsPath, loadPins, savePins, setPin } from "./pins.js";
 import { anchorsEnabled, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
-import { safeDecodeSlug, segmentLabel, stripHeadingMarkup } from "./survival.js";
+import { safeDecodeSlug, segmentLabel, stripHeadingMarkup, survivingProse } from "./survival.js";
 import { alignUnits, cleanTranslation, rewriteAnchors, type TranslatableUnit } from "./translateMarkdown.js";
 
 export interface PinCorrectionsOptions {
@@ -102,8 +102,14 @@ export function pinCorrections(
       current = rewriteAnchors(current, slugMap);
     }
     if (current === undefined) {
-      result.uncached++;
-      if (!options.includeUncached) continue;
+      // An English prose segment that the model returned untranslated is never
+      // cached, so it is "uncached" here. A person who has since translated it by
+      // hand is exactly who this script is for: pin it without --include-uncached.
+      if (!options.includeUncached && !handTranslatedProse(unit, target, terms)) {
+        result.uncached++;
+        continue;
+      }
+      if (options.includeUncached) result.uncached++;
     } else if (lf(current) === lf(target)) {
       // Line endings alone are not a correction.
       result.unchanged++;
@@ -118,6 +124,17 @@ export function pinCorrections(
     result.written = true;
   }
   return result;
+}
+
+/**
+ * True when the unit's English has prose and the corrected text has left it: a
+ * hand translation of a segment the model returned in English (which the engine
+ * does not cache).
+ */
+function handTranslatedProse(unit: TranslatableUnit, target: string, terms: ProtectedTermSet): boolean {
+  const { text: masked, spans } = maskCodeSpans(unit.text, terms);
+  const english = restoreCodeSpans(masked, spans).text;
+  return survivingProse(english, english).length > 0 && survivingProse(english, target).length === 0 && lf(target) !== lf(english);
 }
 
 /**

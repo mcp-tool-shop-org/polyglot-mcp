@@ -18,7 +18,7 @@ import { LANGUAGES } from "./languages.js";
 import { OllamaClient } from "./ollama.js";
 import { VERSION } from "./version.js";
 import { friendlyError } from "./errors.js";
-import { formatLostSpans, type LostSpan } from "./survival.js";
+import { formatLostSpans, untranslatedBlockText, type LostSpan, type UntranslatedSegment } from "./survival.js";
 
 const server = new McpServer({
   name: "polyglot-mcp",
@@ -32,6 +32,19 @@ const onLostSpanParam = z
   .describe(
     'What to do when a protected span (inline code, a protected term such as XLS-30 or Kimi-K3, or an "N of M" count) is missing from a translation: "report" (default) lists it with the result, "fail" makes it an error.'
   );
+
+/** The untranslated-prose check's policy, as a tool parameter. The MCP path defaults to "report". */
+const onUntranslatedParam = z
+  .enum(["report", "fail"])
+  .optional()
+  .describe(
+    'What to do when prose (a sentence of 6 or more words) comes back identical to the English after its one retry: "report" (default) lists it with the result, "fail" makes it an error.'
+  );
+
+/** A text block listing prose lines that stayed English: language, segment, line, reason. */
+function untranslatedBlock(items: UntranslatedSegment[]): { type: "text"; text: string } {
+  return { type: "text" as const, text: untranslatedBlockText(items) };
+}
 
 /** A text block listing lost spans: language, segment, missing span. */
 function lostSpanBlock(lost: LostSpan[]): { type: "text"; text: string } {
@@ -177,8 +190,9 @@ server.tool(
       .optional()
       .describe('Ollama model (default: "translategemma:27b")'),
     onLostSpan: onLostSpanParam,
+    onUntranslated: onUntranslatedParam,
   },
-  async ({ markdown, from, to, model, onLostSpan }, extra) => {
+  async ({ markdown, from, to, model, onLostSpan, onUntranslated }, extra) => {
     try {
       const { report } = makeProgress(extra as Extra);
       report(0, 1, "Segmenting markdown…");
@@ -187,6 +201,7 @@ server.tool(
         model,
         cache: false,
         onLostSpan: onLostSpan ?? "report",
+        onUntranslated: onUntranslated ?? "report",
         onProgress: (completed, total) => {
           report(completed, total, `Translated ${completed}/${total} segments`);
         },
@@ -209,6 +224,7 @@ server.tool(
         });
       }
       if ((result.lostSpans ?? []).length > 0) content.push(lostSpanBlock(result.lostSpans));
+      if ((result.untranslated ?? []).length > 0) content.push(untranslatedBlock(result.untranslated));
       return { content };
     } catch (err) {
       return {
@@ -252,8 +268,9 @@ server.tool(
       .optional()
       .describe("Inject a language nav bar at the top of each output (default: true)"),
     onLostSpan: onLostSpanParam,
+    onUntranslated: onUntranslatedParam,
   },
-  async ({ markdown, from, languages, model, concurrency, navBar, onLostSpan }, extra) => {
+  async ({ markdown, from, languages, model, concurrency, navBar, onLostSpan, onUntranslated }, extra) => {
     try {
       const { report } = makeProgress(extra as Extra);
       const targetLangs = languages ?? TRANSLATE_ALL_LANGUAGES.map((l) => l.code);
@@ -266,6 +283,7 @@ server.tool(
         concurrency,
         navBar,
         onLostSpan: onLostSpan ?? "report",
+        onUntranslated: onUntranslated ?? "report",
         onProgress: (completed, total, lang) => {
           report(completed, total, `Completed ${lang} (${completed}/${total})`);
         },
@@ -296,6 +314,8 @@ server.tool(
 
       const lost = result.results.flatMap((r) => r.lostSpans ?? []);
       if (lost.length > 0) content.push(lostSpanBlock(lost));
+      const untranslated = result.results.flatMap((r) => r.untranslated ?? []);
+      if (untranslated.length > 0) content.push(untranslatedBlock(untranslated));
 
       return { content };
     } catch (err) {
@@ -355,8 +375,9 @@ server.tool(
         "Inject/refresh the language nav bar in the source + translated READMEs (default: true)."
       ),
     onLostSpan: onLostSpanParam,
+    onUntranslated: onUntranslatedParam,
   },
-  async ({ readmePath, tier, model, languages, concurrency, navBar, onLostSpan }, extra) => {
+  async ({ readmePath, tier, model, languages, concurrency, navBar, onLostSpan, onUntranslated }, extra) => {
     try {
       const { report } = makeProgress(extra as Extra);
       const resolvedModel = model ?? TIER_MODELS[tier ?? "quality"];
@@ -369,6 +390,7 @@ server.tool(
         concurrency,
         navBar,
         onLostSpan: onLostSpan ?? "report",
+        onUntranslated: onUntranslated ?? "report",
         onProgress: (completed, t, lang) =>
           report(completed, t, `Translated ${lang} (${completed}/${t})`),
       });
@@ -376,7 +398,7 @@ server.tool(
       const secs = (result.durationMs / 1000).toFixed(1);
       const rows = result.results.map((r) =>
         r.status === "ok"
-          ? `  ✓ ${r.file.padEnd(18)} ${(r.durationMs / 1000).toFixed(1)}s`
+          ? `  ${(r.untranslated ?? []).length > 0 ? "⚠" : "✓"} ${r.file.padEnd(18)} ${(r.durationMs / 1000).toFixed(1)}s${(r.untranslated ?? []).length > 0 ? ` — ${(r.untranslated ?? []).length} prose line(s) still English` : ""}`
           : `  ✗ ${r.file.padEnd(18)} FAILED — ${r.error ?? "unknown error"}`
       );
       const lines: string[] = [
@@ -392,6 +414,7 @@ server.tool(
         `${result.succeeded} succeeded · ${result.failed} failed · ${secs}s total`
       );
       if ((result.lostSpans ?? []).length > 0) lines.push(lostSpanBlock(result.lostSpans).text);
+      if ((result.untranslated ?? []).length > 0) lines.push(untranslatedBlock(result.untranslated).text);
 
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],

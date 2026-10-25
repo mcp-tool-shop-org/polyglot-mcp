@@ -91,6 +91,27 @@ describe("translateMarkdown — inline code-span protection", () => {
     // A model that drops the placeholder loses the identifier entirely. Shipping
     // untranslated prose is the honest outcome; shipping a sentence that quietly
     // lost its `npm install` target is not.
+    // The segment is retried once on its own, so the model destroys it twice here.
+    for (let i = 0; i < 2; i++) {
+      vi.mocked(translateBatch).mockResolvedValueOnce({
+        translations: ["प्लेसहोल्डर गायब"],
+        model: "mock",
+        ollamaCalls: 1,
+        durationMs: 0,
+      });
+    }
+
+    const md = "Install `@ai-rpg-engine/core` first.";
+    const result = await translateMarkdown(md, "en", "hi", { cache: false });
+
+    expect(result.markdown).toBe(md);
+    expect(result.warnings.join("\n")).toMatch(/placeholders did not survive/);
+    expect(result.retries).toBe(1);
+    expect(result.fallbacks[0]).toMatchObject({ retried: true, recovered: false });
+    expect(result.fallbacks[0]!.reason).toContain("placeholders");
+  });
+
+  it("recovers on the retry when the second answer keeps the placeholders", async () => {
     vi.mocked(translateBatch).mockResolvedValueOnce({
       translations: ["प्लेसहोल्डर गायब"],
       model: "mock",
@@ -101,8 +122,10 @@ describe("translateMarkdown — inline code-span protection", () => {
     const md = "Install `@ai-rpg-engine/core` first.";
     const result = await translateMarkdown(md, "en", "hi", { cache: false });
 
-    expect(result.markdown).toBe(md);
-    expect(result.warnings.join("\n")).toMatch(/placeholders did not survive/);
+    expect(result.markdown).toContain("`@ai-rpg-engine/core`");
+    expect(result.markdown).not.toBe(md);
+    expect(result.retries).toBe(1);
+    expect(result.fallbacks[0]).toMatchObject({ retried: true, recovered: true });
   });
 
   it("still protects spans inside headings and table cells", async () => {

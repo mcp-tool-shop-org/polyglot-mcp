@@ -61,14 +61,14 @@ const HEADING_TRANSLATIONS_HI: Record<string, string> = {
   "Survival Check (⟦0⟧)": "उत्तरजीविता जाँच (⟦0⟧)",
 };
 
-// Every line of a wrapped paragraph is tagged: a model translates the whole paragraph, and the
-// untranslated-prose check reads a line left as the English as a line the model did not translate.
+// Every line and sentence of a wrapped paragraph is tagged: a model translates the whole paragraph,
+// and the untranslated-prose check reads a sentence left as the English as one the model did not translate.
 const prefixProse = (tag: string, text: string): string =>
   /^[ \t>]*\[[^\][\r\n]+\]:/.test(text)
     ? `${text} "${tag}"`
     : text
         .split("\n")
-        .map((line) => `【${tag}】${line}`)
+        .map((line) => `【${tag}】${line.replace(/([.!?]) (?=\S)/g, `$1 【${tag}】`)}`)
         .join("\n");
 
 vi.mock("./translate.js", () => ({

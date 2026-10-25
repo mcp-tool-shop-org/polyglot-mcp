@@ -156,6 +156,9 @@ describe("translate-readme.mjs and translate-all.mjs — prose left in English",
       expect(summary.results).toHaveLength(7);
       expect(summary.results.every((x: { status: string }) => x.status === "untranslated")).toBe(true);
       expect(summary.untranslated).toHaveLength(7);
+      // A language that wrote its file but is not clean is not a success.
+      expect(summary.succeeded).toBe(0);
+      expect(summary.untranslatedLanguages).toBe(7);
       expect(summary.error.code ?? summary.error.error?.code ?? JSON.stringify(summary.error)).toContain("UNTRANSLATED");
       expect(r.stderr).toContain("prose line(s) came back in English");
     } finally {

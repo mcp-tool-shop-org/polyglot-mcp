@@ -1018,50 +1018,72 @@ export interface SegmentFallback {
 /** What to do when prose comes back untranslated: fail the run, or report it and carry on. */
 export type UntranslatedPolicy = "fail" | "report";
 
-const LINK_INLINE = /!?\[[^\]\n]*\]\([^)\n]*\)/g;
-const LINK_REFERENCE = /!?\[[^\]\n]*\]\[[^\]\n]*\]/g;
+const LINK_INLINE = /!?\[([^\]\n]*)\]\([^)\n]*\)/g;
+const LINK_REFERENCE = /!?\[([^\]\n]*)\]\[[^\]\n]*\]/g;
 const AUTOLINK = /<(?:https?:\/\/|mailto:)[^>\s]*>/gi;
 const BARE_URL = /\b(?:https?:\/\/|www\.)\S+/gi;
 const HTML_TAG = /<\/?[A-Za-z][^>\n]*>/g;
 const PLACEHOLDER_TOKEN = /⟦[^⟦⟧\n]*⟧/g;
 const LINE_MARKER = /^\s*(?:>\s*)*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)?/;
-const WORD = /\p{L}[\p{L}\p{N}'’-]*/gu;
+/** A word: letters with their combining marks (Devanagari vowel signs), digits and apostrophes. Hyphens split words. */
+const WORD = /\p{L}[\p{L}\p{M}\p{N}'’]*/gu;
 
-/** A line with its Markdown furniture, code spans, links, URLs, tags and placeholders taken out. */
+/**
+ * A line with its Markdown furniture, code spans, URLs, tags and placeholders
+ * taken out. A link keeps its label (the words a reader sees) and loses its target.
+ */
 function proseText(line: string): string {
   return line
     .replace(LINE_MARKER, "")
     .replace(CODE_SPAN_PATTERN, " ")
     .replace(PLACEHOLDER_TOKEN, " ")
-    .replace(LINK_INLINE, " ")
-    .replace(LINK_REFERENCE, " ")
+    .replace(LINK_INLINE, "$1")
+    .replace(LINK_REFERENCE, "$1")
     .replace(AUTOLINK, " ")
     .replace(BARE_URL, " ")
     .replace(HTML_TAG, " ");
 }
 
-/** The words of prose in a line, outside code spans, links, URLs and protected spans. */
+/** The words of prose in a line, outside code spans, URLs and protected spans; a link counts by its label. */
 export function proseWords(line: string): string[] {
   return proseText(line).match(WORD) ?? [];
 }
 
 /**
- * True when every word starts with a capital or has no lowercase letter at all:
- * a list of product or company names, which stays as written in any language.
+ * English function words. A run of names has at most one of them ("Bank of
+ * America", "Anthropic, OpenAI and Google"); a sentence has several, in any case.
+ */
+const FUNCTION_WORDS = new Set(
+  (
+    "the a an this that these those it its is are was were be been being will would can could should may might " +
+    "do does did not no all any each every your you we our they their he she his her i my and or but if then " +
+    "when while before after to of in on for with by from as at into about over under than so such via vs"
+  ).split(" "),
+);
+
+/**
+ * True for a run of names: at most one function word and at most one other
+ * lowercase-initial word ("Format: JSON, YAML, CSV via stdio"). A Title-Case
+ * heading or a list of products falls here; a sentence, in any case, does not.
  */
 function namesOnly(words: readonly string[]): boolean {
-  return words.every((w) => {
+  let fn = 0;
+  let lower = 0;
+  for (const w of words) {
+    if (FUNCTION_WORDS.has(w.toLowerCase())) {
+      fn++;
+      continue;
+    }
     const first = w[0]!;
-    const cased = first.toLowerCase() !== first.toUpperCase();
-    return !cased || first !== first.toLowerCase() || !/\p{Ll}/u.test(w);
-  });
+    if (first.toLowerCase() !== first.toUpperCase() && first === first.toLowerCase()) lower++;
+  }
+  return fn <= 1 && lower <= 1;
 }
 
 /**
- * A prose line is one with MIN_PROSE_WORDS or more words that is not a list of
- * names. Code-only lines, link-only lines and short names fall under the word
- * floor by construction; a line of proper names is exempt by this rule, so no
- * list of allowed lines is kept.
+ * A prose line is one with MIN_PROSE_WORDS or more words that is not a run of
+ * names. Code-only lines fall under the word floor and name lists under the
+ * names rule, so no list of allowed lines is kept.
  */
 export function isProseLine(line: string): boolean {
   const words = proseWords(line);
@@ -1069,27 +1091,57 @@ export function isProseLine(line: string): boolean {
 }
 
 /**
- * A line as compared: markers and surrounding space off, inner whitespace
- * collapsed, a closing full stop dropped. Written without a quantified regex
- * over the whole line (`\s+`, `[.]+$`), which backtracks polynomially on
- * pathological input (CodeQL js/polynomial-redos).
+ * Text as compared: link markup reduced to labels, lowercased, whitespace
+ * collapsed, a closing stop or colon dropped. Written without a quantified regex
+ * over the whole text, which backtracks polynomially on pathological input
+ * (CodeQL js/polynomial-redos).
  */
-const comparable = (line: string): string => {
-  let out = line.replace(LINE_MARKER, "").split(/\s/).filter(Boolean).join(" ");
-  while (out.endsWith(".") || out.endsWith("。") || out.endsWith("．")) out = out.slice(0, -1);
+function normalised(text: string): string {
+  const flat = text.replace(LINK_INLINE, "$1").replace(LINK_REFERENCE, "$1").toLowerCase().split(/\s/).filter(Boolean).join(" ");
+  let end = flat.length;
+  while (end > 0 && ".。．:;!?！？".includes(flat[end - 1]!)) end--;
+  return flat.slice(0, end);
+}
+
+/** Blocks of a segment: a list item, quote, heading or paragraph, with hard-wrapped lines joined. */
+function blocks(text: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  for (const line of text.split("\n")) {
+    const marker = LINE_MARKER.exec(line)?.[0] ?? "";
+    const startsBlock = line.trim() === "" || marker.trim() !== "";
+    if (startsBlock && current !== "") {
+      out.push(current);
+      current = "";
+    }
+    const body = line.slice(marker.length).trim();
+    if (body !== "") current = current === "" ? body : `${current} ${body}`;
+  }
+  if (current !== "") out.push(current);
   return out;
-};
+}
+
+/** Sentences of a block, split after a stop, question or exclamation mark. */
+function sentences(block: string): string[] {
+  return block.split(/(?<=[.!?。！？])\s/).map((x) => x.trim()).filter(Boolean);
+}
 
 /**
- * The prose lines of `source` that appear verbatim in `translation`. These are
- * the lines the model returned as the English.
+ * The prose sentences of `source` that are, whole, a sentence of `translation`:
+ * the ones the model returned as the English. Matching is by sentence, not
+ * line, so it holds when the model reflows a hard-wrapped paragraph or
+ * translates one sentence of a line and leaves another; it ignores case and a
+ * closing stop, and a link counts by its label.
  */
 export function survivingProse(source: string, translation: string): string[] {
-  const translated = new Set(translation.split("\n").map(comparable));
+  const translated = new Set(blocks(translation).flatMap(sentences).map(normalised));
   const survivors: string[] = [];
-  for (const line of source.split("\n")) {
-    if (!isProseLine(line)) continue;
-    if (translated.has(comparable(line))) survivors.push(line.trim());
+  for (const block of blocks(source)) {
+    for (const sentence of sentences(block)) {
+      if (!isProseLine(sentence)) continue;
+      const needle = normalised(sentence);
+      if (needle !== "" && translated.has(needle)) survivors.push(sentence);
+    }
   }
   return survivors;
 }
@@ -1100,6 +1152,11 @@ export function formatUntranslated(items: readonly UntranslatedSegment[]): strin
     (u) =>
       `[${u.lang}] "${u.segment}": untranslated line ${JSON.stringify(u.line)} (${u.words} words; ${u.reason}${u.retried ? "; retried once" : ""})`,
   );
+}
+
+/** The block of text an MCP tool appends when prose came back in English. */
+export function untranslatedBlockText(items: readonly UntranslatedSegment[]): string {
+  return `\n⚠ ${items.length} prose line(s) came back in English after a retry:\n${formatUntranslated(items).map((l) => `  - ${l}`).join("\n")}`;
 }
 
 /** One line per segment that left the plain batch path. */

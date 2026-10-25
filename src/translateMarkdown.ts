@@ -629,6 +629,91 @@ export function cleanTranslation(text: string, isHeading = false): string {
   return cleaned.trim();
 }
 
+// ─── Line by line ─────────────────────────────────────────────────
+
+/**
+ * Placeholders `⟦n⟧` in a line, renumbered from 0 in order of first use. `order[k]`
+ * is the segment's own number for local placeholder k, and `spans[k]` what it stands for.
+ */
+function localiseLine(line: string, spans: readonly string[]): { text: string; spans: string[]; order: number[] } {
+  const local: string[] = [];
+  const order: number[] = [];
+  const index = new Map<number, number>();
+  const text = line.replace(/⟦(\d+)⟧/g, (_m, n: string) => {
+    const global = Number(n);
+    if (!index.has(global)) {
+      index.set(global, local.length);
+      local.push(spans[global] ?? "");
+      order.push(global);
+    }
+    return `⟦${index.get(global)}⟧`;
+  });
+  return { text, spans: local, order };
+}
+
+/**
+ * Translate a multi-line masked segment one line at a time, each with its own
+ * placeholders numbered from 0, and join the lines back in the segment's own
+ * numbering. A long, code-dense segment is the one a model drops a placeholder
+ * from; a single line is a task it does well. Returns undefined when any line is
+ * still unusable. Every line goes out as its own call.
+ */
+async function translateByLine(
+  item: BatchItem,
+  spans: readonly string[],
+  sourceLang: string,
+  targetLang: string,
+  batchOptions: Omit<TranslateBatchOptions, "batchCharLimit">,
+): Promise<{ translation: string | undefined; calls: number }> {
+  const out: string[] = [];
+  let calls = 0;
+  for (const line of item.text.split(String.fromCharCode(10))) {
+    if (!/\p{L}/u.test(line.replace(/⟦\d+⟧/g, ""))) {
+      out.push(line);
+      continue;
+    }
+    const local = localiseLine(line, spans);
+    const r = await translateBatch([{ text: local.text, kind: item.kind }], sourceLang, targetLang, {
+      ...batchOptions,
+      batchCharLimit: 1,
+    });
+    calls += r.ollamaCalls;
+    const answer = r.translations[0] ?? "";
+    if (unusableReason(local.text, local.spans, answer, false) !== undefined) return { translation: undefined, calls };
+    out.push(cleanTranslation(answer).replace(/⟦(\d+)⟧/g, (_m, k: string) => `⟦${local.order[Number(k)]}⟧`));
+  }
+  return { translation: out.join(String.fromCharCode(10)), calls };
+}
+
+// ─── Is a translation usable? ─────────────────────────────────────
+
+/** Why a model answer cannot be used as the translation of a masked segment. */
+export type UnusableReason = "empty" | "placeholders" | "english";
+
+/**
+ * Whether `raw`, the model's answer for the masked segment `masked`, can be
+ * used: it is not empty, every code-span placeholder came back so the spans
+ * can be restored, and no prose sentence of the English is still in it. The
+ * English is compared with the spans restored on both sides, so a protected
+ * term or an "N of M" count counts as the words it is on the page.
+ *
+ * This one test gates the retry, the cache write and the cache read, so a
+ * segment is retried, cached or served from the cache on the same grounds.
+ */
+export function unusableReason(
+  masked: string,
+  spans: readonly string[],
+  raw: string,
+  isHeading: boolean,
+): UnusableReason | undefined {
+  const cleaned = cleanTranslation(raw, isHeading);
+  if (cleaned === "") return "empty";
+  if (spans.length === 0) return survivingProse(masked, cleaned).length > 0 ? "english" : undefined;
+  const restored = restoreCodeSpans(cleaned, [...spans]);
+  if (!restored.intact) return "placeholders";
+  return survivingProse(restoreCodeSpans(masked, [...spans]).text, restored.text).length > 0 ? "english" : undefined;
+}
+
 // ─── Core translate function ──────────────────────────────────────
 
 /**
@@ -756,11 +841,14 @@ export async function translateMarkdown(
     // An entry that is still the English was written by an earlier run that
     // echoed the segment. It is not a translation, so it is not reused.
     let cached = useCache ? getCached(cache, key) : undefined;
-    if (cached !== undefined && (cached.trim() === "" || survivingProse(masked, cached).length > 0)) cached = undefined;
+    if (cached !== undefined && unusableReason(masked, spans, cached, kind === "heading") !== undefined) {
+      delete cache.entries[key]; // poisoned: English, empty, or placeholders that cannot be restored
+      cached = undefined;
+    }
     let fuzzy = (!cached && useCache)
       ? getFuzzyCached(cache, masked, targetLang, modelStr)
       : undefined;
-    if (fuzzy && (fuzzy.translation.trim() === "" || survivingProse(masked, fuzzy.translation).length > 0)) fuzzy = undefined;
+    if (fuzzy && unusableReason(masked, spans, fuzzy.translation, kind === "heading") !== undefined) fuzzy = undefined;
     batchItems.push({
       segIndex,
       kind,
@@ -829,19 +917,34 @@ export async function translateMarkdown(
     uniqueTranslations = result.translations;
     ollamaCalls = result.ollamaCalls;
 
-    // A translation that is the English (echoed by the model, or an empty part)
-    // is retried once on its own. A segment that took the one-call-per-item
-    // fallback after a separator-count mismatch is reported either way.
+    // A translation the segment cannot use (the English echoed back, an empty
+    // part, or code-span placeholders that did not come back) is retried once
+    // on its own. A segment that took the one-call-per-item fallback after a
+    // separator-count mismatch has already been sent on its own, so that is its
+    // retry. A segment still unusable after its retry that has several lines is
+    // then translated line by line, each line with its own placeholders.
+    const spansByMasked = new Map<string, string[]>();
+    for (const m of misses) if (!spansByMasked.has(m.text)) spansByMasked.set(m.text, m.spans);
+    const batchOptions = {
+      model: options.model,
+      temperature: options.temperature,
+      ollamaUrl: options.ollamaUrl,
+      glossary: options.glossary,
+      softwareGlossary: options.softwareGlossary,
+      polish: options.polish,
+      batchCharLimit: options.batchCharLimit,
+    };
     for (let i = 0; i < uniqueItems.length; i++) {
       const item = uniqueItems[i];
+      const spans = spansByMasked.get(item.text) ?? [];
+      const isHeading = item.kind === "heading";
       const via = result.details?.[i]?.via ?? "batch";
-      const empty = uniqueTranslations[i].trim() === "";
-      const echoed = empty || survivingProse(item.text, uniqueTranslations[i]).length > 0;
-      if (!echoed && via !== "fallback") continue;
+      const problem = unusableReason(item.text, spans, uniqueTranslations[i], isHeading);
+      if (problem === undefined && via !== "fallback") continue;
 
       const how =
         via === "fallback" ? "after a separator-count mismatch" : via === "single" ? "as a single item" : "in a batch";
-      if (!echoed) {
+      if (problem === undefined) {
         fallbacks.push({
           lang: targetLang,
           segment: segmentLabel(item.text),
@@ -852,30 +955,42 @@ export async function translateMarkdown(
         continue;
       }
 
-      const reason = empty ? `empty output ${how}` : `echoed ${how}`;
-      reasonByMasked.set(item.text, reason);
+      const what =
+        problem === "empty"
+          ? `empty output ${how}`
+          : problem === "placeholders"
+            ? `code-span placeholders did not survive ${how}`
+            : `echoed ${how}`;
       retriedMasked.add(item.text);
-      const retry = await translateBatch([item], sourceLang, targetLang, {
-        model: options.model,
-        temperature: options.temperature,
-        ollamaUrl: options.ollamaUrl,
-        glossary: options.glossary,
-        softwareGlossary: options.softwareGlossary,
-        polish: options.polish,
-        batchCharLimit: options.batchCharLimit,
-      });
-      ollamaCalls += retry.ollamaCalls;
-      retries++;
-      const again = retry.translations[0] ?? "";
-      const recovered = again.trim() !== "" && survivingProse(item.text, again).length === 0;
-      if (recovered) uniqueTranslations[i] = again;
-      fallbacks.push({
-        lang: targetLang,
-        segment: segmentLabel(item.text),
-        reason,
-        retried: true,
-        recovered,
-      });
+
+      let recovered = false;
+      let route = what;
+      if (via !== "fallback") {
+        const retry = await translateBatch([item], sourceLang, targetLang, batchOptions);
+        ollamaCalls += retry.ollamaCalls;
+        retries++;
+        const again = retry.translations[0] ?? "";
+        if (unusableReason(item.text, spans, again, isHeading) === undefined) {
+          uniqueTranslations[i] = again;
+          recovered = true;
+        }
+      } else {
+        route = `${what} (its one-call-per-item answer was its retry)`;
+      }
+
+      if (!recovered && item.text.includes("\n")) {
+        const byLine = await translateByLine(item, spans, sourceLang, targetLang, batchOptions);
+        ollamaCalls += byLine.calls;
+        if (byLine.translation !== undefined) {
+          uniqueTranslations[i] = byLine.translation;
+          recovered = true;
+          route += "; translated line by line";
+        } else {
+          route += "; line by line did not recover it";
+        }
+      }
+      reasonByMasked.set(item.text, route);
+      fallbacks.push({ lang: targetLang, segment: segmentLabel(item.text), reason: route, retried: true, recovered });
     }
 
     // Cache the results, under each miss's own key: two misses can share a
@@ -884,7 +999,7 @@ export async function translateMarkdown(
     if (useCache) {
       misses.forEach((m, i) => {
         const translation = uniqueTranslations[missToUnique[i]];
-        if (translation.trim() === "" || survivingProse(m.text, translation).length > 0) return;
+        if (unusableReason(m.text, m.spans, translation, m.kind === "heading") !== undefined) return;
         setCached(cache, m.key, translation, modelStr, m.text, targetLang);
       });
     }
@@ -952,7 +1067,8 @@ export async function translateMarkdown(
       // The finished segment, whatever road it took (model, retry, an empty
       // part, the placeholder fallback): any prose line still identical to the
       // English is untranslated. A pinned segment never reaches here.
-      for (const line of survivingProse(item.original, cleaned)) {
+      const expected = item.spans.length > 0 ? restoreCodeSpans(item.text, item.spans).text : item.original;
+      for (const line of survivingProse(expected, cleaned)) {
         untranslated.push({
           lang: targetLang,
           segment: segmentLabel(item.original),

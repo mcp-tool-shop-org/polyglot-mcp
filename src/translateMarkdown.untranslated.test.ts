@@ -207,9 +207,12 @@ describe("translateMarkdown — prose that comes back in English", () => {
 
 describe("prose rules", () => {
   it("counts words outside code spans, links, URLs and placeholders", () => {
+    // A link counts by its label; its target is not prose.
     expect(proseWords("Run `npm install` from [the docs](https://example.com/a/b) at https://x.dev now")).toEqual([
       "Run",
       "from",
+      "the",
+      "docs",
       "at",
       "now",
     ]);
@@ -220,13 +223,14 @@ describe("prose rules", () => {
     expect(isProseLine("Six words are enough for prose")).toBe(true);
     expect(isProseLine("Anthropic OpenAI Google Mistral Meta DeepSeek")).toBe(false);
     expect(isProseLine("- `code` `code` `code` `code` `code` `code` `code`")).toBe(false);
-    expect(isProseLine("[A link with many words in its label](https://example.com)")).toBe(false);
+    expect(isProseLine("[A link with many words in its label](https://example.com)")).toBe(true); // the label is prose
+    expect(isProseLine("[docs](https://example.com/a/very/long/path/that/is/not/prose/at/all)")).toBe(false);
   });
 
   it("finds source prose lines that appear verbatim in a translation, ignoring list markers", () => {
     const src = "- The router picks a device for every job.\n- Short line.";
     expect(survivingProse(src, "* The router picks a device for every job.\n* Línea corta.")).toEqual([
-      "- The router picks a device for every job.",
+      "The router picks a device for every job.",
     ]);
     expect(survivingProse(src, "- El enrutador elige un dispositivo para cada trabajo.")).toEqual([]);
   });

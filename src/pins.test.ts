@@ -18,12 +18,12 @@ import { fileURLToPath } from "node:url";
 
 vi.mock("./translate.js", () => ({
   translateBatch: vi.fn(async (items: Array<{ text: string }>) => ({
-    // Every line is tagged: a wrapped paragraph translated as a whole has no line left as the English.
+    // Every line and sentence is tagged: a paragraph translated as a whole has no sentence left as the English.
     translations: items.map(({ text }) =>
       text
         .replace(/Kimi-K3/g, "किमी-के3")
         .split("\n")
-        .map((line) => `【hi】${line}`)
+        .map((line) => `【hi】${line.replace(/([.!?]) (?=\S)/g, "$1 【hi】")}`)
         .join("\n"),
     ),
     model: "mock",
@@ -127,11 +127,17 @@ describe("pins — the Kimi-K3 case", () => {
     expect(existsSync(join(dir, PINS_FILE))).toBe(false);
   });
 
-  it("leaves segments with no cached translation alone unless asked", () => {
+  it("leaves a short segment with no cached translation alone unless asked, but pins a hand-translated prose paragraph", () => {
+    // The engine never caches a segment that came back in English, so a paragraph a person has since
+    // translated by hand has no cache entry to compare with. Pinning it is the point of this script.
     const corrected = `# श्रेय\n\n${HI_FIXED}\n`;
-    expect(pinCorrections(readme(), "hi", corrected, { model: MODEL })).toMatchObject({ pinned: [], uncached: 2 });
+    const first = pinCorrections(readme(), "hi", corrected, { model: MODEL });
+    expect(first.pinned).toHaveLength(1);
+    expect(first.pinned[0]!.translation).toBe(HI_FIXED);
+    expect(first.uncached).toBe(1); // the heading "Credits": short, not prose, still left alone
+    expect(getPin(loadPins(readme()), "Credits", "hi")).toBeUndefined();
     const all = pinCorrections(readme(), "hi", corrected, { model: MODEL, includeUncached: true });
-    expect(all.pinned).toHaveLength(2);
+    expect(all.pinned).toHaveLength(1); // the paragraph is already pinned; --include-uncached adds the heading
     expect(getPin(loadPins(readme()), "Credits", "hi")).toBe("श्रेय");
   });
 
