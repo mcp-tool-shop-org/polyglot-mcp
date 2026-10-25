@@ -651,38 +651,50 @@ function localiseLine(line: string, spans: readonly string[]): { text: string; s
   return { text, spans: local, order };
 }
 
+/** Pieces of a masked segment: its lines, or its sentences (kept on their line, joined back with a space). */
+function pieces(text: string, mode: "line" | "sentence"): string[][] {
+  return text.split(String.fromCharCode(10)).map((line) =>
+    mode === "line" ? [line] : line.split(/(?<=[.!?。！？])\s/).filter((x) => x.trim() !== ""),
+  );
+}
+
 /**
- * Translate a multi-line masked segment one line at a time, each with its own
- * placeholders numbered from 0, and join the lines back in the segment's own
- * numbering. A long, code-dense segment is the one a model drops a placeholder
- * from; a single line is a task it does well. Returns undefined when any line is
- * still unusable. Every line goes out as its own call.
+ * Translate a masked segment a line, or a sentence, at a time, each piece with
+ * its own placeholders numbered from 0, and join the pieces back in the
+ * segment's own numbering. A long, code-dense segment is the one a model drops a
+ * placeholder from; a single line or sentence is a task it does well. Returns
+ * undefined when any piece is still unusable. Every piece goes out as its own call.
  */
-async function translateByLine(
+async function translateByPieces(
   item: BatchItem,
   spans: readonly string[],
+  mode: "line" | "sentence",
   sourceLang: string,
   targetLang: string,
   batchOptions: Omit<TranslateBatchOptions, "batchCharLimit">,
 ): Promise<{ translation: string | undefined; calls: number }> {
-  const out: string[] = [];
+  const lines: string[] = [];
   let calls = 0;
-  for (const line of item.text.split(String.fromCharCode(10))) {
-    if (!/\p{L}/u.test(line.replace(/⟦\d+⟧/g, ""))) {
-      out.push(line);
-      continue;
+  for (const line of pieces(item.text, mode)) {
+    const out: string[] = [];
+    for (const piece of line.length > 0 ? line : [""]) {
+      if (!/\p{L}/u.test(piece.replace(/⟦\d+⟧/g, ""))) {
+        out.push(piece);
+        continue;
+      }
+      const local = localiseLine(piece, spans);
+      const r = await translateBatch([{ text: local.text, kind: item.kind }], sourceLang, targetLang, {
+        ...batchOptions,
+        batchCharLimit: 1,
+      });
+      calls += r.ollamaCalls;
+      const answer = r.translations[0] ?? "";
+      if (unusableReason(local.text, local.spans, answer, false) !== undefined) return { translation: undefined, calls };
+      out.push(cleanTranslation(answer).replace(/⟦(\d+)⟧/g, (_m, k: string) => `⟦${local.order[Number(k)]}⟧`));
     }
-    const local = localiseLine(line, spans);
-    const r = await translateBatch([{ text: local.text, kind: item.kind }], sourceLang, targetLang, {
-      ...batchOptions,
-      batchCharLimit: 1,
-    });
-    calls += r.ollamaCalls;
-    const answer = r.translations[0] ?? "";
-    if (unusableReason(local.text, local.spans, answer, false) !== undefined) return { translation: undefined, calls };
-    out.push(cleanTranslation(answer).replace(/⟦(\d+)⟧/g, (_m, k: string) => `⟦${local.order[Number(k)]}⟧`));
+    lines.push(out.join(" "));
   }
-  return { translation: out.join(String.fromCharCode(10)), calls };
+  return { translation: lines.join(String.fromCharCode(10)), calls };
 }
 
 // ─── Is a translation usable? ─────────────────────────────────────
@@ -978,15 +990,23 @@ export async function translateMarkdown(
         route = `${what} (its one-call-per-item answer was its retry)`;
       }
 
-      if (!recovered && item.text.includes("\n")) {
-        const byLine = await translateByLine(item, spans, sourceLang, targetLang, batchOptions);
-        ollamaCalls += byLine.calls;
-        if (byLine.translation !== undefined) {
-          uniqueTranslations[i] = byLine.translation;
+      // Last steps before giving up: line by line (a multi-line segment), then
+      // sentence by sentence (what recovered the longest lines in practice).
+      const hasLines = item.text.includes("\n");
+      const hasSentences = pieces(item.text, "sentence").some((line) => line.length > 1);
+      for (const [mode, label, applies] of [
+        ["line", "line by line", hasLines],
+        ["sentence", "sentence by sentence", hasSentences],
+      ] as const) {
+        if (recovered || !applies) continue;
+        const attempt = await translateByPieces(item, spans, mode, sourceLang, targetLang, batchOptions);
+        ollamaCalls += attempt.calls;
+        if (attempt.translation !== undefined) {
+          uniqueTranslations[i] = attempt.translation;
           recovered = true;
-          route += "; translated line by line";
+          route += `; translated ${label}`;
         } else {
-          route += "; line by line did not recover it";
+          route += `; ${label} did not recover it`;
         }
       }
       reasonByMasked.set(item.text, route);
@@ -1060,7 +1080,10 @@ export async function translateMarkdown(
             `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
           );
           cleaned = restoreCodeSpans(item.text, item.spans).text;
-          reasonByMasked.set(item.text, "code-span placeholders did not survive; the source text was kept");
+          reasonByMasked.set(
+            item.text,
+            `${reasonByMasked.get(item.text) ?? "code-span placeholders did not survive"}; the source text was kept`,
+          );
         }
       }
 

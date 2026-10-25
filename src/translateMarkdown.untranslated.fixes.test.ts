@@ -9,6 +9,7 @@
  *   zzechoalways  the part is returned as the English, however it is sent
  *   zzdropalways  every code-span placeholder is dropped, however it is sent
  *   zzdropml      placeholders are dropped when the text has several lines
+ *   zzdropsent    placeholders are dropped when the text has several sentences
  *   zzdropsep     the client loses one separator, so the batch must fall back
  * Anything else is "translated" by prefixing "[es] ".
  */
@@ -36,6 +37,7 @@ vi.mock("./ollama.js", () => {
       if (part.includes("zzechoalways")) return part;
       if (client.breakPlaceholders && part.includes("zzdropalways")) return `[es] ${strip(part)}`;
       if (client.breakPlaceholders && part.includes("zzdropml") && part.includes("\n")) return `[es] ${strip(part)}`;
+      if (client.breakPlaceholders && part.includes("zzdropsent") && /[.!?] \S/.test(part)) return `[es] ${strip(part)}`;
       return `[es] ${part.split("\n").join("\n[es] ")}`.replace(/\[es\] \[es\]/g, "[es]");
     };
     if (isBatch) {
@@ -68,6 +70,8 @@ import { UntranslatedError, isProseLine, proseWords, survivingProse, untranslate
 
 const P1 = "The first paragraph explains how the router picks a device for every job.";
 const P3 = "The third paragraph lists the limits the guard enforces before it starts.";
+// The marker goes inside the sentence, before its stop, so a segment stays one sentence.
+const mark = (p: string, m: string) => p.replace(/\.$/, ` ${m}.`);
 const readme = (...paras: string[]) => ["# Title", "", ...paras.flatMap((p) => [p, ""])].join("\n");
 
 describe("untranslated check — the remaining paths (gm 1)", () => {
@@ -169,9 +173,48 @@ describe("untranslated check — the remaining paths (gm 1)", () => {
     expect(client.calls.filter((c) => !c.batch && !c.text.includes("\n") && c.text.includes("Run"))).toHaveLength(3);
   });
 
+  it("a segment that loses placeholders at every length is recovered sentence by sentence", async () => {
+    const seg =
+      "Install `@scope/pkg` first and then run the whole build zzdropsent now. Then run `npm test` to check every single package today.";
+    const r = await run(readme(P1, seg, P3));
+    expect(r.untranslated).toEqual([]);
+    expect(r.markdown).toContain("`@scope/pkg`");
+    expect(r.markdown).toContain("`npm test`");
+    expect(r.markdown).toContain("[es] Install `@scope/pkg`");
+    expect(r.fallbacks[0]).toMatchObject({ retried: true, recovered: true });
+    expect(r.fallbacks[0]!.reason).toContain("translated sentence by sentence");
+    expect(r.fallbacks[0]!.reason).not.toContain("line by line"); // one line: that step does not apply
+  });
+
+  it("a multi-line segment whose lines each hold two sentences goes line by line, then sentence by sentence", async () => {
+    const seg = [
+      "- Run `npm install` zzdropsent now to fetch everything. Then run `npm test` to check the whole build.",
+      "- Run `npm run build` last to produce the output. Then publish `dist` from the clean tree today.",
+    ].join("\n");
+    const r = await run(readme(P1, seg, P3));
+    expect(r.untranslated).toEqual([]);
+    for (const span of ["`npm install`", "`npm test`", "`npm run build`", "`dist`"]) expect(r.markdown).toContain(span);
+    expect(r.fallbacks[0]!.reason).toContain("line by line did not recover it; translated sentence by sentence");
+  });
+
+  it("when every length fails the English stays, is reported with every step tried, and is never silent", async () => {
+    const seg = [
+      "- Run `npm install` zzdropalways now to fetch everything. Then run `npm test` to check the whole build.",
+      "- Run `npm run build` last to produce the output. Then publish `dist` from the clean tree today.",
+    ].join("\n");
+    const r = await run(readme(P1, seg, P3));
+    expect(r.untranslated.length).toBeGreaterThan(0);
+    expect(r.untranslated[0]!.reason).toContain("line by line did not recover it; sentence by sentence did not recover it");
+    expect(r.warnings.join("\n")).toMatch(/placeholders did not survive/);
+    expect(r.markdown).toContain("`npm install`"); // the English source, identifiers intact
+    await expect(
+      translateMarkdown(readme(P1, seg, P3), "en", "es", { filePath, cache: false, onUntranslated: "fail" }),
+    ).rejects.toBeInstanceOf(UntranslatedError);
+  });
+
   it("an item that already took the one-call-per-item fallback is not sent a second time", async () => {
-    const dropped = `${P1} zzdropsep`;
-    const echoed = `${P3} zzechoalways`;
+    const dropped = `${mark(P1, "zzdropsep")}`;
+    const echoed = `${mark(P3, "zzechoalways")}`;
     const r = await run(readme(dropped, "The second paragraph says what a receipt records after a run.", echoed));
     const toEchoed = client.calls.filter((c) => !c.batch && c.text.includes("zzechoalways"));
     expect(toEchoed).toHaveLength(1); // its fallback call was its retry
@@ -251,7 +294,7 @@ describe("the MCP and library surfaces (gm 3)", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  const echoed = `${P1} zzechoalways`;
+  const echoed = `${mark(P1, "zzechoalways")}`;
   const md = readme(echoed, P3);
 
   it("translateAll reports the untranslated lines per language under the default", async () => {
@@ -305,7 +348,7 @@ describe("a hand fix for a segment that stayed English can be pinned (gm 4)", ()
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   it("pins the hand translation of an echoed paragraph without --include-uncached, and the next run keeps it", async () => {
-    const echoed = `${P1} zzechoalways`;
+    const echoed = `${mark(P1, "zzechoalways")}`;
     const md = readme(echoed, P3);
     const path = join(dir, "README.md");
     writeFileSync(path, md, "utf-8");

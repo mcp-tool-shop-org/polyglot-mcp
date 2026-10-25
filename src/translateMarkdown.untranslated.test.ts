@@ -75,6 +75,8 @@ const P1 = "The first paragraph explains how the router picks a device for every
 const P2 = "The second paragraph says what a receipt records after a measured run.";
 const P3 = "The third paragraph lists the limits the guard enforces before it starts.";
 
+// The marker goes inside the sentence, before its stop, so a segment stays one sentence.
+const mark = (p: string, m: string) => p.replace(/\.$/, ` ${m}.`);
 const readme = (...paras: string[]) => ["# Title", "", ...paras.flatMap((p) => [p, ""])].join("\n");
 
 describe("translateMarkdown — prose that comes back in English", () => {
@@ -100,7 +102,7 @@ describe("translateMarkdown — prose that comes back in English", () => {
   });
 
   it("batch path: a part echoed while the separators still match is retried alone and recovered", async () => {
-    const echoed = `${P2} zzechobatch`;
+    const echoed = `${mark(P2, "zzechobatch")}`;
     const r = await run(readme(P1, echoed, P3));
     expect(r.untranslated).toEqual([]);
     expect(r.markdown).toContain(`[es] ${echoed}`);
@@ -114,7 +116,7 @@ describe("translateMarkdown — prose that comes back in English", () => {
   });
 
   it("individual path: a segment echoed even alone is reported untranslated after one retry", async () => {
-    const echoed = `${P2} zzechoalways`;
+    const echoed = `${mark(P2, "zzechoalways")}`;
     const r = await run(readme(P1, echoed, P3));
     expect(r.untranslated).toHaveLength(1);
     expect(r.untranslated[0]).toMatchObject({ lang: "es", retried: true });
@@ -125,8 +127,8 @@ describe("translateMarkdown — prose that comes back in English", () => {
   });
 
   it("separator-count mismatch: the fallback is reported with its reason, and an echo there is still caught", async () => {
-    const dropped = `${P1} zzdropsep`;
-    const echoed = `${P3} zzechoalways`;
+    const dropped = `${mark(P1, "zzdropsep")}`;
+    const echoed = `${mark(P3, "zzechoalways")}`;
     const r = await run(readme(dropped, P2, echoed));
     const reasons = r.fallbacks.map((f) => f.reason).join(" | ");
     expect(reasons).toContain("separator-count mismatch");
@@ -136,7 +138,7 @@ describe("translateMarkdown — prose that comes back in English", () => {
   });
 
   it("an empty part falls back to the source text and is caught as untranslated, with its reason", async () => {
-    const empty = `${P2} zzemptypart`;
+    const empty = `${mark(P2, "zzemptypart")}`;
     const r = await run(readme(P1, empty, P3));
     // the retry on its own succeeds, so the empty part is recovered
     expect(r.untranslated).toEqual([]);
@@ -145,7 +147,7 @@ describe("translateMarkdown — prose that comes back in English", () => {
   });
 
   it("--on-untranslated=fail throws an UntranslatedError that carries the result", async () => {
-    const echoed = `${P2} zzechoalways`;
+    const echoed = `${mark(P2, "zzechoalways")}`;
     const err = await run(readme(P1, echoed, P3), { onUntranslated: "fail" }).then(
       () => undefined,
       (e: unknown) => e,
@@ -159,13 +161,13 @@ describe("translateMarkdown — prose that comes back in English", () => {
   });
 
   it("report mode (the library default) returns the list and does not throw", async () => {
-    const echoed = `${P2} zzechoalways`;
+    const echoed = `${mark(P2, "zzechoalways")}`;
     const r = await run(readme(P1, echoed, P3), { onUntranslated: "report" });
     expect(r.untranslated).toHaveLength(1);
   });
 
   it("never caches a segment that is still English", async () => {
-    const echoed = `${P2} zzechoalways`;
+    const echoed = `${mark(P2, "zzechoalways")}`;
     await run(readme(P1, echoed, P3));
     const cache = readFileSync(join(dir, ".polyglot-cache.json"), "utf-8");
     expect(cache).not.toContain("zzechoalways");
