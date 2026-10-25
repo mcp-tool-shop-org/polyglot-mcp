@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Untranslated-prose check (`--on-untranslated=fail|report`)** (`isProseLine`, `survivingProse`, `UntranslatedError`, `enforceUntranslatedPolicy`, `parseUntranslatedPolicy`, `untranslatedBlockText` in `src/survival.ts`; `unusableReason` in `src/translateMarkdown.ts`; `scripts/translate-readme.mjs`, `scripts/translate-all.mjs`) — a prose sentence of 6 or more words (a link counted by its label; code spans, URLs and protected spans left out; not a run of proper names) that is still a whole sentence of the translation of its segment fails its language, with status `untranslated` in `translate-all` and exit code 3 in `translate-readme`. Default `fail` in the scripts, `report` in the library and the MCP tools. Matching ignores case and a closing stop and works by sentence, so a reflow or a half-translated line is caught. The result carries `untranslated`, `fallbacks` and `retries`; `translateBatch` returns per-item `details` (`single`, `batch` or `fallback`).
+- **Retry** — an unusable model answer (empty, an echo of the English, or code-span placeholders that did not come back) is retried once on its own; a segment that already took the one-call-per-item fallback counts that call as its retry; a segment still unusable is translated line by line (several lines), then sentence by sentence (a line with several sentences), each piece with its own placeholders. What is still unusable keeps the English source and is reported with every step tried, never silently. Each fallback is reported with its reason.
+- **Piecewise retry is safer** — one placeholder pattern is used to renumber and to restore, so a decorated placeholder (`⟦ 0 ⟧`) can no longer swap two code spans; a line or sentence is never cut inside a link, whose label may contain a stop or a line break; a piecewise result is re-checked as a whole segment, so pieces that each pass but add up to the English are not reported as recovered; and the sentence step joins hard-wrapped lines first. The four limits of the check (under 6 words, Title-Case headings, partly translated sentences, wrong-language output) are stated in the README and handbook.
+- **MCP tools** — `translate_markdown`, `translate_all` and `translate_readme` take `onUntranslated` and append the untranslated list to their output; `translateAll` and `translateReadme` return `untranslated` per language.
+
+### Fixed
+
+- **`translate-all` no longer reports a language "ok" while prose segments are still English.** On the cognate README into Italian, 12 of 14 English lines were the deliberate source fallback for code-span placeholders that did not survive in long, code-dense segments (the threat-model list, the signing bullet list); one was an echoed code line in a batch. All paths are now caught, retried and reported with their reason.
+- **Nothing English or broken is cached or served from the cache.** A model answer that is empty, English, or has lost its placeholders is not written to the cache, and an unusable cached entry (including one from an earlier run) is ignored, deleted and translated again. The check compares the English with its code spans restored on both sides, so a segment with a protected term or an "N of M" count is judged by the words on the page.
+- **`pin-translation.mjs` pins a prose paragraph translated by hand without `--include-uncached`** — an untranslated segment is no longer cached, so it has nothing to compare with.
+- **`translate-all` summary** counts a language marked `untranslated` outside `succeeded` and reports `untranslatedLanguages`.
+
 ## [1.10.1] - 2026-10-21
 
 Survival check catches broken Markdown links, leaked `⟦n⟧` placeholders, and anchor-count mismatches, and `link-target` masks relative and non-HTTP link targets (#50, #51).

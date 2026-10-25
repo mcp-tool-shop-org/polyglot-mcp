@@ -41,7 +41,7 @@ export const codePlaceholder = (index: number): string => `⟦${index}⟧`;
  * polynomially on an unclosed `⟦` followed by a long digit run (CodeQL
  * js/polynomial-redos).
  */
-const PLACEHOLDER_PATTERN = /⟦[^⟦⟧\d]*(\d+)(?:[^⟦⟧\d][^⟦⟧]*)?⟧/g;
+export const PLACEHOLDER_PATTERN = /⟦[^⟦⟧\d]*(\d+)(?:[^⟦⟧\d][^⟦⟧]*)?⟧/g;
 
 /** Non-global twin of the above — safe for `.test()` (no `lastIndex` state). */
 const HAS_PLACEHOLDER = /⟦[^⟦⟧\d]*\d+(?:[^⟦⟧\d][^⟦⟧]*)?⟧/;

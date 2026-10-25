@@ -973,3 +973,277 @@ export function parseLostSpanPolicy(value: string | undefined, fallback: LostSpa
     retryable: false,
   });
 }
+
+// ─── Untranslated prose ───────────────────────────────────────────
+
+/**
+ * The lost-span check asks whether protected text survived. This one asks the
+ * opposite question: whether prose that should have been translated is still
+ * the English. A model that echoes a part untranslated while the batch splitter
+ * still finds the right number of separators looks like success to every other
+ * check, so the finished document is compared with the source line by line.
+ */
+
+/** A line needs this many words, outside code, links and URLs, to count as prose. */
+export const MIN_PROSE_WORDS = 6;
+
+/** One prose line that came back as the English. */
+export interface UntranslatedSegment {
+  /** Target language code. */
+  lang: string;
+  /** The English segment (heading, paragraph or table cell) it belongs to, shortened. */
+  segment: string;
+  /** The line that is identical to the English, shortened. */
+  line: string;
+  /** How many words of prose it has. */
+  words: number;
+  /** How the segment got there: echoed in a batch, echoed after a separator mismatch, and so on. */
+  reason: string;
+  /** True when it was retried on its own once and still came back English. */
+  retried: boolean;
+}
+
+/** A segment that left the plain batch path, and how it ended. */
+export interface SegmentFallback {
+  lang: string;
+  segment: string;
+  /** Why: "separator-count mismatch", "echoed in a batch", "empty output", "placeholders did not survive", … */
+  reason: string;
+  /** True when the segment was re-sent on its own to be translated again. */
+  retried: boolean;
+  /** True when the translation that was kept is no longer the English. */
+  recovered: boolean;
+}
+
+/** What to do when prose comes back untranslated: fail the run, or report it and carry on. */
+export type UntranslatedPolicy = "fail" | "report";
+
+const AUTOLINK = /<(?:https?:\/\/|mailto:)[^>\s]*>/gi;
+const BARE_URL = /\b(?:https?:\/\/|www\.)\S+/gi;
+const HTML_TAG = /<\/?[A-Za-z][^>\n]*>/g;
+const PLACEHOLDER_TOKEN = /⟦[^⟦⟧\n]*⟧/g;
+const LINE_MARKER = /^\s*(?:>\s*)*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)?/;
+/** A word: letters with their combining marks (Devanagari vowel signs), digits and apostrophes. Hyphens split words. */
+const WORD = /\p{L}[\p{L}\p{M}\p{N}'’]*/gu;
+
+/**
+ * `[label](target)`, `![alt](src)` and `[label][ref]` reduced to their label. One
+ * linear scan: the index of the next `]` or `)` (or line end) is worked out once
+ * per position, so a long run of `[` with no closing bracket costs nothing extra.
+ * A regex for this backtracks polynomially (CodeQL js/polynomial-redos).
+ */
+function linkLabels(text: string): string {
+  const n = text.length;
+  const nextClose = new Int32Array(n + 2).fill(n); // next "]" or newline at or after i
+  const nextParen = new Int32Array(n + 2).fill(n); // next ")" or newline at or after i
+  for (let i = n - 1; i >= 0; i--) {
+    const c = text[i]!;
+    nextClose[i] = c === "]" || c === "\n" ? i : nextClose[i + 1]!;
+    nextParen[i] = c === ")" || c === "\n" ? i : nextParen[i + 1]!;
+  }
+  let out = "";
+  let i = 0;
+  while (i < n) {
+    const c = text[i]!;
+    const open = c === "[" ? i : c === "!" && text[i + 1] === "[" ? i + 1 : -1;
+    if (open >= 0) {
+      const close = nextClose[open + 1]!;
+      if (close < n && text[close] === "]") {
+        const after = text[close + 1];
+        const end = after === "(" ? nextParen[close + 2]! : after === "[" ? nextClose[close + 2]! : -1;
+        const closer = after === "(" ? ")" : "]";
+        if (end >= 0 && end < n && text[end] === closer) {
+          out += text.slice(open + 1, close);
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * A line with its Markdown furniture, code spans, URLs, tags and placeholders
+ * taken out. A link keeps its label (the words a reader sees) and loses its target.
+ */
+function proseText(line: string): string {
+  return linkLabels(line.replace(LINE_MARKER, "").replace(CODE_SPAN_PATTERN, " ").replace(PLACEHOLDER_TOKEN, " "))
+    .replace(AUTOLINK, " ")
+    .replace(BARE_URL, " ")
+    .replace(HTML_TAG, " ");
+}
+
+/** The words of prose in a line, outside code spans, URLs and protected spans; a link counts by its label. */
+export function proseWords(line: string): string[] {
+  return proseText(line).match(WORD) ?? [];
+}
+
+/**
+ * English function words. A run of names has at most one of them ("Bank of
+ * America", "Anthropic, OpenAI and Google"); a sentence has several, in any case.
+ */
+const FUNCTION_WORDS = new Set(
+  (
+    "the a an this that these those it its is are was were be been being will would can could should may might " +
+    "do does did not no all any each every your you we our they their he she his her i my and or but if then " +
+    "when while before after to of in on for with by from as at into about over under than so such via vs"
+  ).split(" "),
+);
+
+/**
+ * True for a run of names: at most one function word and at most one other
+ * lowercase-initial word ("Format: JSON, YAML, CSV via stdio"). A Title-Case
+ * heading or a list of products falls here; a sentence, in any case, does not.
+ */
+function namesOnly(words: readonly string[]): boolean {
+  let fn = 0;
+  let lower = 0;
+  for (const w of words) {
+    if (FUNCTION_WORDS.has(w.toLowerCase())) {
+      fn++;
+      continue;
+    }
+    const first = w[0]!;
+    if (first.toLowerCase() !== first.toUpperCase() && first === first.toLowerCase()) lower++;
+  }
+  return fn <= 1 && lower <= 1;
+}
+
+/**
+ * A prose line is one with MIN_PROSE_WORDS or more words that is not a run of
+ * names. Code-only lines fall under the word floor and name lists under the
+ * names rule, so no list of allowed lines is kept.
+ */
+export function isProseLine(line: string): boolean {
+  const words = proseWords(line);
+  return words.length >= MIN_PROSE_WORDS && !namesOnly(words);
+}
+
+/**
+ * Text as compared: link markup reduced to labels, lowercased, whitespace
+ * collapsed, a closing stop or colon dropped. Written without a quantified regex
+ * over the whole text, which backtracks polynomially on pathological input
+ * (CodeQL js/polynomial-redos).
+ */
+function normalised(text: string): string {
+  const flat = linkLabels(text).toLowerCase().split(/\s/).filter(Boolean).join(" ");
+  let end = flat.length;
+  while (end > 0 && ".。．:;!?！？".includes(flat[end - 1]!)) end--;
+  return flat.slice(0, end);
+}
+
+/** Blocks of a segment: a list item, quote, heading or paragraph, with hard-wrapped lines joined. */
+function blocks(text: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  for (const line of text.split("\n")) {
+    const marker = LINE_MARKER.exec(line)?.[0] ?? "";
+    const startsBlock = line.trim() === "" || marker.trim() !== "";
+    if (startsBlock && current !== "") {
+      out.push(current);
+      current = "";
+    }
+    const body = line.slice(marker.length).trim();
+    if (body !== "") current = current === "" ? body : `${current} ${body}`;
+  }
+  if (current !== "") out.push(current);
+  return out;
+}
+
+/** Sentences of a block, split after a stop, question or exclamation mark. */
+function sentences(block: string): string[] {
+  return block.split(/(?<=[.!?。！？])\s/).map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * The prose sentences of `source` that are, whole, a sentence of `translation`:
+ * the ones the model returned as the English. Matching is by sentence, not
+ * line, so it holds when the model reflows a hard-wrapped paragraph or
+ * translates one sentence of a line and leaves another; it ignores case and a
+ * closing stop, and a link counts by its label.
+ */
+export function survivingProse(source: string, translation: string): string[] {
+  const translated = new Set(blocks(translation).flatMap(sentences).map(normalised));
+  const survivors: string[] = [];
+  for (const block of blocks(source)) {
+    for (const sentence of sentences(block)) {
+      if (!isProseLine(sentence)) continue;
+      const needle = normalised(sentence);
+      if (needle !== "" && translated.has(needle)) survivors.push(sentence);
+    }
+  }
+  return survivors;
+}
+
+/** One line per untranslated segment: language, segment, the line, and how it got there. */
+export function formatUntranslated(items: readonly UntranslatedSegment[]): string[] {
+  return items.map(
+    (u) =>
+      `[${u.lang}] "${u.segment}": untranslated line ${JSON.stringify(u.line)} (${u.words} words; ${u.reason}${u.retried ? "; retried once" : ""})`,
+  );
+}
+
+/** The block of text an MCP tool appends when prose came back in English. */
+export function untranslatedBlockText(items: readonly UntranslatedSegment[]): string {
+  return `\n⚠ ${items.length} prose line(s) came back in English after a retry:\n${formatUntranslated(items).map((l) => `  - ${l}`).join("\n")}`;
+}
+
+/** One line per segment that left the plain batch path. */
+export function formatFallbacks(items: readonly SegmentFallback[]): string[] {
+  return items.map(
+    (f) =>
+      `[${f.lang}] "${f.segment}": ${f.reason}${f.retried ? (f.recovered ? "; retried, translated" : "; retried, still English") : ""}`,
+  );
+}
+
+/**
+ * Thrown under `--on-untranslated=fail`. Carries the list and the result the
+ * caller would otherwise have used, so a CLI can still write the file.
+ */
+export class UntranslatedError<R = unknown> extends PolyglotError {
+  readonly untranslated: UntranslatedSegment[];
+  readonly result?: R;
+
+  constructor(untranslated: UntranslatedSegment[], result?: R) {
+    const langs = [...new Set(untranslated.map((u) => u.lang))].join(", ");
+    super({
+      code: "UNTRANSLATED",
+      message: [
+        `${untranslated.length} prose line(s) came back in English (${langs}):`,
+        ...formatUntranslated(untranslated).map((line) => `  ${line}`),
+      ].join("\n"),
+      hint:
+        "Rerun the language: a segment is retried once on its own before this fails, and nothing English is cached. " +
+        "If it keeps coming back, fix the translation by hand and pin it (scripts/pin-translation.mjs). " +
+        "--on-untranslated=report writes the list and exits 0.",
+      retryable: true,
+    });
+    this.name = "UntranslatedError";
+    this.untranslated = untranslated;
+    this.result = result;
+  }
+}
+
+/** Apply the policy: throw an UntranslatedError under "fail" when any prose is untranslated. */
+export function enforceUntranslatedPolicy<R>(
+  untranslated: UntranslatedSegment[],
+  policy: UntranslatedPolicy,
+  result?: R,
+): void {
+  if (policy === "fail" && untranslated.length > 0) throw new UntranslatedError(untranslated, result);
+}
+
+/** Parse an `--on-untranslated=` value, or throw a CONFIG_ERROR. */
+export function parseUntranslatedPolicy(value: string | undefined, fallback: UntranslatedPolicy): UntranslatedPolicy {
+  if (value === undefined) return fallback;
+  if (value === "fail" || value === "report") return value;
+  throw new PolyglotError({
+    code: "CONFIG_ERROR",
+    message: `Invalid --on-untranslated value: ${JSON.stringify(value)}.`,
+    hint: "Use --on-untranslated=fail or --on-untranslated=report.",
+    retryable: false,
+  });
+}

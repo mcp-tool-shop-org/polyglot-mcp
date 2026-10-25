@@ -10,7 +10,15 @@ import { translateMarkdown, type TranslateMarkdownOptions } from "./translateMar
 import { Semaphore } from "./semaphore.js";
 import type { ProtectedTermSet } from "./protectedTerms.js";
 import type { PinFile } from "./pins.js";
-import { LostSpanError, type LostSpan, type LostSpanPolicy } from "./survival.js";
+import {
+  LostSpanError,
+  UntranslatedError,
+  type LostSpan,
+  type LostSpanPolicy,
+  type SegmentFallback,
+  type UntranslatedPolicy,
+  type UntranslatedSegment,
+} from "./survival.js";
 
 // ─── Language definitions ─────────────────────────────────────────
 
@@ -57,6 +65,11 @@ export interface TranslateAllOptions {
    * a language with any into an error.
    */
   onLostSpan?: LostSpanPolicy;
+  /**
+   * "report" (default) lists prose that came back in English after its retry
+   * with each language; "fail" turns a language with any into an error.
+   */
+  onUntranslated?: UntranslatedPolicy;
 }
 
 export interface TranslateAllLanguageResult {
@@ -71,6 +84,10 @@ export interface TranslateAllLanguageResult {
   error?: string;
   /** Protected spans the translation lost (the survival check). */
   lostSpans?: LostSpan[];
+  /** Prose lines still English after the segment's retry. */
+  untranslated?: UntranslatedSegment[];
+  /** Segments that left the plain batch path, with why and whether the retry recovered them. */
+  fallbacks?: SegmentFallback[];
   durationMs: number;
 }
 
@@ -177,6 +194,7 @@ export async function translateAll(
         terms: options.terms,
         pins: options.pins,
         onLostSpan: options.onLostSpan ?? "report",
+        onUntranslated: options.onUntranslated ?? "report",
       };
 
       const result = await translateMarkdown(markdown, sourceLang, lang.code, translateOptions);
@@ -188,6 +206,8 @@ export async function translateAll(
         fileSuffix: lang.file ?? lang.code,
         markdown: result.markdown,
         lostSpans: result.lostSpans,
+        untranslated: result.untranslated,
+        fallbacks: result.fallbacks,
         durationMs: Date.now() - langStart,
       };
 
@@ -203,6 +223,7 @@ export async function translateAll(
         fileSuffix: lang.file ?? lang.code,
         error: err instanceof Error ? err.message : String(err),
         ...(err instanceof LostSpanError ? { lostSpans: err.lostSpans } : {}),
+        ...(err instanceof UntranslatedError ? { untranslated: err.untranslated } : {}),
         durationMs: Date.now() - langStart,
       };
 

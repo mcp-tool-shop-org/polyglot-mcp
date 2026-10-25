@@ -17,13 +17,27 @@
  *                   (default — this runs before releases) writes the files,
  *                   lists language, segment and missing span, and exits 1;
  *                   report writes the files and the list and exits 0
+ * --on-untranslated=fail|report
+ *                   When a prose line (6 or more words) comes back identical to
+ *                   the English even after its one retry: fail (default) writes
+ *                   the files, marks the language "untranslated", lists the
+ *                   lines and exits 1; report writes the files and the list and
+ *                   exits 0
  */
 
 import { spawn } from "node:child_process";
 import { existsSync, renameSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LostSpanError, formatLostSpans, parseLostSpanPolicy } from "../dist/survival.js";
+import {
+  LostSpanError,
+  UntranslatedError,
+  formatFallbacks,
+  formatLostSpans,
+  formatUntranslated,
+  parseLostSpanPolicy,
+  parseUntranslatedPolicy,
+} from "../dist/survival.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,13 +48,15 @@ const flags = process.argv.slice(2).filter((a) => a.startsWith("--"));
 const [readmePath] = args;
 
 if (!readmePath) {
-  console.error("Usage: node scripts/translate-all.mjs <readme-path> [--fast] [--no-cache] [--cache-clear] [--concurrency=N] [--no-nav-bar] [--on-lost-span=fail|report]");
+  console.error("Usage: node scripts/translate-all.mjs <readme-path> [--fast] [--no-cache] [--cache-clear] [--concurrency=N] [--no-nav-bar] [--on-lost-span=fail|report] [--on-untranslated=fail|report]");
   process.exit(1);
 }
 
 let onLostSpan;
+let onUntranslated;
 try {
   onLostSpan = parseLostSpanPolicy(flags.find((f) => f.startsWith("--on-lost-span="))?.split("=")[1], "fail");
+  onUntranslated = parseUntranslatedPolicy(flags.find((f) => f.startsWith("--on-untranslated="))?.split("=")[1], "fail");
 } catch (err) {
   console.error(err.toUserString?.() ?? String(err));
   process.exit(1);
@@ -48,6 +64,9 @@ try {
 
 /** translate-readme.mjs exits with this when it wrote a file that lost protected spans. */
 const EXIT_LOST_SPAN = 2;
+
+/** translate-readme.mjs exits with this when it wrote a file that left prose in English. */
+const EXIT_UNTRANSLATED = 3;
 
 const absReadmePath = resolve(readmePath);
 if (!existsSync(absReadmePath)) {
@@ -77,12 +96,25 @@ let failed = 0;
 let completed = 0;
 
 const passFlags = [
-  ...flags.filter((f) => !f.startsWith("--concurrency") && f !== "--no-nav-bar" && !f.startsWith("--on-lost-span")),
+  ...flags.filter(
+    (f) =>
+      !f.startsWith("--concurrency") &&
+      f !== "--no-nav-bar" &&
+      !f.startsWith("--on-lost-span") &&
+      !f.startsWith("--on-untranslated"),
+  ),
   `--on-lost-span=${onLostSpan}`,
+  `--on-untranslated=${onUntranslated}`,
 ];
 
 /** Every language's lost spans, from the children's POLYGLOT_LOST_SPANS lines. */
 const lostSpans = [];
+
+/** Every language's untranslated prose lines, from the children's POLYGLOT_UNTRANSLATED lines. */
+const untranslatedLines = [];
+
+/** Every language's segments that left the plain batch path, from POLYGLOT_FALLBACKS lines. */
+const fallbacks = [];
 
 console.log(`Translating ${basename(absReadmePath)} → ${LANGUAGES.length} languages (concurrency=${concurrency})\n`);
 
@@ -148,15 +180,37 @@ async function translateLang(lang) {
         .flatMap((line) => JSON.parse(line.slice("POLYGLOT_LOST_SPANS ".length)));
       lostSpans.push(...lost);
 
-      if ((code === 0 || code === EXIT_LOST_SPAN) && !killed) {
+      const parseLines = (prefix) =>
+        stdout
+          .split("\n")
+          .filter((line) => line.startsWith(prefix))
+          .flatMap((line) => JSON.parse(line.slice(prefix.length)));
+      const untranslated = parseLines("POLYGLOT_UNTRANSLATED ");
+      const langFallbacks = parseLines("POLYGLOT_FALLBACKS ");
+      untranslatedLines.push(...untranslated);
+      fallbacks.push(...langFallbacks);
+
+      if ((code === 0 || code === EXIT_LOST_SPAN || code === EXIT_UNTRANSLATED) && !killed) {
         // Exit 2: the file was written but lost protected spans (--on-lost-span=fail).
+        // Exit 3: the file was written but prose came back in English (--on-untranslated=fail).
         const result = finishLang(lang, langStart);
+        if (code === EXIT_UNTRANSLATED) result.status = "untranslated";
         if (code === EXIT_LOST_SPAN) result.status = "lost-span";
         if (lost.length > 0) result.lostSpans = lost.length;
+        if (untranslated.length > 0) result.untranslated = untranslated.length;
+        if (langFallbacks.length > 0) {
+          result.fallbacks = langFallbacks.length;
+          result.retried = langFallbacks.filter((f) => f.retried).length;
+          result.recovered = langFallbacks.filter((f) => f.retried && f.recovered).length;
+        }
         completed++;
         renderProgress();
         const mark = code === 0 ? "✓" : "✗";
-        const note = lost.length > 0 ? ` — ${lost.length} protected span(s) lost` : "";
+        const notes = [];
+        if (lost.length > 0) notes.push(`${lost.length} protected span(s) lost`);
+        if (untranslated.length > 0) notes.push(`${untranslated.length} prose line(s) untranslated`);
+        if (langFallbacks.length > 0) notes.push(`${langFallbacks.length} fallback(s), ${result.retried} retried`);
+        const note = notes.length > 0 ? ` — ${notes.join("; ")}` : "";
         process.stderr.write(`\n  ${mark} ${lang.name} — ${result.time}s${note}\n`);
         resolve_(result);
       } else {
@@ -197,7 +251,7 @@ for (let i = 0; i < LANGUAGES.length; i += concurrency) {
 
 /** A language whose README was written: translated cleanly, or with lost spans to fix. */
 function wroteFile(r) {
-  return r.status === "ok" || r.status === "lost-span";
+  return r.status === "ok" || r.status === "lost-span" || r.status === "untranslated";
 }
 
 // --- Inject language nav bar into all READMEs ---
@@ -311,16 +365,25 @@ console.log("=".repeat(60));
 // Under --on-lost-span=fail any lost span fails the run, in the repo's
 // structured error shape (code, message, hint, retryable).
 const lostSpanFailure = onLostSpan === "fail" && lostSpans.length > 0 ? new LostSpanError(lostSpans) : undefined;
+// Likewise any prose line left in English fails the run under --on-untranslated=fail.
+const untranslatedFailure =
+  onUntranslated === "fail" && untranslatedLines.length > 0 ? new UntranslatedError(untranslatedLines) : undefined;
 console.log(JSON.stringify({
   polyglot: "complete",
   readme: absReadmePath,
   languages: results.length,
-  succeeded: results.length - failed,
+  // A language marked "untranslated" wrote its file but is not a clean success.
+  succeeded: results.filter((r) => r.status !== "error" && r.status !== "untranslated").length,
+  untranslatedLanguages: results.filter((r) => r.status === "untranslated").length,
   failed,
   totalTime: `${totalElapsed}s`,
   onLostSpan,
   lostSpans,
+  onUntranslated,
+  untranslated: untranslatedLines,
+  fallbacks,
   ...(lostSpanFailure ? { error: lostSpanFailure.toMcpResult() } : {}),
+  ...(!lostSpanFailure && untranslatedFailure ? { error: untranslatedFailure.toMcpResult() } : {}),
   results,
 }, null, 2));
 console.log("=".repeat(60));
@@ -331,4 +394,18 @@ if (lostSpans.length > 0) {
   if (lostSpanFailure) console.error(`\n${lostSpanFailure.hint}`);
 }
 
-process.exit(failed > 0 || lostSpanFailure ? 1 : 0);
+if (untranslatedLines.length > 0) {
+  console.error(`\n${untranslatedFailure ? "✗" : "⚠"} ${untranslatedLines.length} prose line(s) came back in English (--on-untranslated=${onUntranslated}):`);
+  for (const line of formatUntranslated(untranslatedLines)) console.error(`  - ${line}`);
+  if (untranslatedFailure) console.error(`\n${untranslatedFailure.hint}`);
+}
+
+if (fallbacks.length > 0) {
+  const retried = fallbacks.filter((f) => f.retried);
+  console.error(
+    `\n${fallbacks.length} segment(s) left the plain batch path; ${retried.length} retried on their own, ${retried.filter((f) => f.recovered).length} translated by the retry:`,
+  );
+  for (const line of formatFallbacks(fallbacks)) console.error(`  - ${line}`);
+}
+
+process.exit(failed > 0 || lostSpanFailure || untranslatedFailure ? 1 : 0);

@@ -20,7 +20,7 @@ import {
 import { DEFAULT_MODEL } from "./translate.js";
 import { loadProtectedTerms } from "./protectedTerms.js";
 import { loadPins } from "./pins.js";
-import type { LostSpan, LostSpanPolicy } from "./survival.js";
+import type { LostSpan, LostSpanPolicy, UntranslatedPolicy, UntranslatedSegment } from "./survival.js";
 
 export interface TranslateReadmeOptions {
   /** Source language code (default: "en"). */
@@ -40,6 +40,11 @@ export interface TranslateReadmeOptions {
    * spans; "fail" leaves a language with any lost span unwritten, as an error.
    */
   onLostSpan?: LostSpanPolicy;
+  /**
+   * "report" (default) writes every translation and lists prose that came back
+   * in English after its retry; "fail" leaves a language with any unwritten, as an error.
+   */
+  onUntranslated?: UntranslatedPolicy;
 }
 
 export interface TranslateReadmeLanguageResult {
@@ -52,6 +57,8 @@ export interface TranslateReadmeLanguageResult {
   error?: string;
   /** Protected spans this language's translation lost (the survival check). */
   lostSpans?: LostSpan[];
+  /** Prose lines this language's translation still has in English after the retry. */
+  untranslated?: UntranslatedSegment[];
 }
 
 export interface TranslateReadmeResult {
@@ -70,6 +77,8 @@ export interface TranslateReadmeResult {
   sourceNavBarUpdated: boolean;
   /** Every language's lost protected spans, in language order. */
   lostSpans: LostSpan[];
+  /** Every language's untranslated prose lines, in language order. */
+  untranslated: UntranslatedSegment[];
   results: TranslateReadmeLanguageResult[];
 }
 
@@ -106,6 +115,7 @@ export async function translateReadme(
     terms: loadProtectedTerms(absPath),
     pins: loadPins(absPath),
     onLostSpan: options.onLostSpan ?? "report",
+    onUntranslated: options.onUntranslated ?? "report",
   });
 
   // Write each successful translation to disk; record every language's outcome.
@@ -125,6 +135,7 @@ export async function translateReadme(
       durationMs: r.durationMs,
       error: r.error,
       ...(r.lostSpans && r.lostSpans.length > 0 ? { lostSpans: r.lostSpans } : {}),
+      ...(r.untranslated && r.untranslated.length > 0 ? { untranslated: r.untranslated } : {}),
     });
   }
 
@@ -153,6 +164,7 @@ export async function translateReadme(
     outputFiles,
     sourceNavBarUpdated,
     lostSpans: results.flatMap((r) => r.lostSpans ?? []),
+    untranslated: results.flatMap((r) => r.untranslated ?? []),
     results,
   };
 }

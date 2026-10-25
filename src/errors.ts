@@ -18,7 +18,8 @@ export type ErrorCode =
   | "OLLAMA_ERROR"
   | "TRANSLATE_ERROR"
   | "CONFIG_ERROR"
-  | "LOST_SPAN";
+  | "LOST_SPAN"
+  | "UNTRANSLATED";
 
 export class PolyglotError extends Error {
   readonly code: ErrorCode;
