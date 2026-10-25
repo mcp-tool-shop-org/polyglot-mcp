@@ -1068,9 +1068,17 @@ export function isProseLine(line: string): boolean {
   return words.length >= MIN_PROSE_WORDS && !namesOnly(words);
 }
 
-/** A line as compared: markers and surrounding space off, inner whitespace collapsed. */
-const comparable = (line: string): string =>
-  line.replace(LINE_MARKER, "").replace(/\s+/g, " ").trim().replace(/[.。．]+$/, "");
+/**
+ * A line as compared: markers and surrounding space off, inner whitespace
+ * collapsed, a closing full stop dropped. Written without a quantified regex
+ * over the whole line (`\s+`, `[.]+$`), which backtracks polynomially on
+ * pathological input (CodeQL js/polynomial-redos).
+ */
+const comparable = (line: string): string => {
+  let out = line.replace(LINE_MARKER, "").split(/\s/).filter(Boolean).join(" ");
+  while (out.endsWith(".") || out.endsWith("。") || out.endsWith("．")) out = out.slice(0, -1);
+  return out;
+};
 
 /**
  * The prose lines of `source` that appear verbatim in `translation`. These are
