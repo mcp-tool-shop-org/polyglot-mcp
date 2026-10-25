@@ -14,7 +14,7 @@ import GithubSlugger from "github-slugger";
 import { translateBatch, type TranslateBatchOptions, type BatchItem } from "./translate.js";
 import { resolveLanguage } from "./languages.js";
 import { validateTranslation } from "./validate.js";
-import { maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
+import { PLACEHOLDER_PATTERN, maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
 import { anchorsEnabled, DEFAULT_PROTECTED_TERMS, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
 import { createPins, getPin, loadPins, type PinFile } from "./pins.js";
 import {
@@ -632,14 +632,15 @@ export function cleanTranslation(text: string, isHeading = false): string {
 // ─── Line by line ─────────────────────────────────────────────────
 
 /**
- * Placeholders `⟦n⟧` in a line, renumbered from 0 in order of first use. `order[k]`
+ * Placeholders `⟦n⟧` in a piece, renumbered from 0 in order of first use. `order[k]`
  * is the segment's own number for local placeholder k, and `spans[k]` what it stands for.
+ * Uses the same pattern as restoreCodeSpans, so a placeholder is the same thing everywhere.
  */
 function localiseLine(line: string, spans: readonly string[]): { text: string; spans: string[]; order: number[] } {
   const local: string[] = [];
   const order: number[] = [];
   const index = new Map<number, number>();
-  const text = line.replace(/⟦(\d+)⟧/g, (_m, n: string) => {
+  const text = line.replace(PLACEHOLDER_PATTERN, (_m, n: string) => {
     const global = Number(n);
     if (!index.has(global)) {
       index.set(global, local.length);
@@ -651,11 +652,88 @@ function localiseLine(line: string, spans: readonly string[]): { text: string; s
   return { text, spans: local, order };
 }
 
-/** Pieces of a masked segment: its lines, or its sentences (kept on their line, joined back with a space). */
+/** `[label](target)`, `![alt](src)` and `[label][ref]` in `text`, as [start, end) ranges. A label may wrap lines. */
+function linkRanges(text: string): Array<[number, number]> {
+  const n = text.length;
+  const nextBracket = new Int32Array(n + 2).fill(n);
+  const nextParen = new Int32Array(n + 2).fill(n);
+  for (let i = n - 1; i >= 0; i--) {
+    nextBracket[i] = text[i] === "]" ? i : nextBracket[i + 1]!;
+    nextParen[i] = text[i] === ")" ? i : nextParen[i + 1]!;
+  }
+  const out: Array<[number, number]> = [];
+  let i = 0;
+  while (i < n) {
+    const open = text[i] === "[" ? i : text[i] === "!" && text[i + 1] === "[" ? i + 1 : -1;
+    if (open >= 0) {
+      const close = nextBracket[open + 1]!;
+      const after = close < n ? text[close + 1] : undefined;
+      if (after === "(" || after === "[") {
+        const end = after === "(" ? nextParen[close + 2]! : nextBracket[close + 2]!;
+        if (end < n && end - i <= 600) {
+          out.push([i, end + 1]);
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+    i++;
+  }
+  return out;
+}
+
+/** A position test over sorted, disjoint ranges, for positions asked in increasing order. */
+function insideAny(ranges: ReadonlyArray<[number, number]>): (pos: number) => boolean {
+  let k = 0;
+  return (pos) => {
+    while (k < ranges.length && ranges[k]![1] <= pos) k++;
+    return k < ranges.length && ranges[k]![0] <= pos && pos < ranges[k]![1];
+  };
+}
+
+const BLOCK_START = /^\s*(?:>\s*)*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)/;
+
+/**
+ * Pieces of a masked segment. "line": its lines. "sentence": its blocks (a list
+ * item or paragraph, with hard-wrapped lines joined by a space) split into
+ * sentences. Neither mode ever cuts inside a link, whose label may contain a
+ * stop or a line break; a link is one piece of text.
+ */
 function pieces(text: string, mode: "line" | "sentence"): string[][] {
-  return text.split(String.fromCharCode(10)).map((line) =>
-    mode === "line" ? [line] : line.split(/(?<=[.!?。！？])\s/).filter((x) => x.trim() !== ""),
-  );
+  const inLink = insideAny(linkRanges(text));
+  const lines: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n" && !inLink(i)) {
+      lines.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  lines.push(text.slice(start));
+  if (mode === "line") return lines.map((l) => [l]);
+
+  const blocks: string[] = [];
+  for (const line of lines) {
+    if (blocks.length === 0 || line.trim() === "" || BLOCK_START.test(line) || blocks[blocks.length - 1]!.trim() === "") {
+      blocks.push(line);
+    } else {
+      blocks[blocks.length - 1] += ` ${line.trim()}`;
+    }
+  }
+  return blocks.map((block) => {
+    const inside = insideAny(linkRanges(block));
+    const out: string[] = [];
+    let from = 0;
+    for (let i = 0; i < block.length; i++) {
+      if (".!?。！？".includes(block[i]!) && i + 1 < block.length && /\s/.test(block[i + 1]!) && !inside(i)) {
+        out.push(block.slice(from, i + 1));
+        from = i + 2;
+      }
+    }
+    if (from < block.length) out.push(block.slice(from));
+    const sentences = out.map((x) => x.trim()).filter((x) => x !== "");
+    return sentences.length > 0 ? sentences : [block];
+  });
 }
 
 /**
@@ -664,6 +742,8 @@ function pieces(text: string, mode: "line" | "sentence"): string[][] {
  * segment's own numbering. A long, code-dense segment is the one a model drops a
  * placeholder from; a single line or sentence is a task it does well. Returns
  * undefined when any piece is still unusable. Every piece goes out as its own call.
+ * The caller checks the reassembled segment, which a piece-by-piece check cannot
+ * see (a sentence of six words can be wrapped over two lines of three).
  */
 async function translateByPieces(
   item: BatchItem,
@@ -678,7 +758,7 @@ async function translateByPieces(
   for (const line of pieces(item.text, mode)) {
     const out: string[] = [];
     for (const piece of line.length > 0 ? line : [""]) {
-      if (!/\p{L}/u.test(piece.replace(/⟦\d+⟧/g, ""))) {
+      if (!/\p{L}/u.test(piece.replace(PLACEHOLDER_PATTERN, ""))) {
         out.push(piece);
         continue;
       }
@@ -690,7 +770,7 @@ async function translateByPieces(
       calls += r.ollamaCalls;
       const answer = r.translations[0] ?? "";
       if (unusableReason(local.text, local.spans, answer, false) !== undefined) return { translation: undefined, calls };
-      out.push(cleanTranslation(answer).replace(/⟦(\d+)⟧/g, (_m, k: string) => `⟦${local.order[Number(k)]}⟧`));
+      out.push(cleanTranslation(answer).replace(PLACEHOLDER_PATTERN, (_m, k: string) => `⟦${local.order[Number(k)]}⟧`));
     }
     lines.push(out.join(" "));
   }
@@ -991,23 +1071,32 @@ export async function translateMarkdown(
       }
 
       // Last steps before giving up: line by line (a multi-line segment), then
-      // sentence by sentence (what recovered the longest lines in practice).
-      const hasLines = item.text.includes("\n");
-      const hasSentences = pieces(item.text, "sentence").some((line) => line.length > 1);
+      // sentence by sentence (what recovered the longest lines in practice). A
+      // step applies only when it cuts the segment differently from the one
+      // before; and what it returns is checked as a whole, because pieces that
+      // each pass can add up to a segment that does not.
+      const sameCut = (): boolean =>
+        pieces(item.text, "line").flat().join("\n") === pieces(item.text, "sentence").flat().join("\n");
+      const hasLines = pieces(item.text, "line").length > 1;
       for (const [mode, label, applies] of [
         ["line", "line by line", hasLines],
-        ["sentence", "sentence by sentence", hasSentences],
+        ["sentence", "sentence by sentence", !sameCut()],
       ] as const) {
         if (recovered || !applies) continue;
         const attempt = await translateByPieces(item, spans, mode, sourceLang, targetLang, batchOptions);
         ollamaCalls += attempt.calls;
-        if (attempt.translation !== undefined) {
-          uniqueTranslations[i] = attempt.translation;
-          recovered = true;
-          route += `; translated ${label}`;
-        } else {
+        if (attempt.translation === undefined) {
           route += `; ${label} did not recover it`;
+          continue;
         }
+        const whole = unusableReason(item.text, spans, attempt.translation, isHeading);
+        if (whole !== undefined) {
+          route += `; ${label} did not recover it (the reassembled segment was still ${whole === "english" ? "English" : whole})`;
+          continue;
+        }
+        uniqueTranslations[i] = attempt.translation;
+        recovered = true;
+        route += `; translated ${label}`;
       }
       reasonByMasked.set(item.text, route);
       fallbacks.push({ lang: targetLang, segment: segmentLabel(item.text), reason: route, retried: true, recovered });

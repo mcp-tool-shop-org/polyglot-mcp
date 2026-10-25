@@ -210,6 +210,8 @@ A model answer is **unusable** when it is empty, when a code-span placeholder di
 
 A segment that stays English is never cached, so `scripts/pin-translation.mjs` pins a prose paragraph you translated by hand even without `--include-uncached`.
 
+**What the check does not see.** Four limits, so a clean result is read for what it is: (1) English of fewer than 6 words, such as short headings, table cells and list items; (2) a Title-Case heading or other run of names, which cannot be told from a product name; (3) a sentence that is only partly translated, where some words are in the target language and the rest still English, because a sentence counts as untranslated only when the whole of it is unchanged; (4) output in the wrong language, such as Spanish returned for Italian, which is not English and so is not flagged. Fenced code blocks are protected and never translated or checked.
+
 ```bash
 node scripts/translate-all.mjs README.md                          # --on-untranslated=fail
 node scripts/translate-all.mjs README.md --on-untranslated=report

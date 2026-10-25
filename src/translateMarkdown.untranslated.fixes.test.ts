@@ -25,6 +25,8 @@ const client = vi.hoisted(() => ({
   calls: [] as Array<{ batch: boolean; text: string }>,
   /** When false, the placeholder-dropping markers are ignored (the model "recovers"). */
   breakPlaceholders: true,
+  /** Texts (trimmed) the model returns unchanged, whatever else is in them. */
+  echoExact: new Set<string>(),
 }));
 
 vi.mock("./ollama.js", () => {
@@ -34,11 +36,18 @@ vi.mock("./ollama.js", () => {
     const isBatch = text.includes("---POLYGLOT_SEP---");
     client.calls.push({ batch: isBatch, text });
     const one = (part: string): string => {
-      if (part.includes("zzechoalways")) return part;
+      if (part.includes("zzechoalways") || client.echoExact.has(part.trim())) return part;
+      // zzdropbig: placeholders are dropped from any text over 150 characters (a long segment, never a piece of it).
+      if (client.breakPlaceholders && part.includes("zzdropbig") && part.length > 150) return `[es] ${strip(part)}`;
+      // zzspaced: the placeholders come back padded, as a model decorates them: "⟦ 0 ⟧".
+      if (part.includes("zzspaced") && !part.includes("\n")) return `[es] ${part.replace(/⟦(\d+)⟧/g, "⟦ $1 ⟧")}`;
       if (client.breakPlaceholders && part.includes("zzdropalways")) return `[es] ${strip(part)}`;
       if (client.breakPlaceholders && part.includes("zzdropml") && part.includes("\n")) return `[es] ${strip(part)}`;
       if (client.breakPlaceholders && part.includes("zzdropsent") && /[.!?] \S/.test(part)) return `[es] ${strip(part)}`;
-      return `[es] ${part.split("\n").join("\n[es] ")}`.replace(/\[es\] \[es\]/g, "[es]");
+      // Every line and sentence is tagged, as a model translating the whole text would: a sentence
+      // left untouched would read as English to the check.
+      const tagged = part.replace(/([.!?]) (?=\S)/g, "$1 [es] ");
+      return `[es] ${tagged.split("\n").join("\n[es] ")}`.replace(/\[es\] \[es\]/g, "[es]");
     };
     if (isBatch) {
       const parts = text.split(/\n?---POLYGLOT_SEP---\n?/);
@@ -228,6 +237,90 @@ describe("untranslated check — the remaining paths (gm 1)", () => {
     expect(unusableReason("Install ⟦0⟧ first and then run the whole build", ["`x`"], "Instala primero", false)).toBe("placeholders");
     expect(unusableReason("The router picks a device for every single job today.", [], "The router picks a device for every single job today.", false)).toBe("english");
     expect(unusableReason("The router picks a device for every single job today.", [], "El enrutador elige un dispositivo para cada trabajo.", false)).toBeUndefined();
+  });
+});
+
+describe("the piecewise path (gq)", () => {
+  let dir: string;
+  let filePath: string;
+  beforeEach(() => {
+    client.calls.length = 0;
+    client.breakPlaceholders = true;
+    client.echoExact.clear();
+    dir = mkdtempSync(join(tmpdir(), "polyglot-gq-"));
+    filePath = join(dir, "README.md");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const run = (md: string, extra: Record<string, unknown> = {}) => {
+    writeFileSync(filePath, md, "utf-8");
+    return translateMarkdown(md, "en", "es", { filePath, cache: false, ...extra });
+  };
+
+  it("gq 1: a decorated placeholder is renumbered like any other, so spans are not swapped", async () => {
+    // The protected term Kimi-K3 is numbered after the code span, but appears before it.
+    const seg = [
+      "- First Kimi-K3 runs `npm install` zzdropml zzspaced to fetch every package.",
+      "- Second DepositAuth runs `npm test` zzspaced to verify the whole build.",
+    ].join("\n");
+    const r = await run(readme(P1, seg, P3));
+    expect(r.untranslated).toEqual([]);
+    expect(r.markdown).toContain("Kimi-K3 runs `npm install`");
+    expect(r.markdown).toContain("DepositAuth runs `npm test`");
+    expect(r.markdown).not.toContain("`npm install` runs Kimi-K3");
+    expect(r.lostSpans).toEqual([]);
+  });
+
+  it("gq 2: a sentence is never cut inside a link label", async () => {
+    const seg =
+      "Read [Why? The local setup guide](https://example.com/faq) before you start zzdropbig now. Then run `npm test` to check the whole build and keep the logs for the next release review meeting.";
+    const r = await run(readme(P1, seg, P3));
+    expect(r.untranslated).toEqual([]);
+    expect(r.fallbacks[0]!.reason).toContain("sentence by sentence");
+    for (const c of client.calls) {
+      const opens = (c.text.match(/\[/g) ?? []).length;
+      const closes = (c.text.match(/\]/g) ?? []).length;
+      expect(opens, `unbalanced brackets sent to the model: ${c.text}`).toBe(closes);
+    }
+    expect(r.markdown).toMatch(/\[Why\? (\[es\] )?The local setup guide\]\(https:\/\/example\.com\/faq\)/);
+  });
+
+  it("gq 2: a hard-wrapped link label stays on one piece when the segment goes line by line", async () => {
+    const seg = [
+      "- See [the complete\nconfiguration guide](https://example.com/docs) zzdropbig now to get started with the whole tool.",
+      "- Run `npm test` after that to check the build and keep the logs for later.",
+    ].join("\n");
+    const r = await run(readme(P1, seg, P3));
+    expect(r.untranslated).toEqual([]);
+    for (const c of client.calls) {
+      expect((c.text.match(/\[/g) ?? []).length, c.text).toBe((c.text.match(/\]/g) ?? []).length);
+    }
+    expect(r.markdown).toMatch(/\[the complete\n(\[es\] )?configuration guide\]\(https:\/\/example\.com\/docs\)/);
+  });
+
+  it("gq 3: pieces that each pass but add up to the English are not 'recovered'; the next cut is tried", async () => {
+    const wrapped = "The local router picks\na device for every job.";
+    client.echoExact.add(wrapped);
+    client.echoExact.add("The local router picks");
+    client.echoExact.add("a device for every job.");
+    const r = await run(readme(P1, wrapped, P3));
+    expect(r.untranslated).toEqual([]); // the sentence-by-sentence cut translated it
+    expect(r.fallbacks).toHaveLength(1);
+    expect(r.fallbacks[0]).toMatchObject({ retried: true, recovered: true });
+    expect(r.fallbacks[0]!.reason).toContain("line by line did not recover it (the reassembled segment was still English)");
+    expect(r.fallbacks[0]!.reason).toContain("translated sentence by sentence");
+    expect(r.markdown).toContain("[es] The local router picks a device for every job.");
+  });
+
+  it("gq 3: when every cut still adds up to the English, fallbacks and untranslated agree", async () => {
+    const wrapped = "The local router picks\na device for every job.";
+    for (const t of [wrapped, "The local router picks", "a device for every job.", "The local router picks a device for every job."]) {
+      client.echoExact.add(t);
+    }
+    const r = await run(readme(P1, wrapped, P3));
+    expect(r.untranslated).toHaveLength(1);
+    expect(r.fallbacks).toHaveLength(1);
+    expect(r.fallbacks[0]).toMatchObject({ retried: true, recovered: false });
   });
 });
 

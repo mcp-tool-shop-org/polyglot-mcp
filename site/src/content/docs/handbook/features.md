@@ -65,6 +65,8 @@ An answer is unusable when it is empty, when a code-span placeholder did not com
 
 `--on-untranslated=fail|report` chooses what happens with what is left: `fail` (the default for `translate-all.mjs` and `translate-readme.mjs`) writes the files, marks the language `untranslated` and exits non-zero (`translate-readme.mjs` exits 3); `report` (the default for the library and the MCP tools) lists the lines and exits 0. The per-language result and the console summary also list the segments that left the plain batch path, and how many were retried and recovered. Because a segment that stayed English is not cached, `pin-translation.mjs` pins a prose paragraph translated by hand even without `--include-uncached`.
 
+**What the check does not see.** Four limits, so a clean result is read for what it is: English of fewer than 6 words (short headings, table cells, list items); a Title-Case heading or other run of names, which cannot be told from a product name; a sentence that is only partly translated, because a sentence counts as untranslated only when the whole of it is unchanged; and output in the wrong language (Spanish returned for Italian), which is not English and so is not flagged. Fenced code blocks are protected and never translated or checked.
+
 ## Pinned translations
 
 A pinned translation always wins. `.polyglot-pins.json` holds hand-fixed translations keyed by a hash of the English segment plus the language. A pin beats the cache and the model and survives every rerun; when the English changes, its hash changes, so a pin can't outlive the text it was written for.
