@@ -349,7 +349,7 @@ See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy.
 ```bash
 npm install             # install deps
 npm run typecheck       # type-check without emitting
-npm test                # run 512 tests (vitest)
+npm test                # run 570 tests (vitest)
 npm run build           # compile TypeScript to dist/
 npm run verify          # typecheck + test + build + pack (full gate)
 ```
