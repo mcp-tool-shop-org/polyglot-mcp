@@ -4,7 +4,7 @@
 
 <p align="center"><img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/polyglot-mcp/readme.png" alt="Polyglot MCP" width="340"></p>
 
-<p align="center"><strong>Server di traduzione MCP con GPU locale: 57 lingue, nessuna dipendenza dal cloud.</strong></p>
+<p align="center"><strong>Server MCP per la traduzione GPU locale: 57 lingue, nessuna dipendenza dal cloud.</strong></p>
 
 <p align="center">
   <a href="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/polyglot-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -19,7 +19,7 @@
 
 ## Funzionalità
 
-Traduce il testo tra 57 lingue utilizzando [TranslateGemma](https://ollama.com/library/translategemma) in esecuzione localmente sulla GPU tramite [Ollama](https://ollama.com). Nessuna chiave API, nessun cloud, nessun limite di frequenza: per impostazione predefinita, tutto rimane sulla tua macchina. Puoi scegliere di utilizzare un Ollama remoto, come [Ollama Cloud](#ollama-cloud-opzionale).
+Traduce il testo tra 57 lingue utilizzando TranslateGemma(https://ollama.com/library/translategemma) in esecuzione localmente sulla GPU tramite [Ollama](https://ollama.com). Nessuna chiave API, nessun cloud, nessun limite di frequenza: per impostazione predefinita, tutto rimane sulla tua macchina. Puoi scegliere di utilizzare un Ollama remoto, come [Ollama Cloud](#ollama-cloud-opzionale).
 
 ## Guida rapida
 
@@ -45,7 +45,7 @@ ollama pull translategemma:4b    # 3.3 GB — fastest, lower quality
 
 ### 3. Aggiungi al tuo client MCP
 
-**Claude Code / Claude Desktop:** aggiungi a `claude_desktop_config.json` o `.mcp.json`:
+**Claude Code / Claude Desktop**: aggiungi a `claude_desktop_config.json` o `.mcp.json`:
 
 ```json
 {
@@ -89,7 +89,7 @@ Il testo lungo viene automaticamente suddiviso in blocchi ai confini di paragraf
 
 ### `translate_markdown`
 
-Traduce un intero documento Markdown preservando la struttura. I blocchi di codice, gli elementi HTML, i badge, gli URL e la formattazione della tabella vengono mantenuti intatti: solo il contenuto in prosa (intestazioni, paragrafi, slogan, celle della tabella) viene tradotto. Le sequenze di codice inline e i [termini protetti](#termini-protetti-polyglot-termsjson) vengono sostituiti con segnaposto prima della traduzione e ripristinati dopo, in modo che i comandi, i flag, i nomi dei pacchetti e gli identificatori vengano restituiti esattamente come sono stati scritti e ogni conteggio "N di M" viene restituito come `N/M`.
+Traduce un intero documento Markdown preservando la struttura. I blocchi di codice, gli elementi HTML, i badge, gli URL e la formattazione della tabella vengono mantenuti intatti: solo il contenuto in prosa (titoli, paragrafi, slogan, celle della tabella) viene tradotto. Le sequenze di codice inline e i [termini protetti](#termini-protetti-polyglot-termsjson) vengono sostituiti con segnaposto prima della traduzione e ripristinati dopo, in modo che i comandi, i flag, i nomi dei pacchetti e gli identificatori vengano restituiti esattamente come sono stati scritti e ogni conteggio "N di M" viene restituito come `N/M`.
 
 | Parametro | Obbligatorio | Descrizione |
 |--------------|----------|-------------|
@@ -123,7 +123,7 @@ Traduce il contenuto Markdown in più lingue contemporaneamente (predefinito: 7:
 
 ### `translate_readme`
 
-Traduce un file README.md nelle stesse 7 lingue e scrive i file `README.<lang>.md` accanto ad esso, aggiornando la barra di navigazione della lingua nel README di origine e in ogni traduzione. Restituisce un riepilogo dello stato per lingua (ok/fallimento, tempi, file scritti) anziché il testo tradotto; utilizza `translate_markdown` quando desideri ottenere il contenuto.
+Traduce un file README.md in tutte e 7 le lingue e scrive i file `README.<lang>.md` accanto ad esso, aggiornando la barra di navigazione della lingua nel README di origine e in ogni traduzione. Restituisce un riepilogo dello stato per lingua (ok/fallimento, tempi, file scritti) anziché il testo tradotto; utilizza `translate_markdown` quando desideri il contenuto.
 
 | Parametro | Obbligatorio | Descrizione |
 |---------------|----------|-------------|
@@ -135,7 +135,7 @@ Traduce un file README.md nelle stesse 7 lingue e scrive i file `README.<lang>.m
 | `navBar`      | no       | Inserisci o aggiorna la barra di navigazione della lingua (predefinito: true) |
 | `onLostSpan`  | no       | `report` (predefinito) scrive ogni file ed elenca le sequenze protette perse; `fail` lascia una lingua che ne contiene come errore |
 
-`translate_readme` legge le `.polyglot-terms.json` e le `.polyglot-pins.json` del README se esistono.
+`translate_readme` legge i `.polyglot-terms.json` e `.polyglot-pins.json` del README se esistono.
 
 ## Funzionalità
 
@@ -154,23 +154,23 @@ I segmenti tradotti vengono memorizzati nella cache in base all'hash del contenu
 Diverse esecuzioni possono condividere un singolo file di cache. Ogni salvataggio unisce solo le proprie modifiche nel file sotto un blocco e sostituisce il file in modo atomico, in modo che le lingue tradotte in parallelo mantengano le voci reciproche e la cancellazione della cache per una lingua lascia intatte le altre.
 
 ### Memoria di traduzione (cache fuzzy)
-Quando non viene trovata una corrispondenza esatta nella cache, una traduzione memorizzata nella cache viene riutilizzata solo se la sua fonte differisce dalla nuova solo per quanto riguarda il layout degli spazi bianchi: spazi all'interno di una riga, spazi all'inizio o alla fine, o CRLF rispetto a LF. Qualsiasi altra modifica comporta una nuova traduzione, inclusa una parola, un numero, un segno di punteggiatura, una lettera o un frammento di codice inline modificati. Una traduzione memorizzata nella cache è la traduzione della sua fonte originale, quindi riutilizzarla per un testo modificato comporterebbe l'utilizzo della formulazione precedente.
+Quando non viene trovata una corrispondenza esatta nella cache, una traduzione memorizzata nella cache viene riutilizzata solo se la sua fonte differisce dalla nuova solo per il layout degli spazi bianchi: spazi all'interno di una riga, spazi all'inizio o alla fine, o CRLF rispetto a LF. Qualsiasi altra modifica viene ritradotta, inclusa una parola, un numero, un segno di punteggiatura, una lettera o un intervallo di codice inline modificati. Una traduzione memorizzata nella cache è la traduzione della sua fonte originale, quindi riutilizzarla per un testo modificato comporterebbe l'utilizzo della formulazione precedente.
 
 ### Termini protetti (`.polyglot-terms.json`)
-TranslateGemma riscrive gli identificatori semplici in un altro script: un file README in hindi scrive `XLS-30` come `एक्सएलएस-30` e `Kimi-K3` come `किमी-के3`. Modifica anche i conteggi: il cinese trasforma "218/224" in "224/218". Pertanto, gli identificatori nel testo vengono mascherati come frammenti di codice inline: ciascuno viene sostituito con un segnaposto privo di lettere prima della traduzione e ripristinato dopo. I valori predefiniti sono:
+TranslateGemma riscrive gli identificatori semplici in un altro script: un file README in hindi scrive `XLS-30` come `एक्सएलएस-30` e `Kimi-K3` come `किमी-के3`. Modifica anche i conteggi: il cinese trasforma "218/224" in "224/218". Pertanto, gli identificatori nel testo vengono mascherati come intervalli di codice inline: ciascuno viene sostituito con un segnaposto privo di lettere prima della traduzione e ripristinato dopo. I valori predefiniti sono:
 
 | Modello | Maschere | Lascia invariato |
 |---------|-------|--------------|
-| `url` | `https://…` fino agli spazi bianchi, una virgoletta, una parentesi quadra o un apice inverso (consentendo un livello di parentesi bilanciate, come `https://en.wikipedia.org/wiki/Foo_(bar)`) | |
+| `url` | `https://…` fino agli spazi bianchi, una virgoletta, una parentesi o un apice inverso (consentendo un livello di parentesi bilanciate, come `https://en.wikipedia.org/wiki/Foo_(bar)`) | |
 | `anchor` | Target `#slug` all'interno della pagina nei collegamenti Markdown (`[text](#slug)`, `[text](#slug "title")`), nelle definizioni di riferimento (`[label]: #slug`) e negli attributi HTML `href="#slug"`, in modo che il modello traduca il testo del collegamento senza alterare il frammento. | `#123` nel testo, `#heading` righe, URL esterni `https://…#frag` (coperti da `url`) |
 | `link-target` | Target non HTTP(S) e non di ancoraggio nei collegamenti inline, nelle immagini e nelle definizioni di riferimento Markdown: percorsi relativi (`../facet`, `docs/Kimi-K3.md`), nomi di file semplici (`LICENSE`), `mailto:`, `<path with spaces>` e percorsi con un livello di parentesi bilanciate (`docs/Foo_(bar).md`) | Titoli dei collegamenti (`"MIT License"`), attributi HTML (`href="…"`, `src="…"`) |
-| `caps-id` | ALL-CAPS token con una cifra o lettere maiuscole unite da `-` o `_`: `XLS-30`, `HOST_REJECTED`, `SHA-256`, `ARM64` | `README`, `API`, `NASA` |
-| `camel-case` | CamelCase e mixedCase parole: `DepositAuth`, `AMMCreate`, `mixedCase`, `SoulX-Singer` | `URLs`, `IDs`, `GPUs`, parole comuni con iniziale maiuscola |
+| `caps-id` | ALL-CAPS token con una cifra o con lettere maiuscole unite da `-` o `_`: `XLS-30`, `HOST_REJECTED`, `SHA-256`, `ARM64` | `README`, `API`, `NASA` |
+| `camel-case` | CamelCase e mixedCase parole: `DepositAuth`, `AMMCreate`, `mixedCase`, `SoulX-Singer` | `URLs`, `IDs`, `GPUs`, parole comuni con la prima lettera maiuscola |
 | `model-id` | ID di modello e prodotto con una parte alfanumerica: `Kimi-K3`, `gemma4:31b`, `Qwen2.5-32B` | `Node.js`, `top-10` |
 
-Dopo che tutti i segmenti sono stati tradotti e riassemblati, ogni intestazione ATX della fonte viene associata alla sua intestazione ATX tradotta e viene creata una stringa univoca in ordine di documento con `github-slugger` (corrispondente agli ID delle intestazioni di GitHub, inclusi i suffissi `-1`, `-2` per le intestazioni duplicate) e ogni elemento non di codice all'interno della pagina (`[text](#slug)`, `[label]: #slug` e attributi HTML `href="#slug"`) viene riscritto con la stringa univoca dell'intestazione tradotta.
+Dopo che tutti i segmenti sono stati tradotti e riassemblati, ogni intestazione ATX della fonte viene associata alla sua intestazione ATX tradotta e viene creata una versione abbreviata in ordine di documento con `github-slugger` (corrispondente agli ID delle intestazioni di GitHub, inclusi i suffissi `-1`, `-2` per le intestazioni duplicate) e ogni ancoraggio non di codice all'interno della pagina (`[text](#slug)`, `[label]: #slug` e ancoraggio HTML `href="#slug"`) viene riscritto con la versione abbreviata dell'intestazione tradotta.
 
-"N di M" nel testo e nelle celle della tabella (`218 of 224`) viene mascherato come un singolo elemento e ripristinato come `218/224` in ogni lingua, in modo che venga letto correttamente ovunque e non possa essere invertito o trasformato in un ordinale. Una cella della tabella che contiene solo un conteggio non viene affatto inviata al modello.
+"N di M" nel testo e nelle celle della tabella (`218 of 224`) viene mascherato come un singolo intervallo e ripristinato come `218/224` in ogni lingua, il che lo rende leggibile ovunque e non può essere invertito o trasformato in un ordinale. Una cella della tabella che contiene solo un conteggio non viene affatto inviata al modello.
 
 Un repository aggiunge i propri termini in `.polyglot-terms.json` accanto al file README. Ogni campo è facoltativo:
 
@@ -183,82 +183,101 @@ Un repository aggiunge i propri termini in `.polyglot-terms.json` accanto al fil
 }
 ```
 
-`terms` sono stringhe esatte, che fanno distinzione tra maiuscole e minuscole, corrispondenti a parole intere; `patterns` sono JavaScript espressioni regolari. Entrambi si aggiungono ai valori predefiniti. `disable` disattiva i valori predefiniti per nome (ad esempio, `"disable": ["anchor"]` disattiva la mascheratura degli ancoraggi all'interno della pagina, la riscrittura delle stringhe univoche dopo l'assemblaggio e il controllo della sopravvivenza degli ancoraggi; `"disable": ["link-target"]` disattiva la mascheratura dei target dei collegamenti non HTTP e salta i target relativi/non HTTP nel controllo della sopravvivenza dei collegamenti in modo che i collegamenti ai file localizzati come `./docs/guide.fr.md` vengano gestiti correttamente) e `"nOfM": false` disattiva la regola del conteggio. Un file che non può essere analizzato interrompe l'esecuzione con `CONFIG_ERROR` invece di tradurre senza i termini richiesti.
+`terms` sono stringhe esatte, che fanno distinzione tra maiuscole e minuscole, corrispondenti a parole intere; `patterns` sono JavaScript espressioni regolari. Entrambi si aggiungono ai valori predefiniti. `disable` disattiva i valori predefiniti per nome (ad esempio, `"disable": ["anchor"]` disattiva la mascheratura degli ancoraggi all'interno della pagina, la riscrittura delle versioni abbreviate dopo l'assemblaggio e il controllo della sopravvivenza degli ancoraggi; `"disable": ["link-target"]` disattiva la mascheratura dei target dei collegamenti non HTTP e salta i target relativi/non HTTP nel controllo della sopravvivenza dei collegamenti in modo che i collegamenti ai file localizzati come `./docs/guide.fr.md` vengano gestiti correttamente) e `"nOfM": false` disattiva la regola del conteggio. Un file che non può essere analizzato interrompe l'esecuzione con `CONFIG_ERROR` invece di tradurre senza i termini richiesti.
 
 ### Controllo di sopravvivenza (`--on-lost-span`)
-Dopo la traduzione, ogni file di destinazione viene controllato rispetto alla lingua inglese: ogni elemento protetto (frammento di codice inline, termine protetto e ogni conteggio come `N/M`) deve essere presente nella traduzione del suo segmento, carattere per carattere, e ogni ancoraggio `#slug` all'interno della pagina che si risolveva nella fonte inglese deve risolversi nella traduzione in una stringa univoca dell'intestazione ATX tradotta o in un ancoraggio HTML esplicito `id=`/`name=` (un ancoraggio che non si risolveva già nella fonte inglese viene segnalato come avviso e non interrompe mai l'esecuzione; se i conteggi degli ancoraggi di origine e di traduzione differiscono e un ancoraggio valido per la fonte è coinvolto, la mancata corrispondenza viene segnalata anche come `LostSpan` di tipo `"anchor"` a meno che non sia già stata segnalata dal controllo dei collegamenti del segmento). I collegamenti Markdown di ogni segmento (`[text](target)`, `[text](target "title")`, immagini `![alt](src)`, collegamenti di riferimento `[text][label]`, elementi collassati `[text][]` e collegamenti rapidi `[label]` risolti rispetto alle definizioni del file `[label]: target`) devono preservare l'insieme esatto di target di collegamento non di ancoraggio e il conteggio esatto dei collegamenti `#slug` all'interno della pagina (segnalato come tipo `"link"` quando un collegamento è interrotto, non chiuso o eliminato). Qualsiasi delimitatore di segnaposto `⟦` o `⟧` non sostituito lasciato al di fuori del codice in un segmento tradotto oltre a quanto presente nella fonte viene segnalato come tipo `"placeholder"`. Ogni cella della tabella deve contenere gli stessi numeri della cella di origine, confrontati come un insieme, non in ordine: una traduzione cinese corretta per "218/224" mette il totale per primo (`224 首中的 218 首`), quindi un controllo dell'ordine segnalerebbe la risposta corretta. Le cifre di altri script vengono normalizzate prima del confronto. Il file deve anche mantenere i blocchi di codice delimitati e i frammenti di codice inline.
+Dopo la traduzione, ogni file di destinazione viene confrontato con la versione in inglese: ogni intervallo protetto (intervallo di codice inline, termine protetto e ogni conteggio come `N/M`) deve essere presente nella traduzione del suo segmento, carattere per carattere, e ogni ancoraggio `#slug` all'interno della pagina che si risolveva nella fonte in inglese deve risolversi nella traduzione in una versione abbreviata dell'intestazione ATX tradotta o in un ancoraggio HTML esplicito `id=`/`name=` (un ancoraggio che non si risolveva nella fonte in inglese viene segnalato come avviso e non interrompe mai l'esecuzione; se i conteggi degli ancoraggi della fonte e della traduzione differiscono e un ancoraggio valido per la fonte è coinvolto, la mancata corrispondenza viene segnalata anche come `LostSpan` di tipo `"anchor"` a meno che non sia già stata segnalata dal controllo dei collegamenti del segmento). I collegamenti Markdown di ogni segmento (`[text](target)`, `[text](target "title")`, immagini `![alt](src)`, collegamenti di riferimento `[text][label]`, elementi collassati `[text][]` e collegamenti rapidi `[label]` risolti rispetto alle definizioni del file `[label]: target`) devono preservare l'insieme esatto di target di collegamento non di ancoraggio e il conteggio esatto dei collegamenti `#slug` all'interno della pagina (segnalato come tipo `"link"` quando un collegamento è interrotto, non chiuso o eliminato). Qualsiasi delimitatore di segnaposto `⟦` o `⟧` non sostituito lasciato al di fuori del codice in un segmento tradotto oltre a quanto presente nella fonte viene segnalato come tipo `"placeholder"`. Ogni cella della tabella deve contenere gli stessi numeri della cella corrispondente nella fonte, confrontati come un insieme, non in ordine: la corretta traduzione cinese per "218/224" mette il totale per primo (`224 首中的 218 首`), quindi un controllo dell'ordine segnalerebbe la risposta corretta. Le cifre di altri script vengono normalizzate prima del confronto. Il file deve anche mantenere i blocchi di codice delimitati e gli intervalli di codice inline.
 
 `--on-lost-span=fail|report` determina cosa succede quando qualcosa viene perso:
 
-- **`fail`**: l'esecuzione termina con un codice di errore diverso da zero e viene visualizzato un elenco di lingua, segmento ed elemento mancante. Questo è il valore predefinito per `scripts/translate-all.mjs`, che viene eseguito prima del rilascio. I file vengono comunque scritti, quindi possono essere corretti manualmente e salvati. Il file JSON di riepilogo contiene l'elenco e un errore `LOST_SPAN` nel formato `PolyglotError` standard (`code`, `message`, `hint`, `retryable`).
-- **`report`**: l'elenco viene scritto e l'esecuzione termina con codice 0. Questo è il valore predefinito per gli strumenti MCP (parametro `onLostSpan`) e per l'API della libreria `translateMarkdown` (opzione `onLostSpan`, campo del risultato `lostSpans`).
+- **`fail`**: l'esecuzione termina con un codice di errore diverso da zero e viene fornito un elenco di lingua, segmento e intervallo mancante. Questo è il valore predefinito per `scripts/translate-all.mjs`, che viene eseguito prima del rilascio. I file vengono comunque scritti, quindi possono essere corretti manualmente e bloccati. Il file JSON di riepilogo contiene l'elenco e un errore `LOST_SPAN` nel formato `PolyglotError` standard (`code`, `message`, `hint`, `retryable`).
+- **`report`**: l'elenco viene scritto e l'esecuzione termina con codice 0. Questo è il valore predefinito per gli strumenti MCP (parametro `onLostSpan`) e l'API della libreria `translateMarkdown` (opzione `onLostSpan`, campo del risultato `lostSpans`).
 
 ```bash
 node scripts/translate-all.mjs README.md                       # --on-lost-span=fail
 node scripts/translate-all.mjs README.md --on-lost-span=report
 ```
 
-### Traduzioni salvate (`.polyglot-pins.json`)
-Una traduzione salvata ha sempre la precedenza. `.polyglot-pins.json` si trova accanto alla cache; ogni voce è indicizzata con un hash del segmento inglese più la lingua di destinazione e contiene la traduzione corretta manualmente. Una traduzione salvata prevale sulla cache e sul modello e sopravvive a ogni esecuzione successiva, incluso `--cache-clear`. Quando l'inglese cambia, l'hash cambia, quindi una traduzione salvata non può sopravvivere al testo per cui è stata creata.
+### Controllo del testo non tradotto (`--on-untranslated`)
+Un modello può restituire un paragrafo in inglese, anche se il batch continua a essere suddiviso correttamente, in modo che tutti gli altri controlli vengano superati. Dopo la traduzione, ogni frase del testo in inglese (6 o più parole, contando un collegamento in base alla sua etichetta ed escludendo i frammenti di codice, gli URL e i frammenti protetti, e non una sequenza di nomi propri) viene considerata come una frase completa della traduzione del suo segmento. Il confronto ignora le maiuscole/minuscole e un punto o due punti finali, unisce prima le righe interrotte e funziona frase per frase, in modo che un paragrafo riformattato o una riga in cui è stata tradotta solo una frase vengano comunque rilevati. Una sequenza di nomi (al massimo una parola funzionale e un'altra parola in minuscolo, come un titolo o `Format: JSON, YAML via stdio`) è esente da tale regola, non da un elenco, e un segmento contrassegnato non viene mai segnalato.
 
-Per salvare le correzioni manuali, correggere il file tradotto, quindi eseguire:
+Una risposta del modello è **inutilizzabile** quando è vuota, quando un segnaposto per un frammento di codice non viene restituito (il segmento tornerebbe altrimenti alla fonte in inglese, in modo che l'identificatore rimanga corretto) o quando una frase del testo è ancora in inglese. Prima che una lingua venga considerata non valida, una risposta inutilizzabile viene riprovata una volta da sola; un segmento che ha già utilizzato il fallback "una chiamata per elemento" dopo una discrepanza nel conteggio dei separatori conta tale chiamata come tentativo. Un segmento che è ancora inutilizzabile (un elemento di elenco lungo e ricco di codice è il caso in cui un modello omette un segnaposto) viene quindi tradotto una riga alla volta se ha più righe, e quindi una frase alla volta se una riga ha più frasi, ogni parte con i propri segnaposto. Solo ciò che è ancora inutilizzabile dopo questi passaggi mantiene la fonte in inglese e non è mai silenzioso: viene segnalato come non tradotto con ogni passaggio che è stato tentato, di cui è stato avvertito e che ha causato l'errore nell'esecuzione con le impostazioni predefinite. Lo stesso test controlla la cache: una risposta inutilizzabile non viene mai scritta in essa e una voce di cache inutilizzabile viene ignorata, eliminata e tradotta di nuovo.
+
+`--on-untranslated=fail|report` determina cosa succede con ciò che rimane:
+
+- **`fail`** (impostazione predefinita per `translate-all.mjs` e `translate-readme.mjs`): i file vengono scritti, la lingua viene contrassegnata come `untranslated` invece di `ok` (e conteggiata al di fuori di `succeeded`), le righe vengono elencate e l'esecuzione termina con un codice diverso da zero (`translate-readme.mjs` termina con 3). Il riepilogo JSON contiene `untranslated`, `untranslatedLanguages`, `fallbacks` e un errore `UNTRANSLATED`.
+- **`report`**: l'elenco viene scritto e l'esecuzione termina con 0. Questa è l'impostazione predefinita per l'API della libreria (opzione `onUntranslated`; campi di risultato `untranslated`, `fallbacks`, `retries`) e per gli strumenti MCP `translate_markdown`, `translate_all` e `translate_readme` (parametro `onUntranslated`), che aggiungono l'elenco all'output.
+
+Un segmento che rimane in inglese non viene mai memorizzato nella cache, quindi `scripts/pin-translation.mjs` contrassegna un paragrafo del testo che hai tradotto manualmente anche senza `--include-uncached`.
+
+**Cosa il controllo non vede.** Quattro limiti, in modo che venga letto un risultato chiaro per ciò che è: (1) inglese con meno di 6 parole, come titoli brevi, celle di tabella ed elementi di elenco; (2) un titolo in formato "Title Case" o un'altra sequenza di nomi, che non può essere distinta da un nome di prodotto; (3) una frase che è solo parzialmente tradotta, in cui alcune parole sono nella lingua di destinazione e il resto è ancora in inglese, perché una frase viene considerata non tradotta solo quando l'intera frase non è stata modificata; (4) output nella lingua sbagliata, come lo spagnolo restituito per l'italiano, che non è inglese e quindi non viene segnalato. I blocchi di codice delimitati sono protetti e non vengono mai tradotti o controllati.
+
+```bash
+node scripts/translate-all.mjs README.md                          # --on-untranslated=fail
+node scripts/translate-all.mjs README.md --on-untranslated=report
+```
+
+### Traduzioni contrassegnate (`.polyglot-pins.json`)
+Una traduzione contrassegnata ha sempre la precedenza. `.polyglot-pins.json` si trova accanto alla cache; ogni voce è indicizzata con un hash del segmento in inglese più la lingua di destinazione e contiene la traduzione corretta manualmente. Un contrassegno supera la cache e il modello e sopravvive a ogni nuova esecuzione, incluso `--cache-clear`. Quando l'inglese cambia, l'hash cambia, quindi un contrassegno non può sopravvivere al testo per cui è stato scritto.
+
+Per contrassegnare le correzioni manuali, correggere il file tradotto, quindi eseguire:
 
 ```bash
 node scripts/pin-translation.mjs README.md hi README.hi.md
 ```
 
-Associa ogni segmento del testo inglese con il testo corrispondente nel file corretto e contrassegna ogni segmento il cui testo differisce dalla traduzione memorizzata nella cache. `--dry-run` elenca i contrassegni senza salvarli. `--model=NAME` imposta il modello di cui confronta le voci della cache (impostazione predefinita: `$POLYGLOT_MODEL` o `translategemma:27b`, come negli script). `--include-uncached` contrassegna anche i segmenti per i quali la cache non dispone di una traduzione. Esegui il commit di `.polyglot-pins.json` e `.polyglot-terms.json` insieme al file README.
+Associa ogni segmento dell'inglese con il suo testo nel file corretto e contrassegna ogni segmento il cui testo differisce dalla traduzione memorizzata nella cache. `--dry-run` elenca i contrassegni senza scriverli. `--model=NAME` imposta il modello le cui voci della cache vengono confrontate (impostazione predefinita: `$POLYGLOT_MODEL` o `translategemma:27b`, come gli script). `--include-uncached` contrassegna anche i segmenti per i quali la cache non ha una traduzione. Eseguire il commit di `.polyglot-pins.json` e `.polyglot-terms.json` con il file README.
 
 ### Ollama Cloud (opzionale)
-Imposta `OLLAMA_HOST` per inviare le richieste a un altro server Ollama invece di `localhost:11434`. Per [Ollama Cloud](https://ollama.com), imposta anche `OLLAMA_API_KEY`: la chiave viene inviata come token Bearer e solo a un host non di loopback.
+Impostare `OLLAMA_HOST` per inviare le richieste a un altro server Ollama invece di `localhost:11434`. Per [Ollama Cloud](https://ollama.com), impostare anche `OLLAMA_API_KEY`: la chiave viene inviata come token Bearer e solo a un host non di loopback.
 
 ```bash
 OLLAMA_HOST=https://ollama.com OLLAMA_API_KEY=... npx @mcptoolshop/polyglot-mcp
 ```
 
 ### Semàforo di concorrenza
-Tutte le chiamate a Ollama sono protette da un semàforo di conteggio (limite predefinito: 1) per evitare errori di esaurimento della memoria della GPU su sistemi con VRAM limitata. Sovrascrivi con `POLYGLOT_CONCURRENCY`:
+Tutte le chiamate a Ollama sono protette da un semàforo di conteggio (limite predefinito: 1) per evitare l'esaurimento della memoria della GPU sui sistemi con VRAM limitata. Sovrascrivere con `POLYGLOT_CONCURRENCY`:
 
 ```bash
 POLYGLOT_CONCURRENCY=2 npx @mcptoolshop/polyglot-mcp
 ```
 
 ### Token di avanzamento MCP
-Tutti gli strumenti segnalano l'avanzamento tramite MCP `notifications/progress` quando il client fornisce un `progressToken`. Traduci i report per ogni blocco, translate_markdown per ogni gruppo di segmenti, translate_all per ogni lingua e check_status per ogni passaggio.
+Tutti gli strumenti segnalano l'avanzamento tramite MCP `notifications/progress` quando il client fornisce un `progressToken`. Translate segnala per blocco, translate_markdown per batch di segmenti, translate_all per lingua e check_status per passaggio.
 
 ### Glossario del software
 Un glossario integrato di 12 termini tecnici (API, CLI, SDK, ecc.) garantisce una traduzione coerente della terminologia del software. È possibile passare voci di glossario personalizzate per ogni richiesta e queste vengono unite con quelle predefinite.
 
 ### Traduzione in batch
-`translateBatch` raggruppa più segmenti in un'unica richiesta, quando possibile, riducendo il numero di richieste e risposte. In caso di problemi con il separatore di batch, torna alla traduzione individuale.
+`translateBatch` raggruppa più segmenti in una singola richiesta, ove possibile, riducendo il numero di scambi. In caso di problemi con il separatore del batch, si torna alla traduzione individuale.
 
 ### Modello predefinito configurabile
-Il modello predefinito è `translategemma:27b`. Imposta la variabile d'ambiente `POLYGLOT_MODEL` per utilizzare un altro modello, ad esempio su una GPU con meno VRAM:
+Il modello predefinito è `translategemma:27b`. Impostare la variabile d'ambiente `POLYGLOT_MODEL` per utilizzare un altro modello, ad esempio su una GPU con meno VRAM:
 
 ```bash
 POLYGLOT_MODEL=translategemma:12b npx @mcptoolshop/polyglot-mcp
 ```
 
 ### Errori strutturati
-Tutti gli errori utilizzano `PolyglotError` con un codice leggibile dalla macchina (`MODEL_NOT_FOUND`, `OLLAMA_UNAVAILABLE`, `TRANSLATION_FAILED`, ecc.), un messaggio leggibile dall'utente, un suggerimento facoltativo e un flag `retryable`.
+Tutti gli errori utilizzano `PolyglotError` con un codice leggibile dalla macchina (`MODEL_NOT_FOUND`, `OLLAMA_UNAVAILABLE`, `TRANSLATION_FAILED`, ecc.), un messaggio leggibile dall'uomo, un suggerimento facoltativo e un flag `retryable`.
 
 ### Validazione dell'output
-Ogni traduzione viene automaticamente convalidata: l'output vuoto genera un errore (riproducibile), l'eco del testo di origine viene segnalata, la troncatura eccessiva e le allucinazioni vengono avvisate, la codifica errata e i meta-commenti del modello vengono rilevati. Gli avvisi compaiono nella risposta dello strumento MCP.
+Ogni traduzione viene automaticamente convalidata: l'output vuoto genera un errore (riprovabile), l'eco del testo di origine viene segnalata, la troncamento e l'allucinazione eccessive vengono avvertite, la codifica errata e i commenti meta del modello vengono rilevati. Gli avvisi compaiono nella risposta dello strumento MCP.
 
 ### Streaming
-`OllamaClient.generateStream()` restituisce i token tramite NDJSON man mano che Ollama li produce. La funzione `translate()` accetta una funzione di callback `onToken` per la visualizzazione dell'avanzamento in tempo reale. Sia il percorso di streaming che quello non di streaming condividono la logica di ripetizione.
+`OllamaClient.generateStream()` produce token tramite NDJSON, come fa Ollama. La funzione `translate()` accetta una funzione di callback `onToken` per visualizzare l'avanzamento in tempo reale. Sia il flusso continuo che quello non continuo condividono la stessa logica di ripetizione.
 
 ## Lingue supportate
 
-Afrikaans, Albanese, Arabo, Bengali, Bulgaro, Catalano, Cinese (semplificato), Cinese (tradizionale), Croato, Ceco, Danese, Olandese, Inglese, Estone, Finlandese, Francese, Galiziano, Tedesco, Greco, Gujarati, Ebraico, Hindi, Ungherese, Indonesiano, Irlandese, Italiano, Giapponese, Kannada, Coreano, Lettone, Lituano, Macedone, Malese, Malayalam, Maltese, Marathi, Norvegese, Persiano, Polacco, Portoghese, Rumeno, Russo, Gaelico scozzese, Serbo, Slovacco, Sloveno, Spagnolo, Swahili, Svedese, Tamil, Telugu, Tailandese, Turco, Ucraino, Urdu, Vietnamita, Gallese.
+Afrikaans, albanese, arabo, bengalese, bulgaro, catalano, cinese (semplificato), cinese (tradizionale), croato, ceco, danese, olandese, inglese, estone, finlandese, francese, galiziano, tedesco, greco, gujarati, ebraico, hindi, ungherese, indonesiano, irlandese, italiano, giapponese, kannada, coreano, lettone, lituano, macedone, malese, malayalam, maltese, marathi, norvegese, persiano, polacco, portoghese, rumeno, russo, gaelico scozzese, serbo, slovacco, sloveno, spagnolo, swahili, svedese, tamil, telugu, tailandese, turco, ucraino, urdu, vietnamita, gallese.
 
 ## Prestazioni
 
-| Metrica | 27B (impostazione predefinita), RTX 5090 32 GB | 12B (Q4), RTX 5080 16 GB |
+| Metrica | 27B (predefinito), RTX 5090 32 GB | 12B (Q4), RTX 5080 16 GB |
 |--------|-------------------------------|--------------------------|
 | Prima traduzione (caricamento del modello a freddo) | ~30 s | ~15 s |
-| Traduzioni successive | ~1–2 s per ogni gruppo di segmenti del file README | ~600 ms |
-| Memoria del modello | 17 GB, completamente sulla GPU (come riportato da `ollama ps`) | ~8,1 GB |
+| Traduzioni successive | ~1–2 s per batch di segmenti del file README | ~600 ms |
+| Memoria del modello | 17 GB, interamente sulla GPU (come riportato da `ollama ps`) | ~8,1 GB |
 
 ## Architettura
 
@@ -316,27 +335,27 @@ MCP Client (Claude Code, etc.)
 
 | Aspetto | Dettaglio |
 |--------|--------|
-| **Data touched** | Testo inviato all'API di Ollama: locale (`localhost:11434`) per impostazione predefinita, oppure l'host in `OLLAMA_HOST` se ne hai impostato uno. `.polyglot-cache.json` cache dei segmenti accanto a un file tradotto (solo per libreria e CLI). `.polyglot-terms.json` e `.polyglot-pins.json` accanto a un file README tradotto vengono letti se presenti. |
-| **Files written** | `translate_readme` scrive `README.<lang>.md` accanto al file README che gli passi e aggiorna la barra di navigazione della lingua di quel file README. `scripts/pin-translation.mjs` scrive `.polyglot-pins.json` accanto al file README. |
+| **Data touched** | Testo inviato all'API di Ollama: locale (`localhost:11434`) per impostazione predefinita, oppure l'host in `OLLAMA_HOST` se ne viene specificato uno. Cache dei segmenti `.polyglot-cache.json` accanto a un file tradotto (utilizzata solo dalla libreria e dalla CLI). `.polyglot-terms.json` e `.polyglot-pins.json` accanto a un file README tradotto vengono letti, se presenti. |
+| **Files written** | `translate_readme` scrive `README.<lang>.md` accanto al file README che gli viene passato e aggiorna la barra di navigazione della lingua di quel file README. `scripts/pin-translation.mjs` scrive `.polyglot-pins.json` accanto al file README. |
 | **Data NOT touched** | Nessun dato del browser, nessuna credenziale del sistema operativo, nulla al di fuori delle directory di cui sopra. |
-| **Network** | HTTP a `localhost:11434` solo per impostazione predefinita: zero traffico esterno. Remoto solo quando `OLLAMA_HOST` punta altrove. |
-| **Secrets** | `OLLAMA_API_KEY`, se impostato, viene letto dall'ambiente e inviato solo come token Bearer a un host non di loopback `OLLAMA_HOST`; non viene mai scritto su disco o registrato. |
+| **Network** | HTTP verso `localhost:11434` solo per impostazione predefinita: nessun trasferimento di dati verso l'esterno. Accesso remoto solo quando `OLLAMA_HOST` punta altrove. |
+| **Secrets** | `OLLAMA_API_KEY`, se impostato, viene letto dall'ambiente e inviato solo come token Bearer a un `OLLAMA_HOST` non in loopback; non viene mai scritto su disco né registrato. |
 | **Telemetry** | Nessun dato raccolto o inviato. |
 
-Consulta [SECURITY.md](SECURITY.md) per la politica di segnalazione delle vulnerabilità.
+Consultare [SECURITY.md](SECURITY.md) per la politica di segnalazione delle vulnerabilità.
 
 ## Sviluppo
 
 ```bash
 npm install             # install deps
 npm run typecheck       # type-check without emitting
-npm test                # run 512 tests (vitest)
+npm test                # run 570 tests (vitest)
 npm run build           # compile TypeScript to dist/
 npm run verify          # typecheck + test + build + pack (full gate)
 ```
 
 ## Licenza
 
-MIT: consulta [LICENSE](LICENSE).
+MIT: vedere [LICENSE](LICENSE).
 
-> Creato da [MCP Tool Shop](https://mcp-tool-shop.github.io/)
+> Realizzato da [MCP Tool Shop](https://mcp-tool-shop.github.io/)

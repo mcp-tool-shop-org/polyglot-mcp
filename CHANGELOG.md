@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-05
+
+Prose that comes back from the model still in English is now caught, retried and reported, and the dependency tree resolves patched versions (#56, #57, #58).
+
 ### Added
 
 - **Untranslated-prose check (`--on-untranslated=fail|report`)** (`isProseLine`, `survivingProse`, `UntranslatedError`, `enforceUntranslatedPolicy`, `parseUntranslatedPolicy`, `untranslatedBlockText` in `src/survival.ts`; `unusableReason` in `src/translateMarkdown.ts`; `scripts/translate-readme.mjs`, `scripts/translate-all.mjs`) — a prose sentence of 6 or more words (a link counted by its label; code spans, URLs and protected spans left out; not a run of proper names) that is still a whole sentence of the translation of its segment fails its language, with status `untranslated` in `translate-all` and exit code 3 in `translate-readme`. Default `fail` in the scripts, `report` in the library and the MCP tools. Matching ignores case and a closing stop and works by sentence, so a reflow or a half-translated line is caught. The result carries `untranslated`, `fallbacks` and `retries`; `translateBatch` returns per-item `details` (`single`, `batch` or `fallback`).
@@ -20,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Nothing English or broken is cached or served from the cache.** A model answer that is empty, English, or has lost its placeholders is not written to the cache, and an unusable cached entry (including one from an earlier run) is ignored, deleted and translated again. The check compares the English with its code spans restored on both sides, so a segment with a protected term or an "N of M" count is judged by the words on the page.
 - **`pin-translation.mjs` pins a prose paragraph translated by hand without `--include-uncached`** — an untranslated segment is no longer cached, so it has nothing to compare with.
 - **`translate-all` summary** counts a language marked `untranslated` outside `succeeded` and reports `untranslatedLanguages`.
+
+### Changed
+
+- **Dependencies (#57)** — the six `overrides` in `package.json` (`fast-uri`, `hono`, `@hono/node-server`, `body-parser`, `ip-address`, `qs`) are removed; the patched versions now resolve from the parents' own ranges. `vitest` and `@vitest/coverage-v8` move to 4.1.12. `npm audit` (production and dev) reports 0 vulnerabilities, and the `dep-audit` job passes on main.
+- **Tests (#58)** — the linear-time guards in `src/protectedTerms.test.ts` and `src/survival.test.ts` get a 1 s budget instead of 100 ms, so they no longer fail on a slow runner while still failing on quadratic work.
 
 ## [1.10.1] - 2026-10-21
 
