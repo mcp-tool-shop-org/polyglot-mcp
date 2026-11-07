@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'scripts/**'
+      - 'docs/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'

@@ -1,0 +1,146 @@
+# Colab Translation Lane (`scripts/colab/`)
+
+This kit runs `polyglot-mcp`'s README translation pipeline (`scripts/translate-all.mjs` + `scripts/translate-readme.mjs`) on a metered Google Colab runtime via the headless `colab` CLI, under the studio Colab CLI contract ([`docs/colab-cli-contract.md`](./colab-cli-contract.md)).
+
+## Architecture & Files
+
+| File | Role |
+|---|---|
+| [`scripts/colab/colab_window.sh`](../scripts/colab/colab_window.sh) | Outer window lifecycle library: `colab new`, `colab upload`, `colab exec`, `colab download`, GPU rate gate, shape gate, bounded post-failure salvage, and guaranteed `colab stop`. |
+| [`scripts/colab/launch_guards.py`](../scripts/colab/launch_guards.py) | Pre-open cap/RAM checks, SHA256 input verification, vitals/stall/dead-harness detection, private-RAM inspection, and log secret scrubbing. |
+| [`scripts/colab/remote_runner.py`](../scripts/colab/remote_runner.py) | VM-side supervisor: single-instance flock (`/tmp/sdlab_runner.lock`), `/proc/$PID/smaps_rollup` private-RAM guard (`Private_Clean + Private_Dirty`), and `SDLAB_REMOTE_RC=<rc>` exit marker. |
+| [`scripts/colab/translate_bundle_now.py`](../scripts/colab/translate_bundle_now.py) | VM-side emergency salvage bundler invoked when a run fails or times out without producing `/content/polyglot_translate_bundle.tar.gz`. |
+| [`scripts/colab/launch_translate.sh`](../scripts/colab/launch_translate.sh) | End-to-end launcher: validates flags and SHA256 pins, stages READMEs and repo archive, installs pinned Node/Ollama, verifies `translategemma:27b` digest, runs the GPU Fit Probe, executes `scripts/translate-all.mjs`, checks `NAV_BAR_INCOMPLETE`, and unpacks outputs + `SHA256SUMS` + `manifest.json` + `window.json`. |
+| [`scripts/colab/compare_translations.py`](../scripts/colab/compare_translations.py) | Structural comparison helper comparing two directories of translated READMEs across headings, paragraphs, fenced code blocks (byte-for-byte), links/URLs, and nav-bar entries. |
+
+## Usage
+
+### Paid GPU Window (e.g. `L4`)
+
+```bash
+bash scripts/colab/launch_translate.sh \
+  --readme /path/to/repo/README.md \
+  --langs ja,zh,es,fr,hi,it,pt \
+  --card L4 \
+  --shape high-mem \
+  --max-rate 2.50 \
+  --cap 1.00 \
+  --margin 0.10 \
+  --wall-s 900 \
+  --grace-s 60 \
+  --out-dir /persistent/path/polyglot-colab-out
+```
+
+### Dry Run (`--dry`)
+
+Prints the JSON execution plan, exact `colab` commands, and cap-bound CCU price without making any `colab` call:
+
+```bash
+bash scripts/colab/launch_translate.sh \
+  --readme /path/to/repo/README.md \
+  --card L4 \
+  --shape high-mem \
+  --max-rate 2.50 \
+  --cap 1.25 \
+  --wall-s 1800 \
+  --out-dir /persistent/path/polyglot-colab-out \
+  --dry
+```
+
+### Flags
+
+- `--readme <path>` (repeatable): Path to a source `README.md`. Sibling `.polyglot-terms.json` and `.polyglot-pins.json` files are staged automatically when present. Mutually exclusive with `--readme-tar`.
+- `--readme-tar <tarball>`: Tarball containing one or more `README.md` trees to translate in a single window. Mutually exclusive with `--readme`.
+- `--langs <csv>` (default `ja,zh,es,fr,hi,it,pt`): Comma-separated list of target languages passed to `scripts/translate-all.mjs --langs=<csv>`.
+- `--card <A100|L4|G4|CPU>` (default `CPU`): Colab runtime accelerator card.
+- `--shape <standard|high-mem>`: Required on GPU cards (`SHAPE_REQUIRED` if omitted). `L4` and `G4` have only a single high-memory shape on Colab (`SHAPE_STANDARD_UNAVAILABLE` if `--shape standard` is passed). CPU cards always open with `colab new --high-mem` and refuse `--shape` (`SHAPE_NOT_FOR_CPU`).
+- `--max-rate <CCU/h>`: Required on GPU cards (`MAX_RATE_REQUIRED` if omitted or non-positive). Maximum burn rate in CCU/hour allowed when the post-open rate gate polls `colab usage`.
+- `--cap <CCU>` (default `0.05`): Maximum compute-unit spend for the window.
+- `--margin <CCU>` (default `0.01`): Safety margin subtracted from `--cap` (`effective_cap = cap - margin`).
+- `--wall-s <seconds>` (default `900`): Hard wall-clock limit for the window.
+- `--grace-s <seconds>` (default `60`): Grace margin subtracted by the independent wall watcher (`WALL_LIMIT_S = wall_s - grace_s`).
+- `--out-dir <dir>` (required): Output directory on a persistent filesystem (refuses `/tmp`, `/var/tmp`, `/dev/shm`, `tmpfs`, `ramfs` in live runs with `OUT_DIR_VOLATILE`, and refuses non-empty directories with `OUT_DIR_NOT_EMPTY`).
+- `--session <id>` (default `polyglot-translate-<UTC>`): Explicit Colab session name.
+- `--dry`: Validate flags and print the JSON plan + pricing without calling `colab`.
+
+## Cards, Pinned Versions, and the Fit Probe
+
+### Pinned Runtime Stack
+
+Every binary, model, and script is pinned by SHA256 at the top of [`scripts/colab/launch_translate.sh`](../scripts/colab/launch_translate.sh):
+
+- **Model**: `translategemma:27b`
+  - Manifest SHA256 (`PINNED_MODEL_DIGEST`): `21b597a243ec4fd2f05bc0ce8ef9ef174a89b09255c330d670852dfaaaa74f72`
+  - GGUF layer size: `17,358,640,928` bytes (~16.17 GiB, `Q4_K_M`, `gemma3` 27.4B)
+  - Translator context (`PINNED_TRANSLATOR_CONTEXT`): `4096` tokens (matches `src/ollama.ts` default context; configurable to `16384` via `OLLAMA_CONTEXT_LENGTH=16384`)
+- **Ollama**: `v0.40.15` (`ollama-linux-amd64.tar.zst` SHA256 `628c018404a4206493efd38e46251c154ede5141b8b8dc85c659b3b027c47379`)
+- **Node.js**: `v22.22.3` (`node-v22.22.3-linux-x64.tar.xz` SHA256 `2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f`)
+- **Scripts & manifests**: `launch_guards.py`, `remote_runner.py`, `colab_window.sh`, `translate_bundle_now.py`, `compare_translations.py`, `scripts/translate-all.mjs`, `scripts/translate-readme.mjs`, `package.json`, `package-lock.json`, and `launch_translate.sh` itself.
+
+### Fit Probe (`MODEL_NOT_FULLY_ON_GPU`)
+
+After pulling `translategemma:27b` and verifying its digest (`MODEL_DIGEST_MISMATCH` on mismatch), the VM stages and runs the **Fit Probe** before translating any README:
+
+1. Warms `translategemma:27b` via `/api/generate` at the translator context (`4096` tokens).
+2. Queries `nvidia-smi --query-gpu=name,memory.used,memory.total,memory.free --format=csv,noheader,nounits`.
+3. Queries `ollama ps` (`/api/ps` and CLI output) for `size`, `size_vram`, `context_length`, and `processor`.
+4. Computes KV cache footprint (`~1,536 MiB` at 4k context, `~6,144 MiB` at 16k context for Gemma 3 27B GQA) and writes `/content/polyglot_out/fit_probe.json` (unpacked to `<out-dir>/fit_probe.json` and embedded into `manifest.json` and `window.json`).
+
+If `ollama ps` reports anything other than `100% GPU` on a GPU card (for example `80%/20% CPU/GPU` spill), the probe fails closed with `REFUSED: MODEL_NOT_FULLY_ON_GPU` and exits before starting `translate-all.mjs`.
+
+On an NVIDIA L4 (`23,034 MiB` total VRAM):
+- `translategemma:27b` weights (`Q4_K_M`): ~16.17 GiB (`~16,555 MiB`)
+- KV cache (`4,096` context) + CUDA overhead: `~1,900 MiB`
+- Total VRAM used: `~18,450 MiB` (`~4,580 MiB` free headroom, `100% GPU`).
+
+## Guards & Refusal Codes
+
+| Refusal Code | Stage | Trigger |
+|---|---|---|
+| `MAX_RATE_REQUIRED` | Pre-open | GPU card requested without a positive `--max-rate <CCU/h>`. |
+| `SHAPE_REQUIRED` / `SHAPE_INVALID` / `SHAPE_STANDARD_UNAVAILABLE` / `SHAPE_NOT_FOR_CPU` | Pre-open | Invalid `--card` / `--shape` combination (`L4` and `G4` require `--shape high-mem`; `CPU` forbids `--shape`). |
+| `OUT_DIR_VOLATILE` / `OUT_DIR_NOT_EMPTY` | Pre-open | `--out-dir` is on volatile storage (`/tmp`, `tmpfs`, etc.) in a live run, or already contains files. |
+| `PIN_OVERRIDE_IN_LIVE_RUN` | Pre-open | Any `EXPECTED_*_SHA`, `POLYGLOT_TEST_*`, or `SDLAB_TEST_*` override variable is set in the environment when `SDLAB_TEST_FAKE_COLAB=1` + fake `colab` marker is not active. |
+| `INPUT_SHA_MISMATCH` | Pre-open | Any pinned script or manifest SHA256 does not match its pin in `launch_translate.sh`. |
+| `GPU_RATE_ABOVE_MAX` / `GPU_RATE_UNREADABLE` | Post-open | Measured `colab usage` burn rate exceeds `--max-rate` or fails to stabilize; stops the VM before uploading workload. |
+| `MODEL_DIGEST_MISMATCH` | VM setup | Pulled `translategemma:27b` digest does not match `PINNED_MODEL_DIGEST`. |
+| `MODEL_NOT_FULLY_ON_GPU` | VM fit probe | `ollama ps` shows `< 100% GPU` residency (`CPU/GPU` split). |
+| `NAV_BAR_INCOMPLETE` | Post-translate | Source `README.md` top language nav bar (`checkSourceNavBar`) is missing a link to one or more `README.<lang>.md` files written on disk (`polyglot-mcp#65`). |
+| `WALL_GUARD_TRIPPED` / `CAP_GUARD_TRIPPED` / `VITALS_STALL` / `HARNESS_DIED` / `PRIVATE_RAM_EXCEEDED` | Live exec | Runtime budget, stall, harness, or private-RAM guard tripped during execution. |
+
+### Optional Token Rule (Mode-600 File Upload)
+
+Ollama pulls `translategemma:27b` without authentication, so no token is required by default. If `POLYGLOT_OPTIONAL_TOKEN` is ever provided, `launch_translate.sh` stages it in a `0700` directory on `/dev/shm` (`XDG_RUNTIME_DIR`) with `umask 077` and `chmod 600`, uploads it via `colab upload` to `/content/polyglot_token`, and the VM script immediately reads and `shred -u`s `/content/polyglot_token` (`TOKEN_SHRED_FAILED` if still present). A token is **never** passed via `--env` or process `argv`.
+
+## Bounded Cleanup (`cleanup_bound_s = 980`)
+
+When a run exits non-zero while execution or download is in flight, `cleanup_on_exit` in `colab_window.sh` bounds every salvage and teardown step with `timeout -k`:
+
+1. **Salvage phase (`SALVAGE_DEADLINE_S = cleanup_stop_attempted_by_s = 840` s)**:
+   - `colab restart-kernel`: `timeout -k 10 180` → max **190 s**
+   - `colab exec -f translate_bundle_now.py --timeout 300`: `timeout -k 10 330` → max **340 s**
+   - `colab download`: `timeout -k 10 300` → max **310 s**
+   - Total salvage budget before `colab stop` is guaranteed to start: `190 + 340 + 310 = 840` s (`cleanup_stop_attempted_by_s`). Any step exceeding `SALVAGE_DEADLINE_S` (or receiving a second `TERM`/`INT` signal) is skipped immediately.
+2. **Stop phase (max `140` s)**:
+   - `colab stop -s <session>`: `timeout -k 10 60` (70 s max per attempt) × 2 attempts = **140 s**.
+3. **Total cleanup bound (`cleanup_bound_s`)**:
+   - `840 + 140 = 980` s (`16.33` minutes). Both `cleanup_stop_attempted_by_s` (`840`) and `cleanup_bound_s` (`980`) are recorded in `<out-dir>/window.json`.
+
+## Comparing Output Sets (`compare_translations.py`)
+
+To compare two directories of translated READMEs (e.g., rig vs. Colab L4, or two runs against a fixture) structurally:
+
+```bash
+python3 scripts/colab/compare_translations.py \
+  --dir-a /path/to/baseline \
+  --dir-b /path/to/colab-out \
+  --langs ja,zh,es,fr,hi,it,pt \
+  --out /tmp/compare.json
+```
+
+For each target language (`README.<lang>.md`), `compare_translations.py` verifies:
+- **Heading count** (`heading_count`): ATX headings outside fenced code blocks must match.
+- **Paragraph count** (`paragraph_count`): Prose blocks outside headings and fenced code blocks must match within `--paragraph-tolerance` (default `0`).
+- **Fenced code blocks** (`code_block_count` and `code_blocks_identical`): Count and byte-for-byte contents of every fenced code block must match identically.
+- **Link & URL set** (`links`): Set of Markdown link targets and bare URLs outside code must match identically.
+- **Nav-bar entries** (`nav_entries`): Top language navigation bar entries (`href -> label`) must match identically.
