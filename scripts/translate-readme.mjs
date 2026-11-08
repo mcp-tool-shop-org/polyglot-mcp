@@ -21,8 +21,9 @@
  * .polyglot-pins.json, both beside the README.
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { translateMarkdown } from "../dist/translateMarkdown.js";
 import {
   LostSpanError,
@@ -41,8 +42,15 @@ const EXIT_LOST_SPAN = 2;
 const EXIT_UNTRANSLATED = 3;
 
 // --- Parse args ---
-const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-const flagList = process.argv.slice(2).filter((a) => a.startsWith("--"));
+const rawArgv = process.argv.slice(2);
+if (rawArgv.includes("--help") || rawArgv.includes("-h")) {
+  console.log(
+    "Usage: node scripts/translate-readme.mjs <readme> <lang-code> [--fast] [--no-cache] [--cache-clear] [--on-lost-span=fail|report] [--on-untranslated=fail|report] [--help]"
+  );
+  process.exit(0);
+}
+const args = rawArgv.filter((a) => !a.startsWith("--"));
+const flagList = rawArgv.filter((a) => a.startsWith("--"));
 const flags = new Set(flagList);
 const [readmePath, targetCode] = args;
 
@@ -135,7 +143,10 @@ console.log(`\nDone! ${result.segments} segments in ${elapsed}s`);
 // Write output
 const ext = targetCode.toLowerCase();
 const outPath = readmePath.replace(/README\.md$/, `README.${ext}.md`);
-writeFileSync(outPath, result.markdown, "utf-8");
+const writtenBytes = Buffer.from(result.markdown, "utf-8");
+writeFileSync(outPath, writtenBytes);
+const writtenSha256 = createHash("sha256").update(writtenBytes).digest("hex");
+console.log(`POLYGLOT_WRITTEN ${basename(outPath)} ${writtenSha256}`);
 console.log(`Written to: ${outPath}`);
 
 // The survival check's list: language, segment, missing span. One machine-

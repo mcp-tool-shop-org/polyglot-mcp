@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Verified-file README nav-bar builder, written-file SHA-256 receipt, and structural verifier (#65)** (`parseMarkdownStructure`, `parseWriteReceipt`, `verifyTranslatedMarkdown`, `verifyTranslatedFile`, `resolveNavBarLangCodes`, `extractTopNavBarBlock`, `checkSourceNavBar` in `src/translateAll.ts`; `scripts/translate-readme.mjs`, `scripts/translate-all.mjs`) — `scripts/translate-readme.mjs` now prints `POLYGLOT_WRITTEN <relative-path> <sha256-of-bytes-written>` immediately after writing `README.<lang>.md`, and `scripts/translate-all.mjs` counts a file as written in this run only when its current on-disk SHA-256 equals the receipt's SHA-256 and it passes structural verification against the source `README.md` (non-empty, same ATX heading count outside fenced code blocks, same fenced code block count, and every fenced code block byte-identical). The nav bar (and the `checkSourceNavBar` / `NAV_BAR_INCOMPLETE` post-injection backstop) is built across all target languages (`ALL_LANGUAGES`) from verified receipts from this run plus files that were already linked in the source `README.md` nav bar, still exist on disk, and pass the structure check against the source `README.md`, so an already-linked language is never dropped just because it wasn't re-run. Added `--timeout=<seconds>`, `POLYGLOT_TIMEOUT_MS`, and `--help`.
+
+### Fixed
+
+- **Languages whose child process errors or times out after writing a valid file are no longer dropped from the README nav bar (#65).** Such languages are included in the nav bar and reported with status `written-after-error`; files on disk that lack a write receipt (`no_write_receipt`), mismatch their receipt SHA-256 (`receipt_sha_mismatch`), or fail structural verification (`heading_count_mismatch`, `code_block_count_mismatch`, `unclosed_code_block`, `code_block_bytes_mismatch`, `empty_file`) are reported with status `written-unverified` and their `failedChecks` / `failed_checks` list, and unlinked or structurally invalid files are excluded from the nav bar.
+- **Child timeout error message in `scripts/translate-all.mjs` (#65)** — reports the configured timeout (`timeout (900s)` by default, or the `--timeout=` / `POLYGLOT_TIMEOUT_MS` value) instead of a hardcoded `timeout (300s)` string.
+
 ## [1.11.0] - 2026-11-05
 
 Prose that comes back from the model still in English is now caught, retried and reported, and the dependency tree resolves patched versions (#56, #57, #58).
