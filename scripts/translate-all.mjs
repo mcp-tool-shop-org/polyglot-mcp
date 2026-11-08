@@ -10,8 +10,7 @@
  * --no-cache        Skip the segment-level cache
  * --cache-clear     Clear the cached translations of each language before translating it
  * --concurrency=N   Run N languages in parallel (default 2, max 3)
- * --langs=ja,zh,... Translate only the specified comma-separated target languages
- * --timeout=S       Per-language child timeout in seconds (default 900)
+ * --timeout=S       Per-language child timeout in seconds (default 900, or POLYGLOT_TIMEOUT_MS in ms)
  * --no-nav-bar      Skip language nav bar injection
  * --on-lost-span=fail|report
  *                   When a protected span (inline code, a protected term, an
@@ -25,10 +24,11 @@
  *                   the files, marks the language "untranslated", lists the
  *                   lines and exits 1; report writes the files and the list and
  *                   exits 0
+ * --help            Print usage and exit 0
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, renameSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -40,18 +40,43 @@ import {
   parseLostSpanPolicy,
   parseUntranslatedPolicy,
 } from "../dist/survival.js";
-import { checkSourceNavBar, verifyTranslatedFile } from "../dist/translateAll.js";
+import {
+  checkSourceNavBar,
+  parseWriteReceipt,
+  resolveNavBarLangCodes,
+  verifyTranslatedFile,
+} from "../dist/translateAll.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const translateScript = resolve(__dirname, "translate-readme.mjs");
 
-const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-const flags = process.argv.slice(2).filter((a) => a.startsWith("--"));
+const USAGE =
+  "Usage: node scripts/translate-all.mjs <readme-path> [--fast] [--no-cache] [--cache-clear] [--concurrency=N] [--timeout=S] [--no-nav-bar] [--on-lost-span=fail|report] [--on-untranslated=fail|report] [--help]";
+
+const rawArgv = process.argv.slice(2);
+if (rawArgv.includes("--help") || rawArgv.includes("-h")) {
+  console.log(USAGE);
+  console.log("");
+  console.log("Options:");
+  console.log("  --fast                      Use translategemma:2b for speed (lower quality)");
+  console.log("  --no-cache                  Skip the segment-level cache");
+  console.log("  --cache-clear               Clear cached translations before translating");
+  console.log("  --concurrency=N             Run N languages in parallel (default 2, max 3)");
+  console.log("  --timeout=S                 Per-language child timeout in seconds (default 900; or POLYGLOT_TIMEOUT_MS in ms)");
+  console.log("  --no-nav-bar                Skip language nav bar injection");
+  console.log("  --on-lost-span=fail|report  Policy when a protected span is missing (default: fail)");
+  console.log("  --on-untranslated=fail|report  Policy when prose comes back in English (default: fail)");
+  console.log("  --help, -h                  Print this help message and exit 0");
+  process.exit(0);
+}
+
+const args = rawArgv.filter((a) => !a.startsWith("--"));
+const flags = rawArgv.filter((a) => a.startsWith("--"));
 const [readmePath] = args;
 
 if (!readmePath) {
-  console.error("Usage: node scripts/translate-all.mjs <readme-path> [--fast] [--no-cache] [--cache-clear] [--concurrency=N] [--langs=ja,zh,...] [--timeout=S] [--no-nav-bar] [--on-lost-span=fail|report] [--on-untranslated=fail|report]");
+  console.error(USAGE);
   process.exit(1);
 }
 
@@ -87,23 +112,7 @@ const ALL_LANGUAGES = [
   { code: "pt", name: "Portuguese", label: "Português (BR)", file: "pt-BR" },
 ];
 
-// Optional --langs=ja,zh,... filter (defaults to all 7 targets in ALL_LANGUAGES)
-const langsFlag = flags.find((f) => f.startsWith("--langs="));
-let LANGUAGES = ALL_LANGUAGES;
-if (langsFlag) {
-  const requested = langsFlag
-    .slice("--langs=".length)
-    .split(",")
-    .map((c) => c.trim().toLowerCase())
-    .filter(Boolean);
-  const requestedSet = new Set(requested);
-  const unknown = requested.filter((c) => !ALL_LANGUAGES.some((l) => l.code === c || (l.file && l.file.toLowerCase() === c)));
-  if (unknown.length > 0 || requested.length === 0) {
-    console.error(`Unsupported or empty --langs value: ${langsFlag} (supported: ${ALL_LANGUAGES.map((l) => l.code).join(",")})`);
-    process.exit(1);
-  }
-  LANGUAGES = ALL_LANGUAGES.filter((l) => requestedSet.has(l.code) || (l.file && requestedSet.has(l.file.toLowerCase())));
-}
+const LANGUAGES = ALL_LANGUAGES;
 
 // Parse --concurrency=N flag (default 2, max 3)
 const concurrencyFlag = flags.find((f) => f.startsWith("--concurrency="));
@@ -124,22 +133,9 @@ const timeoutLabel = childTimeoutMs % 1000 === 0 ? `${childTimeoutMs / 1000}s` :
 const readmeDir = dirname(absReadmePath);
 const sourceMarkdown = readFileSync(absReadmePath, "utf-8");
 
-// Record run start mtime floor above any pre-existing README.<lang>.md files so
-// stale files from earlier runs are never counted as written during this run.
-let maxPreExistingMtimeMs = 0;
-for (const lang of ALL_LANGUAGES) {
-  for (const candidate of [`README.${lang.file ?? lang.code}.md`, `README.${lang.code}.md`]) {
-    const p = resolve(readmeDir, candidate);
-    if (existsSync(p)) {
-      const mtimeMs = statSync(p).mtimeMs;
-      if (mtimeMs > maxPreExistingMtimeMs) maxPreExistingMtimeMs = mtimeMs;
-    }
-  }
-}
-const runStartMs = Math.max(Date.now(), maxPreExistingMtimeMs + 1);
-await new Promise((r) => setTimeout(r, 10));
-
 const results = [];
+/** Per-language POLYGLOT_WRITTEN receipt emitted by translate-readme.mjs. */
+const receiptsByLang = new Map();
 const totalStart = Date.now();
 let failed = 0;
 let completed = 0;
@@ -148,7 +144,6 @@ const passFlags = [
   ...flags.filter(
     (f) =>
       !f.startsWith("--concurrency") &&
-      !f.startsWith("--langs=") &&
       !f.startsWith("--timeout=") &&
       f !== "--no-nav-bar" &&
       !f.startsWith("--on-lost-span") &&
@@ -205,8 +200,8 @@ async function translateLang(lang) {
     let killed = false;
     const timer = setTimeout(() => { killed = true; child.kill(); }, childTimeoutMs);
 
-    // Read the child's stdout: it carries the lost-span list, and an unread
-    // pipe can fill and stall the child.
+    // Read the child's stdout: it carries the write receipt and lost-span list,
+    // and an unread pipe can fill and stall the child.
     let stdout = "";
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
 
@@ -224,12 +219,17 @@ async function translateLang(lang) {
       const elapsed = ((Date.now() - langStart) / 1000).toFixed(1);
       delete segProgress[lang.code];
 
-      // Ensure README.pt.md written during this run is renamed to README.pt-BR.md
-      // even if the child later timed out or exited non-zero.
-      if (lang.code === "pt") {
+      const receipt = parseWriteReceipt(stdout);
+      if (receipt) {
+        receiptsByLang.set(lang.code, receipt);
+      }
+
+      // Ensure README.pt.md written during this run (with a write receipt) is renamed
+      // to README.pt-BR.md even if the child later timed out or exited non-zero.
+      if (lang.code === "pt" && receipt) {
         const ptPath = resolve(readmeDir, "README.pt.md");
         const ptBrPath = resolve(readmeDir, "README.pt-BR.md");
-        if (existsSync(ptPath) && statSync(ptPath).mtimeMs >= runStartMs) {
+        if (existsSync(ptPath)) {
           renameSync(ptPath, ptBrPath);
         }
       }
@@ -253,7 +253,7 @@ async function translateLang(lang) {
       if ((code === 0 || code === EXIT_LOST_SPAN || code === EXIT_UNTRANSLATED) && !killed) {
         // Exit 2: the file was written but lost protected spans (--on-lost-span=fail).
         // Exit 3: the file was written but prose came back in English (--on-untranslated=fail).
-        const result = finishLang(lang, langStart);
+        const result = finishLang(lang, langStart, receipt);
         if (code === EXIT_UNTRANSLATED) result.status = "untranslated";
         if (code === EXIT_LOST_SPAN) result.status = "lost-span";
         if (lost.length > 0) result.lostSpans = lost.length;
@@ -292,10 +292,10 @@ async function translateLang(lang) {
 }
 
 /** Common post-translation handling (rename, result). */
-function finishLang(lang, langStart) {
+function finishLang(lang, langStart, receipt) {
   const elapsed = ((Date.now() - langStart) / 1000).toFixed(1);
   let outputFile = `README.${lang.file ?? lang.code}.md`;
-  if (lang.code === "pt") {
+  if (lang.code === "pt" && receipt) {
     const ptPath = resolve(readmeDir, "README.pt.md");
     const ptBrPath = resolve(readmeDir, "README.pt-BR.md");
     if (existsSync(ptPath)) {
@@ -316,12 +316,15 @@ for (let i = 0; i < LANGUAGES.length; i += concurrency) {
 }
 
 // Verify every target language's README.<lang>.md on disk (polyglot-mcp#65).
-// Build the nav bar from verified written files, not from clean child exits.
-const verifiedLangCodes = new Set();
+// A file counts as written in this run only when its on-disk SHA-256 matches
+// the child's POLYGLOT_WRITTEN receipt.
+const verifiedThisRunCodes = new Set();
+const rejectedReceiptCodes = new Set();
 for (const r of results) {
-  const lang = LANGUAGES.find((l) => l.code === r.lang);
+  const lang = ALL_LANGUAGES.find((l) => l.code === r.lang);
   const expectedFile = `README.${lang?.file ?? r.lang}.md`;
   const filePath = resolve(readmeDir, expectedFile);
+  const receipt = receiptsByLang.get(r.lang) ?? null;
   if (!existsSync(filePath)) {
     if (r.status !== "error") {
       r.status = "error";
@@ -329,17 +332,21 @@ for (const r of results) {
     }
     continue;
   }
-  const verification = verifyTranslatedFile(filePath, sourceMarkdown, runStartMs);
+  const verification = verifyTranslatedFile(filePath, sourceMarkdown, receipt);
   r.file = expectedFile;
   if (verification.verified) {
-    verifiedLangCodes.add(r.lang);
+    verifiedThisRunCodes.add(r.lang);
     if (r.status === "error") {
       r.status = "written-after-error";
     }
   } else {
     r.status = "written-unverified";
     r.failedChecks = verification.failedChecks;
+    r.failed_checks = verification.failedChecks;
     r.verificationError = verification.failedChecks.join("; ");
+    if (verification.failedChecks.includes("receipt_sha_mismatch")) {
+      rejectedReceiptCodes.add(r.lang);
+    }
   }
 }
 
@@ -347,12 +354,23 @@ failed = results.filter(
   (r) => r.status === "error" || r.status === "written-after-error" || r.status === "written-unverified",
 ).length;
 
-// --- Inject language nav bar into all READMEs from verified written files ---
+// Build the nav bar from all target languages (ALL_LANGUAGES): verified receipts
+// from this run, plus files that were already linked in the source bar and still
+// exist and pass the structure check against the source.
+const navBarLangCodes = resolveNavBarLangCodes(
+  readmeDir,
+  sourceMarkdown,
+  verifiedThisRunCodes,
+  ALL_LANGUAGES,
+  rejectedReceiptCodes,
+);
+
+// --- Inject language nav bar into all READMEs ---
 if (!noNavBar) {
-  const verifiedLangs = LANGUAGES.filter((lang) => verifiedLangCodes.has(lang.code));
-  if (verifiedLangs.length > 0) {
+  const navBarLangs = ALL_LANGUAGES.filter((lang) => navBarLangCodes.has(lang.code));
+  if (navBarLangs.length > 0) {
     // Build nav bar HTML
-    const links = verifiedLangs.map((lang) => {
+    const links = navBarLangs.map((lang) => {
       const file = `README.${lang.file ?? lang.code}.md`;
       return `<a href="${file}">${lang.label}</a>`;
     });
@@ -403,7 +421,7 @@ if (!noNavBar) {
       // Build the nav bar for this file
       let thisNav;
       if (isSource) {
-        // The source README must list English too. LANGUAGES holds only the
+        // The source README must list English too. ALL_LANGUAGES holds only the
         // translation targets, so without this the English README's nav bar
         // starts at the first target language and reads as though the page
         // were in that language. Translated files get English by swapping
@@ -414,7 +432,7 @@ if (!noNavBar) {
 </p>`;
       } else {
         const thisFile = basename(filePath);
-        const thisLinks = verifiedLangs.map((lang) => {
+        const thisLinks = navBarLangs.map((lang) => {
           const file = `README.${lang.file ?? lang.code}.md`;
           if (file === thisFile) return `<a href="README.md">English</a>`;
           return `<a href="${file}">${lang.label}</a>`;
@@ -431,21 +449,21 @@ if (!noNavBar) {
     // Inject into source README
     injectNavBar(absReadmePath, true);
 
-    // Inject into each verified translated README
-    for (const lang of verifiedLangs) {
+    // Inject into each translated README in the nav bar set
+    for (const lang of navBarLangs) {
       const translatedPath = resolve(readmeDir, `README.${lang.file ?? lang.code}.md`);
       injectNavBar(translatedPath, false);
     }
 
-    console.log(`\nInjected language nav bar into ${verifiedLangs.length + 1} READMEs`);
+    console.log(`\nInjected language nav bar into ${navBarLangs.length + 1} READMEs`);
   }
 }
 
 // Backstop: check that the source README's language nav bar lists every target
-// language whose file was written and verified (polyglot-mcp#65).
+// language in the resolved nav-bar set across ALL_LANGUAGES (polyglot-mcp#65).
 let navBarCheck = { ok: true, written: [], presentInNavBar: [], missingFromNavBar: [] };
 if (!noNavBar) {
-  navBarCheck = checkSourceNavBar(readFileSync(absReadmePath, "utf-8"), verifiedLangCodes, LANGUAGES);
+  navBarCheck = checkSourceNavBar(readFileSync(absReadmePath, "utf-8"), navBarLangCodes, ALL_LANGUAGES);
 }
 
 clearInterval(progressInterval);
@@ -479,6 +497,7 @@ console.log(JSON.stringify({
     lang: r.lang,
     file: r.file,
     failedChecks: r.failedChecks,
+    failed_checks: r.failedChecks,
   })),
   failed,
   totalTime: `${totalElapsed}s`,

@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +20,8 @@ import {
   extractTopNavBarBlock,
   checkSourceNavBar,
   parseMarkdownStructure,
+  parseWriteReceipt,
+  resolveNavBarLangCodes,
   verifyTranslatedMarkdown,
   verifyTranslatedFile,
   TRANSLATE_ALL_LANGUAGES,
@@ -483,29 +486,84 @@ describe("parseMarkdownStructure, verifyTranslatedMarkdown & verifyTranslatedFil
     expect(uRes.failedChecks).toContain("unclosed_code_block");
   });
 
-  it("verifies fresh files and rejects missing or stale files on disk", () => {
+  it("parses POLYGLOT_WRITTEN receipts and returns null when absent or malformed", () => {
+    expect(parseWriteReceipt("Done!\nWritten to: README.ja.md\n")).toBeNull();
+    expect(parseWriteReceipt("POLYGLOT_WRITTEN onlyonepart\n")).toBeNull();
+    expect(parseWriteReceipt("POLYGLOT_WRITTEN   \n")).toBeNull();
+    const sha = "a".repeat(64);
+    expect(
+      parseWriteReceipt(`Translating...\r\nPOLYGLOT_WRITTEN README.ja.md ${sha.toUpperCase()}\r\nWritten to: README.ja.md`),
+    ).toEqual({
+      path: "README.ja.md",
+      sha256: sha,
+    });
+  });
+
+  it("verifies files with matching receipts and rejects missing, unreceipted, or sha-mismatched files on disk", () => {
     const dir = mkdtempSync(join(tmpdir(), "polyglot-verify-"));
     try {
-      const missing = verifyTranslatedFile(join(dir, "README.ja.md"), sourceMd, Date.now());
+      const missing = verifyTranslatedFile(join(dir, "README.ja.md"), sourceMd, null);
       expect(missing.verified).toBe(false);
       expect(missing.exists).toBe(false);
       expect(missing.failedChecks).toEqual(["missing_file"]);
+      expect(missing.failed_checks).toEqual(["missing_file"]);
 
       const filePath = join(dir, "README.ja.md");
-      const runStartMs = Date.now() - 1_000;
-      writeFileSync(filePath, sourceMd.replace("# Main Title", "# タイトル"), "utf-8");
+      const content = sourceMd.replace("# Main Title", "# タイトル");
+      writeFileSync(filePath, content, "utf-8");
+      const validSha = createHash("sha256").update(Buffer.from(content, "utf-8")).digest("hex");
 
-      const fresh = verifyTranslatedFile(filePath, sourceMd, runStartMs);
+      const fresh = verifyTranslatedFile(filePath, sourceMd, { path: "README.ja.md", sha256: validSha });
       expect(fresh.verified).toBe(true);
       expect(fresh.writtenThisRun).toBe(true);
       expect(fresh.failedChecks).toEqual([]);
+      expect(fresh.failed_checks).toEqual([]);
 
-      const past = new Date(runStartMs - 10_000);
-      utimesSync(filePath, past, past);
-      const stale = verifyTranslatedFile(filePath, sourceMd, runStartMs);
-      expect(stale.verified).toBe(false);
-      expect(stale.writtenThisRun).toBe(false);
-      expect(stale.failedChecks.join("; ")).toMatch(/stale_file/);
+      const noReceipt = verifyTranslatedFile(filePath, sourceMd, null);
+      expect(noReceipt.verified).toBe(false);
+      expect(noReceipt.writtenThisRun).toBe(false);
+      expect(noReceipt.failedChecks).toEqual(["no_write_receipt"]);
+      expect(noReceipt.failed_checks).toEqual(["no_write_receipt"]);
+
+      const mismatch = verifyTranslatedFile(filePath, sourceMd, "0".repeat(64));
+      expect(mismatch.verified).toBe(false);
+      expect(mismatch.writtenThisRun).toBe(false);
+      expect(mismatch.failedChecks).toEqual(["receipt_sha_mismatch"]);
+      expect(mismatch.failed_checks).toEqual(["receipt_sha_mismatch"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveNavBarLangCodes keeps already-linked valid languages and excludes unlinked stale, broken, or sha-rejected files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "polyglot-resolve-nav-"));
+    try {
+      const sourceWithLinks = [
+        '<p align="center">',
+        '  <a href="README.md">English</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a>',
+        "</p>",
+        "",
+        sourceMd,
+      ].join("\n");
+
+      // ja: already linked + valid on disk, not re-run -> kept
+      writeFileSync(join(dir, "README.ja.md"), sourceMd.replace("# Main Title", "# 日本語"), "utf-8");
+      // zh: already linked + truncated on disk (missing heading) -> excluded
+      writeFileSync(join(dir, "README.zh.md"), sourceMd.replace("### Notes\n\n", ""), "utf-8");
+      // es: already linked, missing on disk -> excluded
+      // fr: already linked + valid on disk, but rejected for receipt_sha_mismatch -> excluded
+      writeFileSync(join(dir, "README.fr.md"), sourceMd.replace("# Main Title", "# Français"), "utf-8");
+      // hi: NOT linked in source nav bar, stale valid file on disk -> excluded
+      writeFileSync(join(dir, "README.hi.md"), sourceMd.replace("# Main Title", "# हिन्दी"), "utf-8");
+
+      const codes = resolveNavBarLangCodes(
+        dir,
+        sourceWithLinks,
+        ["it", "pt"],
+        TRANSLATE_ALL_LANGUAGES,
+        ["fr"],
+      );
+      expect(Array.from(codes)).toEqual(["ja", "it", "pt"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

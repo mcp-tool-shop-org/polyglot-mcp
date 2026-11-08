@@ -6,7 +6,9 @@
  * the `translate_all` MCP tool and the `scripts/translate-all.mjs` CLI.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { translateMarkdown, type TranslateMarkdownOptions } from "./translateMarkdown.js";
 import { Semaphore } from "./semaphore.js";
 import type { ProtectedTermSet } from "./protectedTerms.js";
@@ -137,6 +139,13 @@ export interface MarkdownStructure {
   bodyText: string;
 }
 
+export interface WriteReceipt {
+  /** Relative path printed on the `POLYGLOT_WRITTEN` line (e.g. `README.ja.md`). */
+  path: string;
+  /** Lowercase hex SHA-256 of the bytes written by the child. */
+  sha256: string;
+}
+
 export interface TranslationVerificationResult {
   verified: boolean;
   exists: boolean;
@@ -146,6 +155,9 @@ export interface TranslationVerificationResult {
   codeBlockCount: { source: number; candidate: number };
   codeBlocksByteIdentical: boolean;
   failedChecks: string[];
+  failed_checks: string[];
+  diskSha256?: string;
+  receiptSha256?: string | null;
 }
 
 const FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
@@ -245,6 +257,25 @@ export function parseMarkdownStructure(markdown: string): MarkdownStructure {
 }
 
 /**
+ * Parse the `POLYGLOT_WRITTEN <relative-path> <sha256-of-bytes-written>` line
+ * emitted by `scripts/translate-readme.mjs` immediately after writing its file.
+ */
+export function parseWriteReceipt(stdout: string): WriteReceipt | null {
+  const lines = stdout
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter((line) => line.startsWith("POLYGLOT_WRITTEN "));
+  if (lines.length === 0) return null;
+  const raw = lines[lines.length - 1].slice("POLYGLOT_WRITTEN ".length).trim();
+  const lastSpace = raw.lastIndexOf(" ");
+  if (lastSpace <= 0) return null;
+  const path = raw.slice(0, lastSpace).trim();
+  const sha256 = raw.slice(lastSpace + 1).trim().toLowerCase();
+  if (!path || !sha256) return null;
+  return { path, sha256 };
+}
+
+/**
  * Verify that translated markdown is non-empty and structurally whole against
  * the source markdown (same ATX heading count, same fenced code block count,
  * and every fenced code block byte-identical).
@@ -304,21 +335,24 @@ export function verifyTranslatedMarkdown(
     codeBlockCount: { source: srcStruct.codeBlockCount, candidate: candStruct.codeBlockCount },
     codeBlocksByteIdentical,
     failedChecks,
+    failed_checks: failedChecks,
   };
 }
 
 /**
  * Verify a written `README.<lang>.md` file on disk against the source `README.md`:
- * must exist, have `mtimeMs >= runStartMs` (written during this run, not stale),
- * be non-empty, and be structurally whole against the source.
+ * must exist, have a `POLYGLOT_WRITTEN` receipt whose SHA-256 equals the current
+ * on-disk SHA-256 (written during this run), be non-empty, and be structurally
+ * whole against the source.
  */
 export function verifyTranslatedFile(
   filePath: string,
   sourceMarkdown: string,
-  runStartMs: number
+  receipt?: WriteReceipt | string | null
 ): TranslationVerificationResult {
   if (!existsSync(filePath)) {
     const srcStruct = parseMarkdownStructure(sourceMarkdown);
+    const failedChecks = ["missing_file"];
     return {
       verified: false,
       exists: false,
@@ -327,30 +361,89 @@ export function verifyTranslatedFile(
       headingCount: { source: srcStruct.headingCount, candidate: 0 },
       codeBlockCount: { source: srcStruct.codeBlockCount, candidate: 0 },
       codeBlocksByteIdentical: false,
-      failedChecks: ["missing_file"],
+      failedChecks,
+      failed_checks: failedChecks,
     };
   }
 
-  const stat = statSync(filePath);
-  const writtenThisRun = stat.mtimeMs >= runStartMs;
-  const candidateMarkdown = readFileSync(filePath, "utf-8");
-  const mdRes = verifyTranslatedMarkdown(sourceMarkdown, candidateMarkdown);
-  const failedChecks: string[] = [];
+  const diskBytes = readFileSync(filePath);
+  const diskSha256 = createHash("sha256").update(diskBytes).digest("hex");
+  const rawReceiptSha = typeof receipt === "string" ? receipt : receipt?.sha256;
+  const receiptSha256 = rawReceiptSha?.trim().toLowerCase() || null;
 
-  if (!writtenThisRun) {
-    failedChecks.push(
-      `stale_file (mtime ${Math.round(stat.mtimeMs)} < runStart ${Math.round(runStartMs)})`
-    );
+  const failedChecks: string[] = [];
+  let writtenThisRun = false;
+  if (!receiptSha256) {
+    failedChecks.push("no_write_receipt");
+  } else if (diskSha256 !== receiptSha256) {
+    failedChecks.push("receipt_sha_mismatch");
+  } else {
+    writtenThisRun = true;
   }
+
+  const candidateMarkdown = diskBytes.toString("utf-8");
+  const mdRes = verifyTranslatedMarkdown(sourceMarkdown, candidateMarkdown);
   failedChecks.push(...mdRes.failedChecks);
 
   return {
     ...mdRes,
     exists: true,
     writtenThisRun,
+    diskSha256,
+    receiptSha256,
     verified: failedChecks.length === 0,
     failedChecks,
+    failed_checks: failedChecks,
   };
+}
+
+/**
+ * Resolve the full set of target language codes (`ALL_LANGUAGES`) that belong in
+ * the README language nav bar:
+ * 1. Target languages with a verified write receipt from this run (`verifiedThisRunCodes`).
+ * 2. Target languages that were already linked in the source README's top nav bar,
+ *    were not rejected for a receipt SHA mismatch in this run, and whose
+ *    `README.<file>.md` still exists on disk and passes the structure check
+ *    (`verifyTranslatedMarkdown`) against the source README.
+ */
+export function resolveNavBarLangCodes(
+  readmeDir: string,
+  sourceMarkdown: string,
+  verifiedThisRunCodes: Iterable<string>,
+  languages: TargetLanguage[] = TRANSLATE_ALL_LANGUAGES,
+  rejectedReceiptCodes: Iterable<string> = []
+): Set<string> {
+  const verifiedSet = new Set(Array.from(verifiedThisRunCodes, (c) => c.toLowerCase()));
+  const rejectedSet = new Set(Array.from(rejectedReceiptCodes, (c) => c.toLowerCase()));
+  const sourceNavBlock = extractTopNavBarBlock(sourceMarkdown) ?? "";
+  const navBarCodes = new Set<string>();
+
+  for (const lang of languages) {
+    const codeLower = lang.code.toLowerCase();
+    if (verifiedSet.has(codeLower)) {
+      navBarCodes.add(lang.code);
+      continue;
+    }
+    if (rejectedSet.has(codeLower)) {
+      continue;
+    }
+    const suffix = lang.file ?? lang.code;
+    const expectedHref = `href="README.${suffix}.md"`;
+    if (!sourceNavBlock.includes(expectedHref)) {
+      continue;
+    }
+    const filePath = resolve(readmeDir, `README.${suffix}.md`);
+    if (!existsSync(filePath)) {
+      continue;
+    }
+    const candidateMarkdown = readFileSync(filePath, "utf-8");
+    const mdCheck = verifyTranslatedMarkdown(sourceMarkdown, candidateMarkdown);
+    if (mdCheck.verified) {
+      navBarCodes.add(lang.code);
+    }
+  }
+
+  return navBarCodes;
 }
 
 /**

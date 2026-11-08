@@ -12,10 +12,10 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SEP = "---POLYGLOT_SEP---";
@@ -246,81 +246,77 @@ describe("translate-all.mjs — verified written files nav bar (polyglot-mcp#65)
     fakeBinDir = join(dir, "fake-bin");
     mkdirSync(fakeBinDir, { recursive: true });
 
-    const driverPath = join(fakeBinDir, "driver.mjs");
     const preloadPath = join(fakeBinDir, "fast-timer-preload.mjs");
-    const wrapperPath = join(fakeBinDir, "node");
 
     writeFileSync(
       preloadPath,
       [
-        "const origSetTimeout = globalThis.setTimeout;",
-        "globalThis.setTimeout = function (fn, delay, ...args) {",
-        "  const capped = typeof delay === 'number' && delay >= 300_000 ? 400 : delay;",
-        "  return origSetTimeout.call(this, fn, capped, ...args);",
-        "};",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    writeFileSync(
-      driverPath,
-      [
+        'import { createHash } from "node:crypto";',
         'import { writeFileSync } from "node:fs";',
-        'import { spawn } from "node:child_process";',
-        'const behaviors = JSON.parse(process.env.FAKE_LANG_BEHAVIORS || "{}");',
-        "const realNode = process.env.REAL_NODE_BIN;",
-        "const args = process.argv.slice(2);",
-        "const readmeArg = args[1];",
-        "const langCode = args[2];",
-        "const mode = behaviors[langCode];",
-        'const outPath = readmeArg ? readmeArg.replace(/README\\.md$/, "README." + langCode + ".md") : "";',
-        "const validMd = (l) => [",
-        '  "# [" + l + "] Title",',
-        '  "",',
-        '  "[" + l + "] The first paragraph explains how the router picks a device for every job.",',
-        '  "",',
-        '  "## [" + l + "] Installation",',
-        '  "",',
-        '  "```bash",',
-        '  "npm install -g @mcptoolshop/polyglot-mcp",',
-        '  "polyglot-mcp --help",',
-        '  "```",',
-        '  "",',
-        '  "[" + l + "] The third paragraph lists the limits the guard enforces before it starts.",',
-        '  "",',
-        '].join("\\n");',
-        'if (mode === "write-complete-then-error") {',
-        '  writeFileSync(outPath, validMd(langCode), "utf-8");',
-        "  process.exit(1);",
-        '} else if (mode === "write-complete-then-timeout") {',
-        '  writeFileSync(outPath, validMd(langCode), "utf-8");',
-        "  setTimeout(() => {}, 60_000);",
-        '} else if (mode === "write-missing-heading-then-error") {',
-        '  const truncated = validMd(langCode).replace("## [" + langCode + "] Installation\\n\\n", "");',
-        '  writeFileSync(outPath, truncated, "utf-8");',
-        "  process.exit(1);",
-        '} else if (mode === "write-missing-codeblock-then-error") {',
-        '  const truncated = validMd(langCode).replace(/```bash[\\s\\S]*?```\\n\\n/, "");',
-        '  writeFileSync(outPath, truncated, "utf-8");',
-        "  process.exit(1);",
-        '} else if (mode === "error-without-writing") {',
-        "  process.exit(1);",
-        '} else if (mode === "timeout-without-writing") {',
-        "  setTimeout(() => {}, 60_000);",
-        "} else {",
-        '  const child = spawn(realNode, args, { stdio: "inherit", env: { ...process.env, NODE_OPTIONS: "" } });',
-        '  child.on("exit", (c) => process.exit(c ?? 1));',
+        'import { basename } from "node:path";',
+        "",
+        "const entryScript = process.argv[1] || '';",
+        "if (entryScript.endsWith('translate-all.mjs') && process.env.FAKE_FAST_TIMERS === '1') {",
+        "  const origSetTimeout = globalThis.setTimeout;",
+        "  globalThis.setTimeout = function (fn, delay, ...args) {",
+        "    const capped = typeof delay === 'number' && delay >= 300_000 ? 400 : delay;",
+        "    return origSetTimeout.call(this, fn, capped, ...args);",
+        "  };",
+        "} else if (entryScript.endsWith('translate-readme.mjs')) {",
+        '  const behaviors = JSON.parse(process.env.FAKE_LANG_BEHAVIORS || "{}");',
+        "  const readmeArg = process.argv[2];",
+        "  const langCode = process.argv[3];",
+        "  const mode = behaviors[langCode];",
+        "  if (mode) {",
+        '    const outPath = readmeArg ? readmeArg.replace(/README\\.md$/, "README." + langCode + ".md") : "";',
+        "    const validMd = (l) => [",
+        '      "# [" + l + "] Title",',
+        '      "",',
+        '      "[" + l + "] The first paragraph explains how the router picks a device for every job.",',
+        '      "",',
+        '      "## [" + l + "] Installation",',
+        '      "",',
+        '      "```bash",',
+        '      "npm install -g @mcptoolshop/polyglot-mcp",',
+        '      "polyglot-mcp --help",',
+        '      "```",',
+        '      "",',
+        '      "[" + l + "] The third paragraph lists the limits the guard enforces before it starts.",',
+        '      "",',
+        '    ].join("\\n");',
+        "    const writeWithReceipt = (content, customSha) => {",
+        '      const bytes = Buffer.from(content, "utf-8");',
+        "      writeFileSync(outPath, bytes);",
+        '      const sha = customSha ?? createHash("sha256").update(bytes).digest("hex");',
+        '      console.log("POLYGLOT_WRITTEN " + basename(outPath) + " " + sha);',
+        "    };",
+        '    if (mode === "write-complete-then-error") {',
+        "      writeWithReceipt(validMd(langCode));",
+        "      process.exit(1);",
+        '    } else if (mode === "write-complete-then-timeout") {',
+        "      writeWithReceipt(validMd(langCode));",
+        "      await new Promise((r) => setTimeout(r, 60_000));",
+        '    } else if (mode === "write-missing-heading-then-error") {',
+        '      const truncated = validMd(langCode).replace("## [" + langCode + "] Installation\\n\\n", "");',
+        "      writeWithReceipt(truncated);",
+        "      process.exit(1);",
+        '    } else if (mode === "write-missing-codeblock-then-error") {',
+        '      const truncated = validMd(langCode).replace(/```bash[\\s\\S]*?```\\n\\n/, "");',
+        "      writeWithReceipt(truncated);",
+        "      process.exit(1);",
+        '    } else if (mode === "write-bad-receipt-sha") {',
+        '      writeWithReceipt(validMd(langCode), "0".repeat(64));',
+        "      process.exit(0);",
+        '    } else if (mode === "error-without-writing") {',
+        "      process.exit(1);",
+        '    } else if (mode === "timeout-without-writing") {',
+        "      await new Promise((r) => setTimeout(r, 60_000));",
+        "    }",
+        "  }",
         "}",
       ].join("\n"),
       "utf-8",
     );
-
-    writeFileSync(
-      wrapperPath,
-      ["#!/usr/bin/env bash", `exec "${process.execPath}" "${driverPath}" "$@"`].join("\n"),
-      "utf-8",
-    );
-    chmodSync(wrapperPath, 0o755);
 
     return { preloadPath, behaviorsJson: JSON.stringify(behaviors) };
   };
@@ -329,20 +325,26 @@ describe("translate-all.mjs — verified written files nav bar (polyglot-mcp#65)
 
   const runTranslateAll = (
     extraArgs: string[],
-    opts: { preloadPath: string; behaviorsJson: string; useFastTimerPreload?: boolean },
+    opts: {
+      preloadPath: string;
+      behaviorsJson: string;
+      useFastTimerPreload?: boolean;
+      extraEnv?: Record<string, string>;
+    },
   ): Promise<{ code: number | null; stdout: string; stderr: string }> => {
     return new Promise((done) => {
-      const nodeOptions = opts.useFastTimerPreload ? `--import ${opts.preloadPath}` : "";
+      const preloadUrl = pathToFileURL(opts.preloadPath).href;
+      const nodeOptions = `--import "${preloadUrl}"`;
       const child = spawn(process.execPath, [join(root, "scripts", "translate-all.mjs"), readme, ...extraArgs], {
         cwd: dir,
         env: {
           ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH}`,
-          REAL_NODE_BIN: process.execPath,
           FAKE_LANG_BEHAVIORS: opts.behaviorsJson,
+          FAKE_FAST_TIMERS: opts.useFastTimerPreload ? "1" : "0",
           NODE_OPTIONS: nodeOptions,
           OLLAMA_HOST: host,
           POLYGLOT_MODEL: "translategemma:27b",
+          ...(opts.extraEnv ?? {}),
         },
       });
       let stdout = "";
@@ -434,7 +436,8 @@ describe("translate-all.mjs — verified written files nav bar (polyglot-mcp#65)
       const summary = parseSummary(r.stdout);
       const ja = summary.results.find((x: { lang: string }) => x.lang === "ja");
       expect(ja.status).toBe("written-unverified");
-      expect(ja.failedChecks.join("; ")).toMatch(/stale_file/);
+      expect(ja.failedChecks).toEqual(["no_write_receipt"]);
+      expect(ja.failed_checks).toEqual(["no_write_receipt"]);
 
       const srcAfter = readFileSync(readme, "utf-8");
       expect(srcAfter).not.toContain("README.ja.md");
@@ -496,6 +499,142 @@ describe("translate-all.mjs — verified written files nav bar (polyglot-mcp#65)
       expect(jaCustom.status).toBe("error");
       expect(jaCustom.error).toBe("timeout (1s)");
       expect(rCustom.stderr).toContain("timeout (1s)");
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+
+  it("(f) a pre-existing file with a future mtime does not cause a false drop: the language with a valid receipt is included", async () => {
+    const opts = setupWithFakeChildren(STRUCTURED_README, {});
+    const preExistingEs = join(dir, "README.es.md");
+    writeFileSync(preExistingEs, VALID_TRANSLATED("Spanish"), "utf-8");
+    const future = new Date(Date.now() + 3_600_000);
+    utimesSync(preExistingEs, future, future);
+    try {
+      const r = await runTranslateAll(["--no-cache", "--concurrency=3"], opts);
+      expect(r.code).toBe(0);
+      const summary = parseSummary(r.stdout);
+      expect(summary.succeeded).toBe(7);
+      expect(summary.failed).toBe(0);
+      expect(summary.results.every((x: { status: string }) => x.status === "ok")).toBe(true);
+
+      const srcAfter = readFileSync(readme, "utf-8");
+      expect(srcAfter).toContain('<a href="README.ja.md">日本語</a>');
+      expect(srcAfter).toContain('<a href="README.es.md">Español</a>');
+      expect(srcAfter).toContain('<a href="README.pt-BR.md">Português (BR)</a>');
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+
+  it("(g) a stale file with no receipt is reported no_write_receipt and not counted as this run", async () => {
+    const opts = setupWithFakeChildren(STRUCTURED_README, {
+      ja: "error-without-writing",
+    });
+    const stalePath = join(dir, "README.ja.md");
+    writeFileSync(stalePath, VALID_TRANSLATED("Japanese"), "utf-8");
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(stalePath, future, future);
+    try {
+      const r = await runTranslateAll(["--no-cache", "--concurrency=3"], opts);
+      expect(r.code).toBe(1);
+      const summary = parseSummary(r.stdout);
+      const ja = summary.results.find((x: { lang: string }) => x.lang === "ja");
+      expect(ja.status).toBe("written-unverified");
+      expect(ja.failedChecks).toEqual(["no_write_receipt"]);
+      expect(ja.failed_checks).toEqual(["no_write_receipt"]);
+
+      const srcAfter = readFileSync(readme, "utf-8");
+      expect(srcAfter).not.toContain("README.ja.md");
+      expect(srcAfter).toContain('<a href="README.es.md">Español</a>');
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+
+  it("(h) a receipt whose sha doesn't match the file on disk is refused", async () => {
+    const opts = setupWithFakeChildren(STRUCTURED_README, {
+      ja: "write-bad-receipt-sha",
+    });
+    try {
+      const r = await runTranslateAll(["--no-cache", "--concurrency=3"], opts);
+      expect(r.code).toBe(1);
+      const summary = parseSummary(r.stdout);
+      const ja = summary.results.find((x: { lang: string }) => x.lang === "ja");
+      expect(ja.status).toBe("written-unverified");
+      expect(ja.failedChecks).toEqual(["receipt_sha_mismatch"]);
+      expect(ja.failed_checks).toEqual(["receipt_sha_mismatch"]);
+
+      const srcAfter = readFileSync(readme, "utf-8");
+      expect(srcAfter).not.toContain("README.ja.md");
+      expect(srcAfter).toContain('<a href="README.es.md">Español</a>');
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+
+  it("(i) an already-linked, still-valid language that wasn't re-run stays in the bar", async () => {
+    const readmeWithExistingJaLink = [
+      '<p align="center">',
+      '  <a href="README.md">English</a> | <a href="README.ja.md">日本語</a>',
+      "</p>",
+      "",
+      STRUCTURED_README,
+    ].join("\n");
+    const opts = setupWithFakeChildren(readmeWithExistingJaLink, {
+      ja: "error-without-writing",
+    });
+    writeFileSync(join(dir, "README.ja.md"), VALID_TRANSLATED("Japanese"), "utf-8");
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(join(dir, "README.ja.md"), past, past);
+    try {
+      const r = await runTranslateAll(["--no-cache", "--concurrency=3"], opts);
+      const summary = parseSummary(r.stdout);
+      expect(summary.navBarCheck.ok).toBe(true);
+      expect(summary.navBarCheck.presentInNavBar).toContain("ja");
+
+      const srcAfter = readFileSync(readme, "utf-8");
+      expect(srcAfter).toContain('<a href="README.ja.md">日本語</a>');
+      expect(srcAfter).toContain('<a href="README.es.md">Español</a>');
+      expect(srcAfter).toContain('<a href="README.pt-BR.md">Português (BR)</a>');
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+
+  it("(j) POLYGLOT_TIMEOUT_MS sets the timeout and the message", async () => {
+    const opts = setupWithFakeChildren(STRUCTURED_README, {
+      ja: "timeout-without-writing",
+    });
+    try {
+      const rHelp = await run("translate-all.mjs", ["--help"], dir);
+      expect(rHelp.code).toBe(0);
+      expect(rHelp.stdout).toContain("Usage: node scripts/translate-all.mjs <readme-path>");
+      expect(rHelp.stdout).toContain("--timeout=S");
+      expect(rHelp.stdout).toContain("POLYGLOT_TIMEOUT_MS");
+      expect(rHelp.stdout).not.toContain("--langs");
+
+      const rMs = await runTranslateAll(["--no-cache", "--concurrency=3"], {
+        ...opts,
+        extraEnv: { POLYGLOT_TIMEOUT_MS: "250" },
+      });
+      expect(rMs.code).toBe(1);
+      const summaryMs = parseSummary(rMs.stdout);
+      const jaMs = summaryMs.results.find((x: { lang: string }) => x.lang === "ja");
+      expect(jaMs.status).toBe("error");
+      expect(jaMs.error).toBe("timeout (250ms)");
+      expect(rMs.stderr).toContain("timeout (250ms)");
+
+      const rSec = await runTranslateAll(["--no-cache", "--concurrency=3"], {
+        ...opts,
+        extraEnv: { POLYGLOT_TIMEOUT_MS: "1000" },
+      });
+      expect(rSec.code).toBe(1);
+      const summarySec = parseSummary(rSec.stdout);
+      const jaSec = summarySec.results.find((x: { lang: string }) => x.lang === "ja");
+      expect(jaSec.status).toBe("error");
+      expect(jaSec.error).toBe("timeout (1s)");
+      expect(rSec.stderr).toContain("timeout (1s)");
     } finally {
       cleanup();
     }

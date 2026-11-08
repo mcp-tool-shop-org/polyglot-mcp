@@ -1,20 +1,14 @@
 # polyglot-mcp: how it works
 
-Mapped at 2026-11-08 from commit ef26f35 by Atlas 1.24.0.
+Mapped at 2026-11-08 from commit 9fd9fe1 by Atlas 1.24.0.
 
 ## What this is
 
 7 parts, mostly Markdown (83 files); code in TypeScript (50), JavaScript (5), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.
 
-## What changed since 2026-10-20 (e920cf4)
+## What changed since 2026-11-08 (ef26f35)
 
-- CI now also runs src/translateAll.untranslated.test.ts, src/translateMarkdown.untranslated.fixes.test.ts and src/translateMarkdown.untranslated.test.ts.
-- Publish to npm now also runs src/translateAll.untranslated.test.ts, src/translateMarkdown.untranslated.fixes.test.ts and src/translateMarkdown.untranslated.test.ts.
-- LICENSE is now read by src/protectedTerms.test.ts.
-- README.es.md is now read by src/translateMarkdown.untranslated.fixes.test.ts.
-- README.fr.md is now read by src/translateMarkdown.untranslated.fixes.test.ts.
-- And 5 more new writers and readers of places.
-- 14 files added and 35 changed content, across 4 parts.
+Nothing structural changed since 2026-11-08; 7 files changed content.
 
 ## What comes in
 
@@ -49,8 +43,8 @@ CI writes nothing this map can see.
 
 ## What tends to change together
 
-- **scripts/translate-all.mjs** and **scripts/translate-readme.mjs** changed together in 4 of 6 commits, inside the scripts part.
 - **scripts/translate-readme.mjs** and **src/translateMarkdown.ts** changed together in 5 of 8 commits, and the scripts part imports the src part.
+- **scripts/translate-all.mjs** and **scripts/translate-readme.mjs** changed together in 4 of 7 commits, inside the scripts part.
 
 Confidence is low: fewer than 25 source files reach 10 revisions in the window.
 
@@ -86,10 +80,10 @@ Read those in order to follow one pull request end to end.
 
 ## What this map cannot see
 
-- 3 writes and 14 reads use paths built at run time and are not named here.
-- 6 writes and 11 reads go to a path their caller passes, not to this repository.
+- 3 writes and 11 reads use paths built at run time and are not named here.
+- 6 writes and 13 reads go to a path their caller passes, not to this repository.
 - 1 read goes to the directory the command is run in (LICENSE), not to this repository.
-- 12 commands are built at run time and not followed, 10 of them in tests.
+- 13 commands are built at run time and not followed, 11 of them in tests.
 - Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.
