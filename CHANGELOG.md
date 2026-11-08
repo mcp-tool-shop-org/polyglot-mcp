@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Verified-file README nav-bar builder and structural verifier (#65)** (`parseMarkdownStructure`, `verifyTranslatedMarkdown`, `verifyTranslatedFile`, `extractTopNavBarBlock`, `checkSourceNavBar` in `src/translateAll.ts`; `scripts/translate-all.mjs`) — `scripts/translate-all.mjs` now builds the language navigation bar from target `README.<lang>.md` files on disk that pass verification (written during the current run via `mtimeMs >= runStartMs`, non-empty, same ATX heading count outside fenced code blocks, same fenced code block count, and every fenced code block byte-identical to the source `README.md`), rather than filtering by clean child exit codes. Added `checkSourceNavBar` (`NAV_BAR_INCOMPLETE`) as a post-injection backstop, plus `--langs=<csv>` and `--timeout=<seconds>` flags.
+
+### Fixed
+
+- **Languages whose child process errors or times out after writing a valid file are no longer dropped from the README nav bar (#65).** Such languages are included in the nav bar and reported with status `written-after-error`; files that exist on disk but fail verification (truncated headings/code blocks or stale files from before the run) are excluded from the nav bar and reported with status `written-unverified` and their `failedChecks` list.
+- **Child timeout error message in `scripts/translate-all.mjs` (#65)** — reports the configured timeout (`timeout (900s)` by default, or the `--timeout=` / `POLYGLOT_TIMEOUT_MS` value) instead of a hardcoded `timeout (300s)` string.
+
 ## [1.11.0] - 2026-11-05
 
 Prose that comes back from the model still in English is now caught, retried and reported, and the dependency tree resolves patched versions (#56, #57, #58).

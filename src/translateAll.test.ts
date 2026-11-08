@@ -3,6 +3,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Mock translateMarkdown — we don't want actual Ollama calls
 vi.mock("./translateMarkdown.js", () => ({
@@ -13,6 +16,11 @@ import {
   translateAll,
   buildNavBar,
   injectNavBar,
+  extractTopNavBarBlock,
+  checkSourceNavBar,
+  parseMarkdownStructure,
+  verifyTranslatedMarkdown,
+  verifyTranslatedFile,
   TRANSLATE_ALL_LANGUAGES,
   type TargetLanguage,
 } from "./translateAll.js";
@@ -125,30 +133,78 @@ describe("translateAll", () => {
   it("handles translation failures gracefully", async () => {
     vi.mocked(translateMarkdown)
       .mockResolvedValueOnce({
-        markdown: "# OK",
+        markdown: "# Japanese OK",
         segments: 1,
         cached: 0,
         translated: 1,
         deduplicated: 0,
         fuzzyMatched: 0,
         ollamaCalls: 1,
-        durationMs: 200,
+        durationMs: 300,
         warnings: [],
       })
-      .mockRejectedValueOnce(new Error("Ollama down"));
+      .mockRejectedValueOnce(new Error("Ollama connection refused"));
 
-    const result = await translateAll("# Test", {
+    const result = await translateAll("# Hello", {
       targetLangs: ["ja", "es"],
     });
 
     expect(result.succeeded).toBe(1);
     expect(result.failed).toBe(1);
-    const failed = result.results.find((r) => r.status === "error");
-    expect(failed).toBeDefined();
-    expect(failed!.error).toContain("Ollama down");
+
+    const ja = result.results.find((r) => r.lang === "ja")!;
+    const es = result.results.find((r) => r.lang === "es")!;
+    expect(ja.status).toBe("ok");
+    expect(es.status).toBe("error");
+    expect(es.error).toContain("Ollama connection refused");
   });
 
-  it("reports progress for each completed language", async () => {
+  it("maintains language order regardless of completion order", async () => {
+    // Make first language slow, second fast
+    vi.mocked(translateMarkdown)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) =>
+            setTimeout(
+              () =>
+                resolve({
+                  markdown: "# Slow",
+                  segments: 1,
+                  cached: 0,
+                  translated: 1,
+                  deduplicated: 0,
+                  fuzzyMatched: 0,
+                  ollamaCalls: 1,
+                  durationMs: 200,
+                  warnings: [],
+                }),
+              50,
+            ),
+          ),
+      )
+      .mockResolvedValueOnce({
+        markdown: "# Fast",
+        segments: 1,
+        cached: 0,
+        translated: 1,
+        deduplicated: 0,
+        fuzzyMatched: 0,
+        ollamaCalls: 1,
+        durationMs: 10,
+        warnings: [],
+      });
+
+    const result = await translateAll("# Hello", {
+      targetLangs: ["ja", "es"],
+      concurrency: 2,
+    });
+
+    // Should still be in TRANSLATE_ALL_LANGUAGES order: ja, es
+    expect(result.results[0].lang).toBe("ja");
+    expect(result.results[1].lang).toBe("es");
+  });
+
+  it("calls onProgress after each language", async () => {
     vi.mocked(translateMarkdown).mockResolvedValue({
       markdown: "# Done",
       segments: 1,
@@ -161,21 +217,18 @@ describe("translateAll", () => {
       warnings: [],
     });
 
-    const progress: Array<{ completed: number; total: number; lang: string }> = [];
-    await translateAll("# Hi", {
+    const progress: Array<[number, number, string]> = [];
+    await translateAll("# Hello", {
       targetLangs: ["ja", "es"],
+      concurrency: 1,
       onProgress: (completed, total, lang) => {
-        progress.push({ completed, total, lang });
+        progress.push([completed, total, lang]);
       },
     });
 
     expect(progress).toHaveLength(2);
-    expect(progress[0].total).toBe(2);
-    expect(progress[1].total).toBe(2);
-    // Both languages should be reported
-    const langs = progress.map((p) => p.lang);
-    expect(langs).toContain("Japanese");
-    expect(langs).toContain("Spanish");
+    expect(progress[0]).toEqual([1, 2, "Japanese"]);
+    expect(progress[1]).toEqual([2, 2, "Spanish"]);
   });
 
   it("injects nav bars by default", async () => {
@@ -313,5 +366,148 @@ describe("translateAll", () => {
     expect(es.status).toBe("error");
     expect(es.error).toMatch(/protected span/);
     expect(es.lostSpans).toEqual([{ ...lost, lang: "es" }]);
+  });
+});
+
+describe("extractTopNavBarBlock & checkSourceNavBar (polyglot-mcp#65)", () => {
+  it("extracts the top language nav bar block when present", () => {
+    const md = [
+      "",
+      '<p align="center">',
+      '  <a href="README.md">English</a> | <a href="README.ja.md">日本語</a> | <a href="README.pt-BR.md">Português (BR)</a>',
+      "</p>",
+      "",
+      "# Title",
+    ].join("\n");
+    const block = extractTopNavBarBlock(md);
+    expect(block).toContain('href="README.ja.md"');
+    expect(block).toContain('href="README.pt-BR.md"');
+  });
+
+  it("returns null when no language nav bar block is at the top", () => {
+    expect(extractTopNavBarBlock("# Title\n\nBody")).toBeNull();
+    expect(extractTopNavBarBlock('<p align="center"><img src="logo.png"></p>\n\n# Title')).toBeNull();
+  });
+
+  it("passes when every written target language appears in the source README nav bar", () => {
+    const md = [
+      '<p align="center">',
+      '  <a href="README.md">English</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>',
+      "</p>",
+      "",
+      "# Title",
+    ].join("\n");
+    const res = checkSourceNavBar(md, ["ja", "zh", "es", "fr", "hi", "it", "pt"]);
+    expect(res).toEqual({
+      ok: true,
+      written: ["ja", "zh", "es", "fr", "hi", "it", "pt"],
+      presentInNavBar: ["ja", "zh", "es", "fr", "hi", "it", "pt"],
+      missingFromNavBar: [],
+    });
+  });
+
+  it("refuses NAV_BAR_INCOMPLETE with missing languages when a written file is dropped from the nav bar (#65)", () => {
+    const mdMissingJaAndPt = [
+      '<p align="center">',
+      '  <a href="README.md">English</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a>',
+      "</p>",
+      "",
+      "# Title",
+    ].join("\n");
+    const res = checkSourceNavBar(mdMissingJaAndPt, ["ja", "zh", "es", "fr", "hi", "it", "pt"]);
+    expect(res.ok).toBe(false);
+    expect(res.refusalCode).toBe("NAV_BAR_INCOMPLETE");
+    expect(res.missingFromNavBar).toEqual(["ja", "pt"]);
+    expect(res.why).toContain("ja, pt");
+  });
+});
+
+describe("parseMarkdownStructure, verifyTranslatedMarkdown & verifyTranslatedFile (polyglot-mcp#65)", () => {
+  const sourceMd = [
+    "# Main Title",
+    "",
+    "Intro paragraph.",
+    "",
+    "## Usage",
+    "",
+    "```bash",
+    "# comment inside fence is not a heading",
+    "polyglot-mcp --help",
+    "```",
+    "",
+    "### Notes",
+    "",
+    "~~~json",
+    '{"ok": true}',
+    "~~~",
+  ].join("\n");
+
+  it("counts ATX headings outside fenced code blocks and strips top nav bars", () => {
+    const withNav = [
+      '<p align="center">',
+      '  <a href="README.md">English</a> | <a href="README.ja.md">日本語</a>',
+      "</p>",
+      "",
+      sourceMd,
+    ].join("\n");
+    const struct = parseMarkdownStructure(withNav);
+    expect(struct.headingCount).toBe(3);
+    expect(struct.codeBlockCount).toBe(2);
+    expect(struct.unclosedFence).toBe(false);
+  });
+
+  it("detects unclosed fenced code blocks, empty files, heading mismatches, and code block byte mismatches", () => {
+    const emptyRes = verifyTranslatedMarkdown(sourceMd, "   \n  ");
+    expect(emptyRes.verified).toBe(false);
+    expect(emptyRes.failedChecks).toContain("empty_file");
+
+    const missingHeading = sourceMd.replace("### Notes\n\n", "");
+    const hRes = verifyTranslatedMarkdown(sourceMd, missingHeading);
+    expect(hRes.verified).toBe(false);
+    expect(hRes.failedChecks.join("; ")).toMatch(/heading_count_mismatch \(expected 3, got 2\)/);
+
+    const missingFence = sourceMd.replace(/~~~json[\s\S]*?~~~/, "");
+    const fRes = verifyTranslatedMarkdown(sourceMd, missingFence);
+    expect(fRes.verified).toBe(false);
+    expect(fRes.failedChecks.join("; ")).toMatch(/code_block_count_mismatch \(expected 2, got 1\)/);
+
+    const modifiedFence = sourceMd.replace('{"ok": true}', '{"ok": false}');
+    const bRes = verifyTranslatedMarkdown(sourceMd, modifiedFence);
+    expect(bRes.verified).toBe(false);
+    expect(bRes.codeBlocksByteIdentical).toBe(false);
+    expect(bRes.failedChecks.join("; ")).toMatch(/code_block_bytes_mismatch \(index 1\)/);
+
+    const unclosedFence = sourceMd.replace(/~~~$/, "");
+    const uRes = verifyTranslatedMarkdown(sourceMd, unclosedFence);
+    expect(uRes.verified).toBe(false);
+    expect(uRes.failedChecks).toContain("unclosed_code_block");
+  });
+
+  it("verifies fresh files and rejects missing or stale files on disk", () => {
+    const dir = mkdtempSync(join(tmpdir(), "polyglot-verify-"));
+    try {
+      const missing = verifyTranslatedFile(join(dir, "README.ja.md"), sourceMd, Date.now());
+      expect(missing.verified).toBe(false);
+      expect(missing.exists).toBe(false);
+      expect(missing.failedChecks).toEqual(["missing_file"]);
+
+      const filePath = join(dir, "README.ja.md");
+      const runStartMs = Date.now() - 1_000;
+      writeFileSync(filePath, sourceMd.replace("# Main Title", "# タイトル"), "utf-8");
+
+      const fresh = verifyTranslatedFile(filePath, sourceMd, runStartMs);
+      expect(fresh.verified).toBe(true);
+      expect(fresh.writtenThisRun).toBe(true);
+      expect(fresh.failedChecks).toEqual([]);
+
+      const past = new Date(runStartMs - 10_000);
+      utimesSync(filePath, past, past);
+      const stale = verifyTranslatedFile(filePath, sourceMd, runStartMs);
+      expect(stale.verified).toBe(false);
+      expect(stale.writtenThisRun).toBe(false);
+      expect(stale.failedChecks.join("; ")).toMatch(/stale_file/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

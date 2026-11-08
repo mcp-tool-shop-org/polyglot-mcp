@@ -19,8 +19,8 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 15,
-      "changed": 17,
+      "added": 14,
+      "changed": 35,
       "moved": 0,
       "parts": 4,
       "removed": 0
@@ -28,74 +28,105 @@
     "items": [
       {
         "kind": "door",
-        "sentence": "CI now also runs src/pins.test.ts, src/protectedTerms.test.ts, src/survival.test.ts and 1 more.",
+        "sentence": "CI now also runs src/translateAll.untranslated.test.ts, src/translateMarkdown.untranslated.fixes.test.ts and src/translateMarkdown.untranslated.test.ts.",
         "subjects": [
           ".github/workflows/ci.yml",
-          "src/pins.test.ts",
-          "src/protectedTerms.test.ts",
-          "src/survival.test.ts",
-          "src/translateMarkdown.protected.test.ts"
+          "src/translateAll.untranslated.test.ts",
+          "src/translateMarkdown.untranslated.fixes.test.ts",
+          "src/translateMarkdown.untranslated.test.ts"
         ]
       },
       {
         "kind": "door",
-        "sentence": "Publish to npm now also runs src/pins.test.ts, src/protectedTerms.test.ts, src/survival.test.ts and 1 more.",
+        "sentence": "Publish to npm now also runs src/translateAll.untranslated.test.ts, src/translateMarkdown.untranslated.fixes.test.ts and src/translateMarkdown.untranslated.test.ts.",
         "subjects": [
           ".github/workflows/publish.yml",
-          "src/pins.test.ts",
-          "src/protectedTerms.test.ts",
-          "src/survival.test.ts",
-          "src/translateMarkdown.protected.test.ts"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "@mcptoolshop/polyglot-mcp now also runs src/pinCorrections.ts, src/pins.ts, src/protectedTerms.ts and 1 more.",
-        "subjects": [
-          "package.json",
-          "src/pinCorrections.ts",
-          "src/pins.ts",
-          "src/protectedTerms.ts",
-          "src/survival.ts"
+          "src/translateAll.untranslated.test.ts",
+          "src/translateMarkdown.untranslated.fixes.test.ts",
+          "src/translateMarkdown.untranslated.test.ts"
         ]
       },
       {
         "kind": "landing",
-        "sentence": "src/fixtures/issue-44/ai-jam-sessions.README.hi.5f8d1e2.md is now read by src/pins.test.ts.",
+        "sentence": "LICENSE is now read by src/protectedTerms.test.ts.",
         "subjects": [
-          "src/fixtures/issue-44/ai-jam-sessions.README.hi.5f8d1e2.md",
-          "src/pins.test.ts"
+          "LICENSE",
+          "src/protectedTerms.test.ts"
         ]
       },
       {
         "kind": "landing",
-        "sentence": "src/fixtures/issue-44/ai-jam-sessions.polyglot-cache.5f8d1e2.json is now read by src/pins.test.ts and src/translateMarkdown.protected.test.ts.",
+        "sentence": "README.es.md is now read by src/translateMarkdown.untranslated.fixes.test.ts.",
         "subjects": [
-          "src/fixtures/issue-44/ai-jam-sessions.polyglot-cache.5f8d1e2.json",
-          "src/pins.test.ts",
-          "src/translateMarkdown.protected.test.ts"
+          "README.es.md",
+          "src/translateMarkdown.untranslated.fixes.test.ts"
         ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "README.fr.md is now read by src/translateMarkdown.untranslated.fixes.test.ts.",
+        "subjects": [
+          "README.fr.md",
+          "src/translateMarkdown.untranslated.fixes.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "And 5 more new writers and readers of places.",
+        "subjects": []
       },
       {
         "kind": "counts",
-        "sentence": "15 files added and 17 changed content, across 4 parts.",
+        "sentence": "14 files added and 35 changed content, across 4 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "e0fd93e1984754317e96214bd4f4723c28406d4f",
-      "generatedAt": "2026-10-01T02:13:34.298Z"
+      "commit": "e920cf46935bf5e4ccc45c40fa5678821e8b6ce2",
+      "generatedAt": "2026-10-20T21:35:38.251Z"
     },
     "unchanged": false
   },
-  "changesTogether": [],
+  "changesTogether": [
+    {
+      "a": "scripts/translate-all.mjs",
+      "b": "scripts/translate-readme.mjs",
+      "either": 6,
+      "partLabels": [
+        "scripts",
+        "scripts"
+      ],
+      "parts": [
+        "scripts",
+        "scripts"
+      ],
+      "relation": "inside",
+      "shared": 4
+    },
+    {
+      "a": "scripts/translate-readme.mjs",
+      "b": "src/translateMarkdown.ts",
+      "either": 8,
+      "partLabels": [
+        "scripts",
+        "src"
+      ],
+      "parts": [
+        "scripts",
+        "src"
+      ],
+      "relation": "a-imports-b",
+      "shared": 5
+    }
+  ],
   "changesTogetherNote": [
-    "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
+    "Confidence is low: fewer than 25 source files reach 10 revisions in the window.",
+    "Window: 180 days; a pair counts from 3 shared commits, since 0 source files reach 10 revisions; the floor rises to 10 when 25 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "e920cf46935bf5e4ccc45c40fa5678821e8b6ce2",
+  "commit": "ef26f35f89f6e7c66bb1afa60d6c06ffd413ff4d",
   "defaultBranch": "main",
-  "derived": "7 parts, mostly Markdown (76 files); code in TypeScript (47), JavaScript (5), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
+  "derived": "7 parts, mostly Markdown (83 files); code in TypeScript (50), JavaScript (5), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
     {
       "builds": [
@@ -113,7 +144,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 44
+          "files": 47
         }
       ],
       "runs": [
@@ -133,18 +164,21 @@
         "src/survival.test.ts",
         "src/translate.test.ts",
         "src/translateAll.test.ts",
+        "src/translateAll.untranslated.test.ts",
         "src/translateMarkdown.cache.test.ts",
         "src/translateMarkdown.codespans.test.ts",
         "src/translateMarkdown.concurrency.test.ts",
         "src/translateMarkdown.protected.test.ts",
         "src/translateMarkdown.roundtrip.test.ts",
         "src/translateMarkdown.test.ts",
+        "src/translateMarkdown.untranslated.fixes.test.ts",
+        "src/translateMarkdown.untranslated.test.ts",
         "src/translateReadme.test.ts",
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 25,
-      "runsMore": 22,
+      "runsCount": 28,
+      "runsMore": 25,
       "sends": [
         "uploads coverage to Codecov"
       ],
@@ -203,7 +237,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 44
+          "files": 47
         }
       ],
       "runs": [
@@ -223,18 +257,21 @@
         "src/survival.test.ts",
         "src/translate.test.ts",
         "src/translateAll.test.ts",
+        "src/translateAll.untranslated.test.ts",
         "src/translateMarkdown.cache.test.ts",
         "src/translateMarkdown.codespans.test.ts",
         "src/translateMarkdown.concurrency.test.ts",
         "src/translateMarkdown.protected.test.ts",
         "src/translateMarkdown.roundtrip.test.ts",
         "src/translateMarkdown.test.ts",
+        "src/translateMarkdown.untranslated.fixes.test.ts",
+        "src/translateMarkdown.untranslated.test.ts",
         "src/translateReadme.test.ts",
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 25,
-      "runsMore": 22,
+      "runsCount": 28,
+      "runsMore": 25,
       "sends": [
         "publishes to npm"
       ],
@@ -318,12 +355,13 @@
   "edges": [],
   "engine": "1.24.0",
   "generated": [],
-  "generatedAt": "2026-10-20T21:35:38.251Z",
+  "generatedAt": "2026-11-08T01:14:51.897Z",
   "limits": [
-    "3 writes and 6 reads use paths built at run time and are not named here.",
-    "7 writes and 10 reads go to a path their caller passes, not to this repository.",
-    "4 commands are built at run time and not followed, 2 of them in tests.",
-    "Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions."
+    "3 writes and 14 reads use paths built at run time and are not named here.",
+    "6 writes and 11 reads go to a path their caller passes, not to this repository.",
+    "1 read goes to the directory the command is run in (LICENSE), not to this repository.",
+    "12 commands are built at run time and not followed, 10 of them in tests.",
+    "Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window."
   ],
   "mainDoor": ".github/workflows/ci.yml",
   "partLabels": {
@@ -339,6 +377,9 @@
   "readers": [],
   "repo": "mcp-tool-shop-org/polyglot-mcp",
   "sequences": [],
+  "spawnTested": [
+    "scripts"
+  ],
   "startDoor": ".github/workflows/ci.yml",
   "startHere": [
     ".github/workflows/ci.yml",
@@ -352,11 +393,11 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 25,
+  "testFiles": 28,
   "testedBy": {
-    "scripts": 0,
+    "scripts": 1,
     "site": 0,
-    "src": 24
+    "src": 27
   },
   "unnamedWrites": 3,
   "unread": [],
@@ -364,16 +405,13 @@
   "unreadNote": [],
   "untested": [
     {
-      "part": "scripts",
-      "partLabel": "scripts",
-      "testedBy": 0
-    },
-    {
       "part": "site",
       "partLabel": "site",
       "testedBy": 0
     }
   ],
-  "untestedNote": [],
+  "untestedNote": [
+    "scripts is touched by tests only through a spawn: a test runs its files as a child process."
+  ],
   "written": 0
 }
