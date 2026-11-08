@@ -47,9 +47,10 @@ def bundle_now(env: dict[str, str] | None = None) -> int:
     out_dir = root / "polyglot_out"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Best-effort stop of any lingering translate-all / translate-readme processes on the VM
+    # Best-effort stop of any lingering translate-all / translate-readme processes under root/polyglot_work
+    work_prefix = re.escape(str(root / "polyglot_work"))
     subprocess.run(
-        ["pkill", "-f", "translate-all.mjs|translate-readme.mjs"],
+        ["pkill", "-f", f"{work_prefix}.*translate-(all|readme)\\.mjs"],
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
