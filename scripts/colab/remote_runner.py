@@ -26,6 +26,9 @@ def scrub_line(line: str) -> str:
 
 
 def _resolve_bash(env: dict[str, str]) -> str:
+    git_usr_bash = "C:/Program Files/Git/usr/bin/bash.exe"
+    if os.name == "nt" and os.path.exists(git_usr_bash):
+        return git_usr_bash
     git_bash = "C:/Program Files/Git/bin/bash.exe"
     if os.name == "nt" and os.path.exists(git_bash):
         return git_bash
@@ -52,6 +55,8 @@ def run_remote_script(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
         env=effective_env,
     )

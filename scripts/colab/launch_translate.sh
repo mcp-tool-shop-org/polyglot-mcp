@@ -11,7 +11,8 @@
 #   salvage download: timeout -k 10 300 (310 s)
 #   SALVAGE_DEADLINE_S=840 (past 840 s, remaining salvage steps are skipped -> colab stop)
 #   colab stop: timeout -k 10 60 with 1 retry (2 * 70 = 140 s)
-#   cleanup_stop_attempted_by_s = 840 s, cleanup_bound_s = 980 s
+#   in_flight_bound_s = 310 s (max(download 300, upload 120, sessions 30) + 10 s -k)
+#   cleanup_stop_attempted_by_s = 310 + 840 = 1150 s, cleanup_bound_s = 1150 + 140 = 1290 s
 set -euo pipefail
 
 PINNED_NODE_VERSION="v22.22.3"
@@ -24,16 +25,16 @@ PINNED_MODEL_DIGEST="21b597a243ec4fd2f05bc0ce8ef9ef174a89b09255c330d670852dfaaaa
 # Ollama's default context length when num_ctx is not overridden by src/translate.ts or src/ollama.ts (4096; target 16384 when OLLAMA_CONTEXT_LENGTH=16384 is set)
 PINNED_TRANSLATOR_CONTEXT="4096"
 
-PINNED_LAUNCH_GUARDS_SHA="008c6b8548945e7396c9634a9bf17e8be5c1a398722a927da6802b24a4bb49c6"
-PINNED_REMOTE_RUNNER_SHA="7b346c97e2a56f86ead9417c1cbaa903f2ce1dd41aca7df41f32a78fae32c896"
-PINNED_COLAB_WINDOW_SHA="df6bb0f700c58d91902aa418681d1bcd7bbe90fafedb51ad84ca67b97f35f204"
-PINNED_BUNDLE_NOW_SHA="56aaebc2b1e46785c614e3d02344e30d24e356ab2b547ad5df39cec1640e7f8d"
-PINNED_COMPARE_SHA="d67b4c83c121448c40ac6789183d44d52e9de9920068909f6ae3f8dd83a08ad7"
-PINNED_TRANSLATE_ALL_SHA="6ce0cef0f7ba32cb66f0ba37c538a35cd9c99c39c1126b814133640b361da5b9"
-PINNED_TRANSLATE_README_SHA="c1889209074a21ce6331f91e370fa7732f398f36785336906acdd6456d93eef1"
-PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
-PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="422b039446950b221f79a0e42e71e8cebaf67c5abf131732d7a5fbfc136121d0"
+PINNED_LAUNCH_GUARDS_SHA="3bfb6716b527217fe79c2fcdb46b61382488957a47701af684a3ee0748a6e9c5"
+PINNED_REMOTE_RUNNER_SHA="af43622d7434664e079667044ac3f8f0456eb797975435922857f79299080daf"
+PINNED_COLAB_WINDOW_SHA="a18f2c7125cb658aea9139b6d31a3a254481196faaf344b3754a206d4ad7d333"
+PINNED_BUNDLE_NOW_SHA="96f2f1258bba3e55ef34a42073217188eeb61d2a729c32ebfb38ad269b088e0e"
+PINNED_COMPARE_SHA="68c880add4733d26db3141879246cc6e2a433f8e6e98b90cba5edaa244235604"
+PINNED_TRANSLATE_ALL_SHA="7bebb79151fb8bf0feb14ba6f83082403f45448494b45f4b1dfcc48cbcf92460"
+PINNED_TRANSLATE_README_SHA="c1c50a775085a5cca6d34b37e570963ef096beb40a5d44e4031acd28216edb10"
+PINNED_PACKAGE_JSON_SHA="13f8b4e11c3e533ec57eeebb59826b77353f7ac2832993d5ca4ee4dab700ae21"
+PINNED_PACKAGE_LOCK_SHA="7b6e8d4aa26a79477423b7ff573d8320182829f792bdb6aecb2418d408e7ccb5"
+PINNED_SELF_SHA="9b069cafbc829a6baf1673a15658f4f92533cc74c10ba4e0d0dcc96fc7013f45"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -41,18 +42,17 @@ SELF_SH="${SCRIPT_DIR}/launch_translate.sh"
 # shellcheck source=scripts/colab/colab_window.sh
 source "${SCRIPT_DIR}/colab_window.sh"
 
-DEFAULT_LANGS="ja,zh,es,fr,hi,it,pt"
 CARD="CPU"
 SHAPE=""
 MAX_RATE=""
-CAP="0.05"
+CAP="0.25"
 MARGIN="0.01"
+MIN_RUNTIME_S=""
 WALL_S="900"
 GRACE_S="60"
 OUT_DIR=""
 SESSION="polyglot-translate-$(date -u +%Y%m%dT%H%M%SZ)"
 DRY_RUN=0
-LANGS="${DEFAULT_LANGS}"
 README_PATHS=()
 README_TAR=""
 
@@ -66,8 +66,8 @@ while [ "$#" -gt 0 ]; do
       README_TAR="${2:-}"
       shift 2
       ;;
-    --langs)
-      LANGS="${2:-}"
+    --min-runtime-s)
+      MIN_RUNTIME_S="${2:-}"
       shift 2
       ;;
     --card)
@@ -147,29 +147,6 @@ if [ -n "${README_TAR}" ] && [ ! -f "${README_TAR}" ]; then
   exit 2
 fi
 
-# Validate --langs against the 7 supported target codes
-IFS=',' read -r -a LANG_ARR <<< "${LANGS}"
-if [ "${#LANG_ARR[@]}" -eq 0 ]; then
-  echo "REFUSED: LANGS_INVALID: --langs cannot be empty" >&2
-  exit 2
-fi
-NORM_LANGS=()
-for lc in "${LANG_ARR[@]}"; do
-  lc_clean="$(echo "${lc}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-  case "${lc_clean}" in
-    ja | zh | es | fr | hi | it | pt)
-      NORM_LANGS+=("${lc_clean}")
-      ;;
-    pt-br)
-      NORM_LANGS+=("pt")
-      ;;
-    *)
-      echo "REFUSED: LANGS_INVALID: unsupported language '${lc}' in --langs (supported: ja,zh,es,fr,hi,it,pt)" >&2
-      exit 2
-      ;;
-  esac
-done
-LANGS_CSV="$(IFS=','; echo "${NORM_LANGS[*]}")"
 
 if [ -z "${OUT_DIR}" ]; then
   echo "REFUSED: OUT_DIR_REQUIRED: pass --out-dir <dir> on a persistent disk" >&2
@@ -217,26 +194,53 @@ if [ "${DRY_RUN}" = "1" ]; then
     fi
   fi
 
-  "${PY_BIN}" - "${CARD}" "${SHAPE}" "${MAX_RATE:-0.26}" "${CAP}" "${MARGIN}" "${WALL_S}" "${GRACE_S}" "${SESSION}" "${OUT_DIR}" "${LANGS_CSV}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_MODEL_DIGEST}" "${PINNED_OLLAMA_VERSION}" "${PINNED_NODE_VERSION}" "${README_TAR}" "${README_PATHS[@]}" << 'DRYPYEOF'
+  DRY_TEST_MODE=0
+  if colab_fake_test_mode_active; then
+    DRY_TEST_MODE=1
+  fi
+  colab_apply_test_cleanup_overrides "${DRY_TEST_MODE}"
+  colab_compute_cleanup_bounds "translate"
+
+  "${PY_BIN}" - "${GUARDS_PY}" "${CARD}" "${SHAPE}" "${MAX_RATE:-0.26}" "${CAP}" "${MARGIN}" "${WALL_S}" "${GRACE_S}" "${SESSION}" "${OUT_DIR}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_MODEL_DIGEST}" "${PINNED_OLLAMA_VERSION}" "${PINNED_NODE_VERSION}" "${COLAB_CLEANUP_BOUND_S}" "${MIN_RUNTIME_S}" "${README_TAR}" "${README_PATHS[@]}" << 'DRYPYEOF'
 import json
 import sys
+from pathlib import Path
 
-card = sys.argv[1]
-shape = sys.argv[2] or ("high-mem" if card in ("CPU", "CPU-high-mem") else "")
-rate = float(sys.argv[3] if card not in ("CPU", "CPU-high-mem") else "0.26")
-cap = float(sys.argv[4])
-margin = float(sys.argv[5])
-wall_s = float(sys.argv[6])
-grace_s = float(sys.argv[7])
-session = sys.argv[8]
-out_dir = sys.argv[9]
-langs = sys.argv[10].split(",")
+guards_py = Path(sys.argv[1])
+sys.path.insert(0, str(guards_py.parent))
+import launch_guards as lg
+
+card = sys.argv[2]
+shape = sys.argv[3] or ("high-mem" if card in ("CPU", "CPU-high-mem") else "")
+rate = float(sys.argv[4] if card not in ("CPU", "CPU-high-mem") else "0.26")
+cap = float(sys.argv[5])
+margin = float(sys.argv[6])
+wall_s = float(sys.argv[7])
+grace_s = float(sys.argv[8])
+session = sys.argv[9]
+out_dir = sys.argv[10]
 model = sys.argv[11]
 model_digest = sys.argv[12]
 ollama_ver = sys.argv[13]
 node_ver = sys.argv[14]
-readme_tar = sys.argv[15]
-readme_paths = sys.argv[16:]
+cleanup_bound_s = float(sys.argv[15])
+min_runtime_raw = sys.argv[16]
+min_runtime_s = float(min_runtime_raw) if min_runtime_raw else None
+readme_tar = sys.argv[17]
+readme_paths = sys.argv[18:]
+
+langs = ["ja", "zh", "es", "fr", "hi", "it", "pt"]
+budget = lg.evaluate_cap_budget(
+    cap=cap,
+    margin=margin,
+    cleanup_bound_s=cleanup_bound_s,
+    priced_rate=rate,
+    max_rate=rate,
+    min_runtime_s=min_runtime_s,
+)
+if budget["tripped"]:
+    sys.stderr.write(f"REFUSED: {budget['code']}: {budget['why']}\n")
+    raise SystemExit(2)
 
 hours = round(wall_s / 3600.0, 6)
 wall_cost = round(hours * rate, 6)
@@ -269,9 +273,36 @@ plan = {
         "wall_price_ccu": wall_cost,
         "cap_ccu": cap,
         "margin_ccu": margin,
+        "cleanup_stop_attempted_by_s": 1150,
+        "cleanup_bound_s": budget["cleanup_bound_s"],
+        "cleanup_reserve_units": budget["cleanup_reserve_units"],
+        "effective_trip_units": budget["effective_trip_units"],
+        "runtime_to_trip_s": budget["runtime_to_trip_s"],
+        "worst_case_cap_path": budget["worst_case_cap_path"],
+        "worst_case_launcher_death_path": budget["worst_case_launcher_death_path"],
+        "worst_case_total_spend": budget["worst_case_total_spend"],
+        "assumptions": budget["assumptions"],
         "effective_cap_ccu": effective_cap,
         "cap_bound_price_ccu": cap_bound_price,
+        "cap_trip_formula": budget["cap_trip_formula"],
         "formula": f"{hours:.4f} h x {rate:.2f} CCU/h = {wall_cost:.4f} CCU (cap-bound at {cap:.4f} CCU -> {cap_bound_price:.4f} CCU)",
+    },
+    "cleanup_stop_attempted_by_s": 1150,
+    **{
+        k: budget[k]
+        for k in (
+            "cleanup_bound_s",
+            "priced_rate",
+            "max_rate",
+            "cleanup_reserve_units",
+            "effective_trip_units",
+            "runtime_to_trip_s",
+            "worst_case_cap_path",
+            "worst_case_launcher_death_path",
+            "worst_case_total_spend",
+            "assumptions",
+            "cap_trip_formula",
+        )
     },
     "commands": [
         "colab usage",
@@ -290,7 +321,7 @@ plan = {
 }
 print(json.dumps(plan, indent=2))
 DRYPYEOF
-  exit 0
+  exit $?
 fi
 
 # Test mode needs SDLAB_TEST_FAKE_COLAB=1 AND the fake-marked colab CLI on PATH.
@@ -328,6 +359,15 @@ PIN_OVERRIDE_VARS=(
   SDLAB_TEST_SALVAGE_DEADLINE_S
   SDLAB_TEST_STOP_TIMEOUT_S
   SDLAB_TEST_SESSIONS_TIMEOUT_S
+  SDLAB_TEST_OPEN_LOCK_TIMEOUT_S
+  SDLAB_TEST_NEW_TIMEOUT_S
+  SDLAB_TEST_UPLOAD_TIMEOUT_S
+  SDLAB_TEST_WALL_ESCALATE_S
+  POLYGLOT_TEST_CORRUPT_RECEIPT_LANG
+  POLYGLOT_TEST_NODE_TAR_URL
+  POLYGLOT_TEST_OLLAMA_TAR_URL
+  POLYGLOT_TEST_NODE_TAR_SHA256
+  POLYGLOT_TEST_OLLAMA_TAR_SHA256
 )
 colab_refuse_live_pin_overrides "${OUT_DIR}" "${TEST_MODE}" "${PIN_OVERRIDE_VARS[@]}"
 colab_apply_test_cleanup_overrides "${TEST_MODE}"
@@ -386,9 +426,10 @@ if ! SHAS_Out="$(colab_verify_input_shas "${PY_BIN}" "${GUARDS_PY}" "${VERIFY_PA
 fi
 SHAS_JSON="${SHAS_Out}"
 
-# Arm GPU rate gate and shape gate BEFORE any colab call
+# Arm GPU rate gate, shape gate, and cap budget gate BEFORE any colab call
 colab_gpu_rate_gate_arm "${OUT_DIR}" "${CARD}" "${MAX_RATE}" "${TEST_MODE}"
 colab_shape_gate_arm "${OUT_DIR}" "${CARD}" "${SHAPE}"
+colab_cap_budget_gate "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}" "translate" "${CARD}" "${CAP}" "${MARGIN}" "${MAX_RATE}" "${RATE_CCU_PER_HOUR:-0.26}" "${MIN_RUNTIME_S}"
 
 # Stage input READMEs into ${OUT_DIR}/readmes_input.tar.gz and write input_readmes.json
 INPUT_READMES_JSON="${OUT_DIR}/input_readmes.json"
@@ -422,7 +463,10 @@ if readme_tar:
     extract_tmp = stage_dir / "_raw_tar"
     extract_tmp.mkdir(parents=True, exist_ok=True)
     with tarfile.open(tp, "r:*") as tf:
-        tf.extractall(extract_tmp, filter="data")
+        try:
+            tf.extractall(extract_tmp, filter="data")
+        except TypeError:
+            tf.extractall(extract_tmp)
     found = sorted(p for p in extract_tmp.rglob("README.md") if p.is_file())
     if not found:
         found = sorted(p for p in extract_tmp.rglob("*.md") if p.is_file() and not re.search(r"\.[a-z]{2}(?:-[A-Z]{2})?\.md$", p.name))
@@ -548,10 +592,6 @@ cleanup_on_exit() {
     kill -9 "${EXEC_PID}" 2>/dev/null || true
     wait "${EXEC_PID}" 2>/dev/null || true
   fi
-  if [ -n "${WALL_WATCHER_PID}" ]; then
-    pkill -P "${WALL_WATCHER_PID}" 2>/dev/null || true
-    kill -9 "${WALL_WATCHER_PID}" 2>/dev/null || true
-  fi
   if [ -n "${TOKEN_DIR}" ]; then
     rm -rf "${TOKEN_DIR}" || true
   fi
@@ -559,9 +599,33 @@ cleanup_on_exit() {
     && [ ! -s "${OUT_DIR}/polyglot_translate_bundle.tar.gz" ]; then
     translate_download_bundle_after_failure "${rc}" || true
   fi
-  if [ "${SESSION_OPENED}" -eq 1 ]; then
+  if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+    sleep 3600
+    exit 137
+  fi
+  printf 'trap\n' > "${OUT_DIR}/stop_path.txt"
+  printf '1\n' > "${OUT_DIR}/stop_reached.txt"
+  if [ "${SESSION_OPENED}" -eq 1 ] && { [ -f "${OUT_DIR}/session_open_started.txt" ] || [ -f "${OUT_DIR}/session_opened.txt" ]; }; then
     colab_stop_and_log_closing "${PY_BIN}" "${SESSION}" "${OUT_DIR}"
   fi
+  if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+    sleep 3600
+    exit 137
+  fi
+  if [ -f "${OUT_DIR}/wall_trip_epoch.txt" ] && [ ! -f "${OUT_DIR}/watcher_escalated.txt" ] && [ ! -f "${OUT_DIR}/watcher_wait.txt" ]; then
+    printf 'cleanup_seen\n' > "${OUT_DIR}/watcher_wait.txt"
+  fi
+  printf '1\n' > "${OUT_DIR}/cleanup_finished.txt"
+  if [ -n "${WALL_WATCHER_PID}" ]; then
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "${WALL_WATCHER_PID}" 2>/dev/null || break
+      sleep 0.1
+    done
+    pkill -P "${WALL_WATCHER_PID}" 2>/dev/null || true
+    kill -9 "${WALL_WATCHER_PID}" 2>/dev/null || true
+    wait "${WALL_WATCHER_PID}" 2>/dev/null || true
+  fi
+  rm -f "${OUT_DIR}/.watcher_tracked_pids.txt" "${OUT_DIR}/cleanup_finished.txt"
   local closed_at
   closed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   colab_write_window_and_outcome \
@@ -577,26 +641,21 @@ trap 'exit 143' TERM INT
 # Pre-open cap and host-RAM check via launch_guards.py
 colab_check_cap_and_ram "${PY_BIN}" "${GUARDS_PY}" "stub" "0" "${WALL_S}" "${GRACE_S}" "${CAP}" "${MARGIN}" "${OUT_DIR}"
 
-# Independent wall watcher
+# Independent wall watcher (cannot be blocked by a child timeout; polls launcher liveness pre-trip and escalates to `colab stop` + SIGKILL)
 WALL_INT="${WALL_S%.*}"
 GRACE_INT="${GRACE_S%.*}"
 WALL_LIMIT_S="$(( WALL_INT > GRACE_INT ? WALL_INT - GRACE_INT : 1 ))"
 MAIN_PID="$$"
-(
-  exec >/dev/null 2>&1 </dev/null
-  sleep "${WALL_LIMIT_S}"
-  echo "REFUSED: WALL_GUARD_TRIPPED: independent wall watcher: ${WALL_LIMIT_S} s (wall - grace) elapsed" >> "${OUT_DIR}/guards.log"
-  kill -TERM "${MAIN_PID}" 2>/dev/null || true
-) &
+printf '%s\n' "${MAIN_PID}" > "${OUT_DIR}/launcher_pid.txt"
+colab_run_wall_watcher \
+  "${MAIN_PID}" "${WALL_LIMIT_S}" "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}" \
+  "translate" "${SESSION}" "${CARD}" "${CAP}" "${WALL_S}" "${GRACE_S}" "${MARGIN}" \
+  "${OPENED_AT}" "${SHAS_JSON}" </dev/null >/dev/null 2>&1 &
 WALL_WATCHER_PID="$!"
 
 # Hold /tmp/colab-window-open.lock while opening with colab new
 SESSION_OPENED=1
 colab_open_session_locked "${SESSION}" "${CARD}" "${OUT_DIR}"
-if colab_card_is_cpu "${CARD}"; then
-  START_EPOCH="$(date -u +%s)"
-  date -u -d "@${START_EPOCH}" +%Y-%m-%dT%H:%M:%SZ > "${OUT_DIR}/cap_clock_started_at.txt"
-fi
 colab_scrub_all_logs "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}"
 
 # Write the VM remote script
@@ -644,7 +703,10 @@ echo "setup" > /content/polyglot_out/phase.txt
       CUR_PHASE="$(cat /content/polyglot_out/phase.txt 2>/dev/null || echo setup)"
       printf 'HARNESS: {"phase": "%s"}\n' "${CUR_PHASE}"
     } | tee -a /content/polyglot_out/vitals.log
-    sleep 15 </dev/null >/dev/null 2>&1
+    for _ in $(seq 1 30); do
+      [ -f /content/polyglot_out/.remote_done ] && exit 0
+      sleep 0.5 </dev/null >/dev/null 2>&1
+    done
   done
 ) &
 VITALS_PID="$!"
@@ -652,14 +714,25 @@ VITALS_PID="$!"
 remote_on_exit() {
   local rc=$?
   trap - EXIT
+  printf '1\n' > /content/polyglot_out/.remote_done 2>/dev/null || true
   if [ -n "${VITALS_PID:-}" ]; then
+    for _ in 1 2 3 4 5 6; do
+      kill -0 "${VITALS_PID}" 2>/dev/null || break
+      sleep 0.1
+    done
     pkill -P "${VITALS_PID}" 2>/dev/null || true
-    kill "${VITALS_PID}" 2>/dev/null || true
+    kill -9 "${VITALS_PID}" 2>/dev/null || true
+    wait "${VITALS_PID}" 2>/dev/null || true
   fi
+  rm -f /content/polyglot_out/.remote_done 2>/dev/null || true
   if [ ! -f /content/polyglot_translate_bundle.tar.gz ]; then
+    local r_scrub_args=()
     while IFS= read -r -d '' f; do
-      python3 /content/launch_guards.py --scrub-file "${f}" </dev/null || true
+      r_scrub_args+=("--scrub-file" "${f}")
     done < <(find /content/polyglot_out -type f \( -name "*.log" -o -name "*.json" -o -name "*.txt" \) -print0 2>/dev/null || true)
+    if [ "${#r_scrub_args[@]}" -gt 0 ]; then
+      python3 /content/launch_guards.py "${r_scrub_args[@]}" </dev/null || true
+    fi
     tar -czf /content/polyglot_translate_bundle.tar.gz -C /content/polyglot_out . || true
   fi
   exit "${rc}"
@@ -670,7 +743,8 @@ trap remote_on_exit EXIT
   if [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
     # 1. Install pinned Node.js checked by sha256
     NODE_TAR="/content/node-${PINNED_NODE_VERSION}-linux-x64.tar.xz"
-    curl -fsSL "https://nodejs.org/dist/${PINNED_NODE_VERSION}/node-${PINNED_NODE_VERSION}-linux-x64.tar.xz" -o "${NODE_TAR}"
+    NODE_URL="${POLYGLOT_TEST_NODE_TAR_URL:-https://nodejs.org/dist/${PINNED_NODE_VERSION}/node-${PINNED_NODE_VERSION}-linux-x64.tar.xz}"
+    curl -fsSL "${NODE_URL}" -o "${NODE_TAR}"
     GOT_NODE_SHA="$(sha256sum "${NODE_TAR}" | awk '{print $1}')"
     if [ "${GOT_NODE_SHA}" != "${PINNED_NODE_TAR_SHA256}" ]; then
       echo "REFUSED: NODE_INSTALL_SHA_MISMATCH: got ${GOT_NODE_SHA} expected ${PINNED_NODE_TAR_SHA256}" >&2
@@ -678,11 +752,12 @@ trap remote_on_exit EXIT
     fi
     mkdir -p /content/node
     tar -xJf "${NODE_TAR}" -C /content/node --strip-components=1
-    export PATH="/content/node/bin:${PATH}"
+    export PATH="$(cd /content/node/bin && pwd):${PATH}"
 
     # 2. Install pinned Ollama archive checked by sha256
     OLLAMA_ARCHIVE="/content/ollama-linux-amd64.tar.zst"
-    curl -fsSL "https://github.com/ollama/ollama/releases/download/v${PINNED_OLLAMA_VERSION}/ollama-linux-amd64.tar.zst" -o "${OLLAMA_ARCHIVE}"
+    OLLAMA_URL_ARCHIVE="${POLYGLOT_TEST_OLLAMA_TAR_URL:-https://github.com/ollama/ollama/releases/download/v${PINNED_OLLAMA_VERSION}/ollama-linux-amd64.tar.zst}"
+    curl -fsSL "${OLLAMA_URL_ARCHIVE}" -o "${OLLAMA_ARCHIVE}"
     GOT_OLLAMA_SHA="$(sha256sum "${OLLAMA_ARCHIVE}" | awk '{print $1}')"
     if [ "${GOT_OLLAMA_SHA}" != "${PINNED_OLLAMA_LINUX_AMD64_SHA256}" ]; then
       echo "REFUSED: OLLAMA_INSTALL_SHA_MISMATCH: got ${GOT_OLLAMA_SHA} expected ${PINNED_OLLAMA_LINUX_AMD64_SHA256}" >&2
@@ -690,11 +765,11 @@ trap remote_on_exit EXIT
     fi
     mkdir -p /content/ollama
     tar --zstd -xf "${OLLAMA_ARCHIVE}" -C /content/ollama
-    export PATH="/content/ollama/bin:${PATH}"
+    export PATH="$(cd /content/ollama/bin && pwd):${PATH}"
 
-    ollama serve > /content/polyglot_out/ollama_serve.log 2>&1 &
+    ollama serve </dev/null > /content/polyglot_out/ollama_serve.log 2>&1 &
     for _ in $(seq 1 30); do
-      if ollama --version >/dev/null 2>&1 && curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+      if ollama --version >/dev/null 2>&1 && curl -sf "${OLLAMA_HOST:-http://127.0.0.1:11434}/api/tags" >/dev/null 2>&1; then
         break
       fi
       sleep 1
@@ -873,15 +948,22 @@ FITPYEOF
       npm run build
     )
   elif [ ! -d /content/polyglot_work/node_modules ] && [ -d "${REPO_ROOT_FOR_TEST_MODULES:-}" ]; then
-    ln -s "${REPO_ROOT_FOR_TEST_MODULES}/node_modules" /content/polyglot_work/node_modules
+    python3 -c 'import os, subprocess, sys
+src, dst = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
+if os.name == "nt":
+    subprocess.run(["cmd", "/c", "mklink", "/J", dst, src], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+else:
+    os.symlink(src, dst)
+' "${REPO_ROOT_FOR_TEST_MODULES}/node_modules" /content/polyglot_work/node_modules
   fi
 } 2>&1 | tee -a /content/polyglot_out/setup.log
 
 echo "run" > /content/polyglot_out/phase.txt
 tar -xzf /content/readmes_input.tar.gz -C /content/readmes_in
 
-# 6. Run scripts/translate-all.mjs unchanged for each README, check nav bar, and record timings
-python3 - "/content/polyglot_work" "/content/readmes_in" "/content/polyglot_out" "${COLAB_LANGS}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${REPO_COMMIT}" << 'RUNPYEOF'
+# 6. Run scripts/translate-all.mjs unchanged for each README (all 7 languages, no --langs),
+#    enforce #67's verified-file receipt & structural check rule, check nav bar, and record timings
+python3 - "/content/polyglot_work" "/content/readmes_in" "/content/polyglot_out" "${PINNED_TRANSLATEGEMMA_MODEL}" "${REPO_COMMIT}" << 'RUNPYEOF'
 import hashlib
 import json
 import os
@@ -894,11 +976,10 @@ from pathlib import Path
 work_dir = Path(sys.argv[1])
 in_root = Path(sys.argv[2])
 out_root = Path(sys.argv[3])
-langs_csv = sys.argv[4]
-model_name = sys.argv[5]
-repo_commit = sys.argv[6]
+model_name = sys.argv[4]
+repo_commit = sys.argv[5]
 
-langs = [c.strip() for c in langs_csv.split(",") if c.strip()]
+langs = ["ja", "zh", "es", "fr", "hi", "it", "pt"]
 lang_file_map = {
     "ja": "README.ja.md",
     "zh": "README.zh.md",
@@ -920,23 +1001,52 @@ all_sha_entries = []
 
 for slot in slots:
     src_readme = slot / "README.md"
+    pre_run_source_md = src_readme.read_text(encoding="utf-8")
+    (out_root / f"pre_source_{slot.name}.md").write_text(pre_run_source_md, encoding="utf-8")
     input_sha = "sha256:" + hashlib.sha256(src_readme.read_bytes()).hexdigest()
     t0 = time.monotonic()
-    cmd = ["node", str(work_dir / "scripts" / "translate-all.mjs"), str(src_readme), f"--langs={langs_csv}", "--no-cache"]
+    cmd = ["node", str(work_dir / "scripts" / "translate-all.mjs"), str(src_readme), "--no-cache"]
     env = dict(os.environ)
     env["POLYGLOT_MODEL"] = model_name
-    proc = subprocess.run(cmd, cwd=str(work_dir), env=env, capture_output=True, text=True, check=False)
+    proc = subprocess.run(cmd, cwd=str(work_dir), env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     elapsed_s = round(time.monotonic() - t0, 3)
 
     log_prefix = slot.name
-    (out_root / f"translate_{log_prefix}.stdout.log").write_text(proc.stdout, encoding="utf-8")
-    (out_root / f"translate_{log_prefix}.stderr.log").write_text(proc.stderr, encoding="utf-8")
-    sys.stdout.write(proc.stdout)
-    sys.stderr.write(proc.stderr)
+    (out_root / f"translate_{log_prefix}.stdout.log").write_text(proc.stdout or "", encoding="utf-8")
+    (out_root / f"translate_{log_prefix}.stderr.log").write_text(proc.stderr or "", encoding="utf-8")
+    sys.stdout.write(proc.stdout or "")
+    sys.stderr.write(proc.stderr or "")
     sys.stdout.flush()
     sys.stderr.flush()
 
-    # Optional test-only fault injection to simulate #65 nav-bar drop after translation
+    # Parse structured summary from translate-all.mjs stdout
+    summary_json = {}
+    if "POLYGLOT_COMPLETE" in proc.stdout:
+        after = proc.stdout.split("POLYGLOT_COMPLETE", 1)[1]
+        brace_idx = after.find("{")
+        if brace_idx != -1:
+            json_part = after[brace_idx:].split("\n====", 1)[0].strip()
+            try:
+                summary_json = json.loads(json_part)
+            except ValueError:
+                pass
+    summary_path = out_root / f"summary_{slot.name}.json"
+    summary_path.write_text(json.dumps(summary_json, indent=2) + "\n", encoding="utf-8")
+
+    # Optional test-only fault injection to simulate #67 unverified receipt/structural check or #65 nav-bar drop
+    corrupt_lang = os.environ.get("POLYGLOT_TEST_CORRUPT_RECEIPT_LANG", "").strip()
+    if corrupt_lang and summary_json.get("results"):
+        for r in summary_json["results"]:
+            if r.get("lang") == corrupt_lang:
+                r["status"] = "written-unverified"
+                r["failedChecks"] = ["no_write_receipt"]
+                summary_json.setdefault("writtenUnverified", []).append({
+                    "lang": corrupt_lang,
+                    "file": lang_file_map.get(corrupt_lang, f"README.{corrupt_lang}.md"),
+                    "failedChecks": ["no_write_receipt"],
+                })
+        summary_path.write_text(json.dumps(summary_json, indent=2) + "\n", encoding="utf-8")
+
     drop_lang = os.environ.get("POLYGLOT_TEST_DROP_NAV_BAR_LANG", "").strip()
     if drop_lang:
         drop_file = lang_file_map.get(drop_lang, f"README.{drop_lang}.md")
@@ -946,29 +1056,60 @@ for slot in slots:
         txt = _re.sub(rf'<a href="{_re.escape(drop_file)}">[^<]*</a>\s*\|\s*', "", txt)
         src_readme.write_text(txt, encoding="utf-8")
 
-    # Verify source README's nav bar lists every target language that was written on disk (polyglot-mcp#65)
-    written_langs = []
-    for lc in langs:
-        f_name = lang_file_map[lc]
-        if (slot / f_name).is_file():
-            written_langs.append(lc)
-
-    # Call shared checkSourceNavBar from dist/translateAll.js via node
+    # Adopt #67's receipt & structural verification rule + #65 nav-bar check in the Colab lane
+    verify_script = (
+        "import { readFileSync } from 'node:fs';"
+        "import { resolve } from 'node:path';"
+        "import { TRANSLATE_ALL_LANGUAGES, verifyTranslatedMarkdown, resolveNavBarLangCodes, checkSourceNavBar } from './dist/translateAll.js';"
+        "const [slotDir, preSrcPath, postSrcPath, summaryPath] = process.argv.slice(1);"
+        "const preSrc = readFileSync(preSrcPath, 'utf-8');"
+        "const postSrc = readFileSync(postSrcPath, 'utf-8');"
+        "const summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));"
+        "const results = Array.isArray(summary.results) ? summary.results : [];"
+        "const verifiedThisRun = [];"
+        "const rejectedCodes = [];"
+        "const unverifiedDetails = [];"
+        "for (const lang of TRANSLATE_ALL_LANGUAGES) {"
+        "  const r = results.find((x) => x.lang === lang.code);"
+        "  const fname = `README.${lang.file ?? lang.code}.md`;"
+        "  const fpath = resolve(slotDir, fname);"
+        "  if (!r || r.status === 'written-unverified' || r.status === 'written-after-error' || r.status === 'failed' || r.status === 'untranslated') {"
+        "    const checks = (r && Array.isArray(r.failedChecks) && r.failedChecks.length) ? r.failedChecks : [r ? r.status : 'missing_result'];"
+        "    if (checks.includes('receipt_sha_mismatch')) rejectedCodes.push(lang.code);"
+        "    unverifiedDetails.push(`${lang.code}(${fname}: ${checks.join(',')})`);"
+        "    continue;"
+        "  }"
+        "  let cand = '';"
+        "  try { cand = readFileSync(fpath, 'utf-8'); } catch { unverifiedDetails.push(`${lang.code}(${fname}: missing_file)`); continue; }"
+        "  const mdCheck = verifyTranslatedMarkdown(preSrc, cand);"
+        "  if (!mdCheck.verified) {"
+        "    unverifiedDetails.push(`${lang.code}(${fname}: ${mdCheck.failedChecks.join(',')})`);"
+        "    continue;"
+        "  }"
+        "  verifiedThisRun.push(lang.code);"
+        "}"
+        "const navBarLangCodes = resolveNavBarLangCodes(slotDir, preSrc, verifiedThisRun, TRANSLATE_ALL_LANGUAGES, rejectedCodes);"
+        "const navRes = checkSourceNavBar(postSrc, navBarLangCodes, TRANSLATE_ALL_LANGUAGES);"
+        "console.log(JSON.stringify({ verifiedThisRun, navBarLangCodes: Array.from(navBarLangCodes), navBarCheck: navRes, unverifiedDetails }));"
+        "if (!navRes.ok) { console.error(`REFUSED: ${navRes.refusalCode}: ${navRes.why}`); process.exit(1); }"
+        "if (unverifiedDetails.length > 0) { console.error(`REFUSED: TRANSLATION_UNVERIFIED: unverified translation(s): ${unverifiedDetails.join('; ')}`); process.exit(1); }"
+    )
     nav_check_proc = subprocess.run(
         [
             "node",
             "--input-type=module",
             "-e",
-            "import { readFileSync } from 'node:fs'; import { checkSourceNavBar } from './dist/translateAll.js';"
-            "const res = checkSourceNavBar(readFileSync(process.argv[1], 'utf-8'), process.argv[2].split(',').filter(Boolean));"
-            "console.log(JSON.stringify(res));"
-            "if (!res.ok) { console.error(`REFUSED: ${res.refusalCode}: ${res.why}`); process.exit(1); }",
+            verify_script,
+            str(slot),
+            str(out_root / f"pre_source_{slot.name}.md"),
             str(src_readme),
-            ",".join(written_langs),
+            str(summary_path),
         ],
         cwd=str(work_dir),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if nav_check_proc.returncode != 0:
@@ -985,23 +1126,12 @@ for slot in slots:
             sf.write(msg)
         raise SystemExit(1)
 
-    # Parse structured summary from translate-all.mjs stdout
-    summary_json = {}
-    if "POLYGLOT_COMPLETE" in proc.stdout:
-        after = proc.stdout.split("POLYGLOT_COMPLETE", 1)[1]
-        brace_idx = after.find("{")
-        if brace_idx != -1:
-            json_part = after[brace_idx:].split("\n====", 1)[0].strip()
-            try:
-                summary_json = json.loads(json_part)
-            except ValueError:
-                pass
-
+    verify_payload = json.loads(nav_check_proc.stdout.strip())
     dest_dir = outputs_root if single_slot else (outputs_root / slot.name)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     output_shas = {}
-    copied_files = ["README.md"] + [lang_file_map[lc] for lc in langs]
+    copied_files = ["README.md"] + [lang_file_map[lc] for lc in verify_payload["verifiedThisRun"]]
     for fname in copied_files:
         fp = slot / fname
         if not fp.is_file():
@@ -1029,10 +1159,13 @@ for slot in slots:
         "slug": slot.name,
         "input_sha256": input_sha,
         "output_shas": output_shas,
+        "verified_languages": verify_payload["verifiedThisRun"],
+        "done_after_silence": summary_json.get("doneAfterSilence", []),
+        "written_unverified": summary_json.get("writtenUnverified", []),
         "per_language_status": per_lang_status,
         "per_language_timings_s": per_lang_timings,
         "total_elapsed_s": elapsed_s,
-        "nav_bar_check": json.loads(nav_check_proc.stdout.strip()),
+        "nav_bar_check": verify_payload["navBarCheck"],
     })
 
 sha_lines = [f"{h}  {rel}\n" for h, rel in sorted(all_sha_entries, key=lambda x: x[1])]
@@ -1068,11 +1201,17 @@ vm_win = {
 print("WINDOW_JSON " + json.dumps(vm_win), flush=True)
 RUNPYEOF
 
+f_scrub_args=()
 while IFS= read -r -d '' f; do
-  python3 /content/launch_guards.py --scrub-file "${f}" </dev/null || true
+  f_scrub_args+=("--scrub-file" "${f}")
 done < <(find /content/polyglot_out -type f \( -name "*.log" -o -name "*.json" -o -name "*.txt" \) -print0 2>/dev/null || true)
+if [ "${#f_scrub_args[@]}" -gt 0 ]; then
+  python3 /content/launch_guards.py "${f_scrub_args[@]}" </dev/null || true
+fi
 tar -czf /content/polyglot_translate_bundle.tar.gz -C /content/polyglot_out .
 REMOTEEOF
+
+colab_check_pre_exec_cap "${OUT_DIR}"
 
 # Upload inputs flat into /content
 colab_upload_checked "${SESSION}" "${REPO_ARCHIVE}" /content/repo_archive.tar.gz "${OUT_DIR}"
@@ -1088,13 +1227,12 @@ colab_upload_checked "${SESSION}" "${REMOTE_SCRIPT}" /content/remote_translate.s
 REMOTE_ENV=(
   "SDLAB_REMOTE_SCRIPT=/content/remote_translate.sh"
   "PINNED_NODE_VERSION=${PINNED_NODE_VERSION}"
-  "PINNED_NODE_TAR_SHA256=${PINNED_NODE_TAR_SHA256}"
+  "PINNED_NODE_TAR_SHA256=${POLYGLOT_TEST_NODE_TAR_SHA256:-${PINNED_NODE_TAR_SHA256}}"
   "PINNED_OLLAMA_VERSION=${PINNED_OLLAMA_VERSION}"
-  "PINNED_OLLAMA_LINUX_AMD64_SHA256=${PINNED_OLLAMA_LINUX_AMD64_SHA256}"
+  "PINNED_OLLAMA_LINUX_AMD64_SHA256=${POLYGLOT_TEST_OLLAMA_TAR_SHA256:-${PINNED_OLLAMA_LINUX_AMD64_SHA256}}"
   "PINNED_TRANSLATEGEMMA_MODEL=${PINNED_TRANSLATEGEMMA_MODEL}"
   "PINNED_MODEL_DIGEST=${POLYGLOT_TEST_MODEL_DIGEST:-${PINNED_MODEL_DIGEST}}"
   "PINNED_TRANSLATOR_CONTEXT=${PINNED_TRANSLATOR_CONTEXT}"
-  "COLAB_LANGS=${LANGS_CSV}"
   "COLAB_CARD=${CARD}"
   "REPO_COMMIT=${REPO_COMMIT}"
 )
@@ -1109,18 +1247,30 @@ if [ "${TEST_MODE}" = "1" ]; then
   if [ -n "${POLYGLOT_TEST_DROP_NAV_BAR_LANG:-}" ]; then
     REMOTE_ENV+=("POLYGLOT_TEST_DROP_NAV_BAR_LANG=${POLYGLOT_TEST_DROP_NAV_BAR_LANG}")
   fi
+  if [ -n "${POLYGLOT_TEST_CORRUPT_RECEIPT_LANG:-}" ]; then
+    REMOTE_ENV+=("POLYGLOT_TEST_CORRUPT_RECEIPT_LANG=${POLYGLOT_TEST_CORRUPT_RECEIPT_LANG}")
+  fi
+  if [ -n "${POLYGLOT_TEST_NODE_TAR_URL:-}" ]; then
+    REMOTE_ENV+=("POLYGLOT_TEST_NODE_TAR_URL=${POLYGLOT_TEST_NODE_TAR_URL}")
+  fi
+  if [ -n "${POLYGLOT_TEST_OLLAMA_TAR_URL:-}" ]; then
+    REMOTE_ENV+=("POLYGLOT_TEST_OLLAMA_TAR_URL=${POLYGLOT_TEST_OLLAMA_TAR_URL}")
+  fi
 fi
 
+colab_check_pre_exec_cap "${OUT_DIR}"
 EXEC_IN_FLIGHT=1
 colab_run_exec_with_live_guards \
   "${PY_BIN}" "${GUARDS_PY}" "${SESSION}" "${RUNNER_PY}" \
   "${START_EPOCH}" "${WALL_S}" "${GRACE_S}" "${CAP}" "${MARGIN}" "${OUT_DIR}" \
   "${REMOTE_ENV[@]}"
-EXEC_IN_FLIGHT=0
 
 # Download result bundle and unpack translated files, SHA256SUMS, and manifest.json into OUT_DIR
+# (EXEC_IN_FLIGHT stays 1 across colab_download_checked so a failed or timed-out normal download
+# still triggers post-failure salvage in cleanup_on_exit.)
 BUNDLE_LOCAL="${OUT_DIR}/polyglot_translate_bundle.tar.gz"
 colab_download_checked "${SESSION}" /content/polyglot_translate_bundle.tar.gz "${BUNDLE_LOCAL}" "${OUT_DIR}"
+EXEC_IN_FLIGHT=0
 
 "${PY_BIN}" - "${BUNDLE_LOCAL}" "${OUT_DIR}" << 'UNPACKPYEOF'
 import shutil
@@ -1134,7 +1284,10 @@ extract_dir = out_dir / "bundle_extracted"
 extract_dir.mkdir(parents=True, exist_ok=True)
 
 with tarfile.open(bundle, "r:gz") as tf:
-    tf.extractall(extract_dir, filter="data")
+    try:
+        tf.extractall(extract_dir, filter="data")
+    except TypeError:
+        tf.extractall(extract_dir)
 
 for name in ("manifest.json", "SHA256SUMS", "fit_probe.json", "vm_window.json"):
     src = extract_dir / name

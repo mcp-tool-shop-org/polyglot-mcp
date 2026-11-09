@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
+# Ported from style-dataset-lab scripts/colab/colab_window.sh at commit
+# 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2 (#69 merge; includes #71).
+# Polyglot adaptations:
+#   - lane == "translate" shares the 1150 s / 1290 s salvage cleanup bounds with "train";
+#   - MSYS/Git-Bash compatibility for backgrounded salvage step and wall-watcher process tracking;
+#   - polyglot-mcp REFUSAL_CODES (including TRANSLATION_UNVERIFIED);
+#   - style-dataset-lab #72 item 1 fix: preserve end_balance.txt on failed closing colab usage
+#     and record spend_ccu = max(start - end, rate * elapsed / 3600) plus dual spend bounds in window.json.
 # Shared Colab window lifecycle, lock, live wall/cap/vitals/RAM guards, token scrubber, and EXIT trap.
 #
 # Bounded cleanup and salvage contract (every step runs under `timeout -k` in a subshell with
 # default SIGTERM/SIGINT dispositions so a wedged child is killed by SIGKILL after the grace):
 #   COLAB_KILL_GRACE_S_DEFAULT=10               (`timeout -k 10` SIGTERM->SIGKILL grace)
+#   COLAB_OPEN_LOCK_TIMEOUT_S_DEFAULT=180       (3 min + 10 s -k = 190 s wait on /tmp/colab-window-open.lock)
+#   COLAB_NEW_TIMEOUT_S_DEFAULT=180             (3 min + 10 s -k = 190 s on `colab new`)
+#   COLAB_UPLOAD_TIMEOUT_S_DEFAULT=120          (2 min + 10 s -k = 130 s per `colab upload`)
+#   COLAB_WALL_ESCALATE_S_DEFAULT=30            (watcher first wait = max(COLAB_WALL_ESCALATE_S, COLAB_IN_FLIGHT_BOUND_S))
 #   COLAB_DOWNLOAD_TIMEOUT_S_DEFAULT=300        (5 min + 10 s -k = 310 s when bundle size is unknown)
 #   COLAB_SALVAGE_RESTART_TIMEOUT_S_DEFAULT=180 (3 min + 10 s -k = 190 s on `colab restart-kernel`)
 #   COLAB_SALVAGE_EXEC_TIMEOUT_S_DEFAULT=330    (330 s + 10 s -k = 340 s over bundle-now `--timeout 300`)
@@ -12,14 +24,31 @@
 #                                                past it, cleanup skips remaining salvage and runs `colab stop`)
 #   COLAB_STOP_TIMEOUT_S_DEFAULT=60             (60 s + 10 s -k = 70 s per `colab stop` attempt)
 #   COLAB_STOP_ATTEMPTS_DEFAULT=2               (1 retry -> 2 * 70 = 140 s worst-case stop bound)
-#   COLAB_SESSIONS_TIMEOUT_S_DEFAULT=30         (30 s + 10 s -k = 40 s on closing `colab sessions`)
-# Worst-case time from guard trip to `colab stop` attempted (`cleanup_stop_attempted_by_s`) and
-# total cleanup bound through `colab stop` completion (`cleanup_bound_s`):
-#   Lane 3 (train):  cleanup_stop_attempted_by_s = 840 s, cleanup_bound_s = 840 + 140 = 980 s
-#   Lane 1 (render): cleanup_stop_attempted_by_s = 0 s,   cleanup_bound_s = 140 s
+#   COLAB_SESSIONS_TIMEOUT_S_DEFAULT=30         (30 s + 10 s -k = 40 s on `colab sessions`)
+# Worst-case time measured from the guard trip to `colab stop` attempted (`cleanup_stop_attempted_by_s`)
+# and total cleanup bound from the trip through `colab stop` completion (`cleanup_bound_s`):
+#   in_flight_bound_s = max(COLAB_DOWNLOAD_TIMEOUT_S, COLAB_UPLOAD_TIMEOUT_S, COLAB_SESSIONS_TIMEOUT_S) + COLAB_KILL_GRACE_S
+#                     = 300 + 10 = 310 s
+#   first_wait_s      = max(COLAB_WALL_ESCALATE_S, COLAB_IN_FLIGHT_BOUND_S) = max(30, 310) = 310 s from trip
+#   second_wait_s     = cleanup_stop_attempted_by_s = in_flight_bound_s + salvage_bound_s, measured from trip
+#   Lane 3 (train):  cleanup_stop_attempted_by_s = 310 + 840 = 1150 s,
+#                    cleanup_bound_s = 310 + 840 + 140 = 1290 s
+#   Lane 1 (render): cleanup_stop_attempted_by_s = 310 + 0 = 310 s,
+#                    cleanup_bound_s = 310 + 0 + 140 = 450 s
+# Cap guard cleanup reserve (reserves cleanup_bound_s before the trip so total spend stays <= cap):
+#   effective_trip = cap - margin - cleanup_reserve; cleanup_reserve = (cleanup_bound_s / 3600) * priced_rate
+#   Refuses CAP_TOO_SMALL_FOR_CLEANUP before any colab call when effective_trip <= 0 or when
+#   runtime_to_trip < --min-runtime-s; --dry prints the trip arithmetic and exits.
 set -euo pipefail
+export MSYS2_ARG_CONV_EXCL="/content;SDLAB_"
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
 
 COLAB_KILL_GRACE_S_DEFAULT=10
+COLAB_OPEN_LOCK_TIMEOUT_S_DEFAULT=180
+COLAB_NEW_TIMEOUT_S_DEFAULT=180
+COLAB_UPLOAD_TIMEOUT_S_DEFAULT=120
+COLAB_WALL_ESCALATE_S_DEFAULT=30
 COLAB_DOWNLOAD_TIMEOUT_S_DEFAULT=300
 COLAB_SALVAGE_RESTART_TIMEOUT_S_DEFAULT=180
 COLAB_SALVAGE_EXEC_TIMEOUT_S_DEFAULT=330
@@ -30,6 +59,10 @@ COLAB_STOP_ATTEMPTS_DEFAULT=2
 COLAB_SESSIONS_TIMEOUT_S_DEFAULT=30
 
 export COLAB_KILL_GRACE_S="${COLAB_KILL_GRACE_S_DEFAULT}"
+export COLAB_OPEN_LOCK_TIMEOUT_S="${COLAB_OPEN_LOCK_TIMEOUT_S_DEFAULT}"
+export COLAB_NEW_TIMEOUT_S="${COLAB_NEW_TIMEOUT_S_DEFAULT}"
+export COLAB_UPLOAD_TIMEOUT_S="${COLAB_UPLOAD_TIMEOUT_S_DEFAULT}"
+export COLAB_WALL_ESCALATE_S="${COLAB_WALL_ESCALATE_S_DEFAULT}"
 export COLAB_DOWNLOAD_TIMEOUT_S="${COLAB_DOWNLOAD_TIMEOUT_S_DEFAULT}"
 export COLAB_SALVAGE_RESTART_TIMEOUT_S="${COLAB_SALVAGE_RESTART_TIMEOUT_S_DEFAULT}"
 export COLAB_SALVAGE_EXEC_TIMEOUT_S="${COLAB_SALVAGE_EXEC_TIMEOUT_S_DEFAULT}"
@@ -40,6 +73,7 @@ export COLAB_STOP_ATTEMPTS="${COLAB_STOP_ATTEMPTS_DEFAULT}"
 export COLAB_SESSIONS_TIMEOUT_S="${COLAB_SESSIONS_TIMEOUT_S_DEFAULT}"
 COLAB_CLEANUP_SIGNAL_COUNT=0
 COLAB_CLEANUP_SKIP_SALVAGE=0
+COLAB_SALVAGE_STEP_PID=""
 
 # colab_apply_test_cleanup_overrides <test_mode>: in fake-colab test mode only, allow short per-step
 # timeouts and salvage deadline so tests can exercise hung children and `timeout -k` in seconds.
@@ -49,9 +83,30 @@ colab_apply_test_cleanup_overrides() {
   if [ -n "${SDLAB_TEST_KILL_GRACE_S:-}" ]; then
     export COLAB_KILL_GRACE_S="${SDLAB_TEST_KILL_GRACE_S}"
   fi
+  if [ -n "${SDLAB_TEST_OPEN_LOCK_TIMEOUT_S:-}" ]; then
+    export COLAB_OPEN_LOCK_TIMEOUT_S="${SDLAB_TEST_OPEN_LOCK_TIMEOUT_S}"
+  fi
+  if [ -n "${SDLAB_TEST_NEW_TIMEOUT_S:-}" ]; then
+    export COLAB_NEW_TIMEOUT_S="${SDLAB_TEST_NEW_TIMEOUT_S}"
+  fi
+  if [ -n "${SDLAB_TEST_UPLOAD_TIMEOUT_S:-}" ]; then
+    export COLAB_UPLOAD_TIMEOUT_S="${SDLAB_TEST_UPLOAD_TIMEOUT_S}"
+  fi
+  if [ -n "${SDLAB_TEST_WALL_ESCALATE_S:-}" ]; then
+    export COLAB_WALL_ESCALATE_S="${SDLAB_TEST_WALL_ESCALATE_S}"
+  fi
+  if [ -n "${SDLAB_TEST_RATE_READ_INTERVAL_S:-}" ]; then
+    export COLAB_RATE_READ_INTERVAL_S="${SDLAB_TEST_RATE_READ_INTERVAL_S}"
+  fi
   if [ -n "${SDLAB_TEST_DOWNLOAD_TIMEOUT_S:-}" ]; then
     export COLAB_DOWNLOAD_TIMEOUT_S="${SDLAB_TEST_DOWNLOAD_TIMEOUT_S}"
     export COLAB_SALVAGE_DOWNLOAD_TIMEOUT_S="${SDLAB_TEST_DOWNLOAD_TIMEOUT_S}"
+    if [ -z "${SDLAB_TEST_UPLOAD_TIMEOUT_S:-}" ] && [ "${COLAB_UPLOAD_TIMEOUT_S}" -gt "${COLAB_DOWNLOAD_TIMEOUT_S}" ]; then
+      export COLAB_UPLOAD_TIMEOUT_S="${SDLAB_TEST_DOWNLOAD_TIMEOUT_S}"
+    fi
+    if [ -z "${SDLAB_TEST_SESSIONS_TIMEOUT_S:-}" ] && [ "${COLAB_SESSIONS_TIMEOUT_S}" -gt "${COLAB_DOWNLOAD_TIMEOUT_S}" ]; then
+      export COLAB_SESSIONS_TIMEOUT_S="${SDLAB_TEST_DOWNLOAD_TIMEOUT_S}"
+    fi
   fi
   if [ -n "${SDLAB_TEST_SALVAGE_RESTART_TIMEOUT_S:-}" ]; then
     export COLAB_SALVAGE_RESTART_TIMEOUT_S="${SDLAB_TEST_SALVAGE_RESTART_TIMEOUT_S}"
@@ -75,6 +130,48 @@ colab_apply_test_cleanup_overrides() {
   fi
 }
 
+# colab_compute_cleanup_bounds <lane>: compute and export COLAB_CLEANUP_STOP_ATTEMPTED_BY_S and
+# COLAB_CLEANUP_BOUND_S measured from the trip for <lane> ("train" = 1150 s / 1290 s default;
+# "render" = 310 s / 450 s default): longest in-flight bounded step + salvage + stop, so the
+# pre-open cap budget check, --dry, the live cap guard, and window.json all share one figure.
+colab_compute_cleanup_bounds() {
+  local lane="$1"
+  local kill_grace_s="${COLAB_KILL_GRACE_S:-10}"
+  local dl_timeout_s="${COLAB_DOWNLOAD_TIMEOUT_S:-300}"
+  local up_timeout_s="${COLAB_UPLOAD_TIMEOUT_S:-120}"
+  local sess_timeout_s="${COLAB_SESSIONS_TIMEOUT_S:-30}"
+  local in_flight_step_s="${dl_timeout_s}"
+  if [ "${up_timeout_s}" -gt "${in_flight_step_s}" ]; then
+    in_flight_step_s="${up_timeout_s}"
+  fi
+  if [ "${sess_timeout_s}" -gt "${in_flight_step_s}" ]; then
+    in_flight_step_s="${sess_timeout_s}"
+  fi
+  local in_flight_bound_s=$(( in_flight_step_s + kill_grace_s ))
+  local salvage_restart_s="${COLAB_SALVAGE_RESTART_TIMEOUT_S:-180}"
+  local salvage_exec_s="${COLAB_SALVAGE_EXEC_TIMEOUT_S:-330}"
+  local salvage_download_s="${COLAB_SALVAGE_DOWNLOAD_TIMEOUT_S:-300}"
+  local salvage_steps_sum=$(( (salvage_restart_s + kill_grace_s) \
+    + (salvage_exec_s + kill_grace_s) \
+    + (salvage_download_s + kill_grace_s) ))
+  local salvage_deadline_s="${SALVAGE_DEADLINE_S:-${salvage_steps_sum}}"
+  local stop_timeout_s="${COLAB_STOP_TIMEOUT_S:-60}"
+  local stop_attempts="${COLAB_STOP_ATTEMPTS:-2}"
+  local stop_bound_s=$(( stop_attempts * (stop_timeout_s + kill_grace_s) ))
+  local salvage_bound_s=0
+  if [ "${lane}" = "train" ] || [ "${lane}" = "translate" ]; then
+    salvage_bound_s="${salvage_steps_sum}"
+    if [ "${salvage_deadline_s}" -lt "${salvage_bound_s}" ]; then
+      salvage_bound_s="${salvage_deadline_s}"
+    fi
+  fi
+  local cleanup_stop_attempted_by_s=$(( in_flight_bound_s + salvage_bound_s ))
+  export COLAB_LANE="${lane}"
+  export COLAB_IN_FLIGHT_BOUND_S="${in_flight_bound_s}"
+  export COLAB_CLEANUP_STOP_ATTEMPTED_BY_S="${cleanup_stop_attempted_by_s}"
+  export COLAB_CLEANUP_BOUND_S=$(( cleanup_stop_attempted_by_s + stop_bound_s ))
+}
+
 # colab_run_bounded <timeout_s> <kill_grace_s> <cmd> [args...]: run a command under `timeout -k`
 # in a subshell that resets TERM and INT to default dispositions (`trap - TERM INT`) before exec.
 # Children never inherit SIG_IGN, so `timeout`'s initial SIGTERM can terminate well-behaved
@@ -85,6 +182,9 @@ colab_run_bounded() {
   shift 2
   (
     trap - TERM INT
+    if [ -n "${COLAB_ACTIVE_OUT_DIR:-}" ] && [ -d "${COLAB_ACTIVE_OUT_DIR}" ]; then
+      printf '%s\n' "${BASHPID:-$$}" >> "${COLAB_ACTIVE_OUT_DIR}/.watcher_tracked_pids.txt" 2>/dev/null || true
+    fi
     exec timeout -k "${kill_grace_s}" "${timeout_s}" "$@" </dev/null
   )
 }
@@ -100,8 +200,8 @@ colab_rc_is_timeout() {
 # `trap '' TERM INT`. Because a shell function handles TERM/INT rather than ignoring them (`SIG_IGN`),
 # child processes spawned from `cleanup_on_exit` inherit default signal dispositions (`SIG_DFL`) on
 # exec, while a late TERM/INT from the independent wall watcher or operator does not abort cleanup
-# before `colab stop`. A second signal sets COLAB_CLEANUP_SKIP_SALVAGE=1 so cleanup skips any
-# remaining salvage step and goes straight to `colab stop`.
+# before `colab stop`. A second signal sets COLAB_CLEANUP_SKIP_SALVAGE=1 and kills any in-flight
+# salvage step so cleanup skips remaining salvage and goes straight to `colab stop`.
 colab_on_cleanup_signal() {
   local out_dir="$1"
   COLAB_CLEANUP_SIGNAL_COUNT=$((COLAB_CLEANUP_SIGNAL_COUNT + 1))
@@ -109,15 +209,65 @@ colab_on_cleanup_signal() {
   if [ "${COLAB_CLEANUP_SIGNAL_COUNT}" -ge 2 ]; then
     COLAB_CLEANUP_SKIP_SALVAGE=1
     action="skip_remaining_salvage"
+    if [ -n "${COLAB_SALVAGE_STEP_PID:-}" ]; then
+      pkill -9 -P "${COLAB_SALVAGE_STEP_PID}" 2>/dev/null || true
+      kill -9 "${COLAB_SALVAGE_STEP_PID}" 2>/dev/null || true
+    fi
   fi
   if [ -n "${out_dir}" ] && [ -d "${out_dir}" ]; then
     printf 'CLEANUP_SIGNAL count=%s action=%s\n' "${COLAB_CLEANUP_SIGNAL_COUNT}" "${action}" >> "${out_dir}/guards.log"
   fi
 }
 
-# colab_enter_cleanup_trap <out_dir>: arm cleanup signal handling at the start of `cleanup_on_exit`.
+# colab_run_bounded_salvage_step <timeout_s> <kill_grace_s> <cmd> [args...]: run a salvage step in a
+# backgrounded Python wrapper that resets SIGTERM and SIGINT to SIG_DFL and execs `timeout -k`, while
+# waiting in an interruptible `wait` loop in the main shell so a first TERM logs and continues and a
+# second TERM aborts the in-flight salvage step immediately.
+colab_run_bounded_salvage_step() {
+  local timeout_s="$1"
+  local kill_grace_s="$2"
+  shift 2
+  (
+    trap - TERM INT
+    if [ -n "${COLAB_ACTIVE_OUT_DIR:-}" ] && [ -d "${COLAB_ACTIVE_OUT_DIR}" ]; then
+      printf '%s\n' "${BASHPID:-$$}" >> "${COLAB_ACTIVE_OUT_DIR}/.watcher_tracked_pids.txt" 2>/dev/null || true
+    fi
+    exec timeout -k "${kill_grace_s}" "${timeout_s}" "$@" </dev/null
+  ) &
+  COLAB_SALVAGE_STEP_PID="$!"
+  if [ -n "${COLAB_ACTIVE_OUT_DIR:-}" ] && [ -d "${COLAB_ACTIVE_OUT_DIR}" ]; then
+    printf '%s\n' "${COLAB_SALVAGE_STEP_PID}" >> "${COLAB_ACTIVE_OUT_DIR}/.watcher_tracked_pids.txt" 2>/dev/null || true
+  fi
+  local step_rc=0
+  while true; do
+    step_rc=0
+    wait "${COLAB_SALVAGE_STEP_PID}" 2>/dev/null || step_rc=$?
+    if ! kill -0 "${COLAB_SALVAGE_STEP_PID}" 2>/dev/null; then
+      break
+    fi
+    if [ "${COLAB_CLEANUP_SKIP_SALVAGE:-0}" = "1" ]; then
+      pkill -9 -P "${COLAB_SALVAGE_STEP_PID}" 2>/dev/null || true
+      kill -9 "${COLAB_SALVAGE_STEP_PID}" 2>/dev/null || true
+      wait "${COLAB_SALVAGE_STEP_PID}" 2>/dev/null || true
+      step_rc=143
+      break
+    fi
+  done
+  COLAB_SALVAGE_STEP_PID=""
+  return "${step_rc}"
+}
+
+# colab_enter_cleanup_trap <out_dir>: arm cleanup signal handling and record the cleanup start
+# epoch (`time.time()` float seconds, matching wall_trip_epoch.txt) in cleanup_started.txt
+# at the very top of `cleanup_on_exit` (before post-failure salvage) so `colab_run_wall_watcher`
+# knows the main shell entered cleanup and waits up to COLAB_CLEANUP_STOP_ATTEMPTED_BY_S for salvage.
 colab_enter_cleanup_trap() {
   local out_dir="$1"
+  if [ -n "${out_dir}" ] && [ -d "${out_dir}" ] && [ ! -f "${out_dir}/cleanup_started.txt" ]; then
+    local py_bin="${PY_BIN:-$(colab_resolve_python)}"
+    "${py_bin}" -c 'import sys, time; open(sys.argv[1], "w", encoding="utf-8").write(f"{time.time():.6f}\n")' "${out_dir}/cleanup_started.txt" 2>/dev/null \
+      || date -u +%s > "${out_dir}/cleanup_started.txt"
+  fi
   trap - EXIT
   trap 'colab_on_cleanup_signal "'"${out_dir}"'"' TERM INT
 }
@@ -244,9 +394,10 @@ _colab_http_status() {
 }
 
 # colab_upload_checked <session> <local> <remote> <out_dir>: upload one file into COLAB_REMOTE_ROOT.
-# Refuses REMOTE_PARENT_UNVERIFIED (before any call) for a destination in any other directory, and
-# UPLOAD_FAILED (keeping the HTTP status) when the CLI exits non-zero or does not print its success
-# line. The CLI's own text, which can carry the session token in a URL, goes to colab.log only.
+# Bounded by `timeout -k ${COLAB_KILL_GRACE_S} ${COLAB_UPLOAD_TIMEOUT_S}` (default 120 s + 10 s -k = 130 s).
+# Refuses REMOTE_PARENT_UNVERIFIED (before any call) for a destination in any other directory, logs
+# `UPLOAD_TIMEOUT` on timeout, and refuses UPLOAD_FAILED (keeping the HTTP status) when the CLI exits
+# non-zero or does not print its success line. The CLI's own text goes to colab.log only.
 colab_upload_checked() {
   local session="$1"
   local src="$2"
@@ -261,21 +412,29 @@ colab_upload_checked() {
     colab_refuse_logged "${out_dir}" UPLOAD_FAILED "${src} -> ${dst}: local file missing (http=none)"
     return 1
   fi
+  colab_check_pre_exec_cap "${out_dir}" "pre_upload" || return 1
+  local upload_timeout="${COLAB_UPLOAD_TIMEOUT_S:-120}"
+  local kill_grace="${COLAB_KILL_GRACE_S:-10}"
   local out=""
   local rc=0
-  out="$(colab upload -s "${session}" "${src}" "${dst}" </dev/null 2>&1)" || rc=$?
+  out="$(colab_run_bounded "${upload_timeout}" "${kill_grace}" colab upload -s "${session}" "${src}" "${dst}" 2>&1)" || rc=$?
   printf '%s\n' "${out}" >> "${out_dir}/colab.log"
+  if colab_rc_is_timeout "${rc}"; then
+    echo "UPLOAD_TIMEOUT ${src} -> ${dst} timeout_s=${upload_timeout} kill_grace_s=${kill_grace} rc=${rc}" >> "${out_dir}/guards.log"
+  fi
   if [ "${rc}" -ne 0 ] || ! grep -Fq "[colab] Uploaded '" <<< "${out}"; then
     colab_refuse_logged "${out_dir}" UPLOAD_FAILED "${src} -> ${dst}: colab upload rc=${rc} http=$(_colab_http_status "${out}") (CLI output in colab.log)"
     return 1
   fi
+  colab_check_pre_exec_cap "${out_dir}" "post_upload" || return 1
 }
 
 # colab_download_checked <session> <remote> <local> <out_dir>: the CLI writes the local file with a
 # plain open() and creates no local directory, so the local parent is checked first. Bounded by
 # `timeout -k ${COLAB_KILL_GRACE_S} ${COLAB_DOWNLOAD_TIMEOUT_S}` (default 300 s + 10 s -k = 310 s
-# when bundle size is unknown); logs `SALVAGE_STEP_TIMEOUT download` on timeout and refuses
-# DOWNLOAD_FAILED (keeping the HTTP status; 404 when the remote file is missing).
+# when bundle size is unknown); logs `SALVAGE_STEP_TIMEOUT download` on timeout, removes any partial
+# local file so post-failure salvage still runs, and refuses DOWNLOAD_FAILED (keeping the HTTP status;
+# 404 when the remote file is missing).
 colab_download_checked() {
   local session="$1"
   local src="$2"
@@ -297,6 +456,7 @@ colab_download_checked() {
     echo "SALVAGE_STEP_TIMEOUT download timeout_s=${dl_timeout} kill_grace_s=${kill_grace} rc=${rc}" >> "${out_dir}/guards.log"
   fi
   if [ "${rc}" -ne 0 ] || ! grep -Fq "[colab] Downloaded '" <<< "${out}" || [ ! -s "${dst}" ]; then
+    rm -f "${dst}"
     colab_refuse_logged "${out_dir}" DOWNLOAD_FAILED "${src} -> ${dst}: colab download rc=${rc} http=$(_colab_http_status "${out}") (CLI output in colab.log)"
     return 1
   fi
@@ -467,8 +627,7 @@ if parsed["ok"]:
 else:
     err_msg = str(parsed["error"] or "COLAB_USAGE_PARSE_FAILED")
     err_f.write_text(f"{err_msg}\n", encoding="utf-8", newline="\n")
-    if end_f.exists():
-        end_f.unlink()
+    # style-dataset-lab #72 item 1 fix: keep last good end_balance.txt instead of unlinking it.
     start_bal_str = start_f.read_text(encoding="utf-8").strip() if start_f.exists() else "NONE"
     cur_bal_str = "NONE"
     rate_proj_f.write_text(f"{parsed['rate_for_projection']}\n", encoding="utf-8", newline="\n")
@@ -501,6 +660,7 @@ colab_read_post_open_rate() {
   while [ "${i}" -lt "${polls}" ]; do
     i=$((i + 1))
     colab_poll_usage_and_ram "${py_bin}" "${out_dir}" >/dev/null 2>&1 || true
+    colab_check_pre_exec_cap "${out_dir}" "rate_poll_${i}" || return 1
     decision="$("${py_bin}" - "${guards_dir}" "${out_dir}" "${max_rate}" << 'PYEOF'
 import json, sys
 from pathlib import Path
@@ -512,7 +672,10 @@ print(lg.window_rate_decision(state, float(sys.argv[3])))
 PYEOF
 )"
     [ "${decision}" != "unread" ] && break
-    [ "${i}" -lt "${polls}" ] && sleep "${interval_s}"
+    if [ "${i}" -lt "${polls}" ]; then
+      sleep "${interval_s}"
+      colab_check_pre_exec_cap "${out_dir}" "rate_poll_sleep_${i}" || return 1
+    fi
   done
   "${py_bin}" - "${out_dir}" "${max_rate}" "${i}" "${decision}" << 'PYEOF'
 import json, sys
@@ -605,6 +768,7 @@ colab_check_cap_and_ram() {
     "--grace-s" "${grace_s}"
     "--cap" "${cap}"
     "--margin" "${margin}"
+    "--cleanup-bound-s" "${COLAB_CLEANUP_BOUND_S:-0}"
     "--rate" "${rate_val:-0.26}"
   )
   if [ "${start_bal}" != "NONE" ] && [ -n "${start_bal}" ]; then
@@ -625,9 +789,6 @@ colab_check_cap_and_ram() {
     guard_args+=("--usage-parse-error" "${err_detail}")
   fi
 
-  if [ "${mode}" = "live" ] && ! colab_midrun_rate_check "${py_bin}" "${out_dir}"; then
-    return 1
-  fi
   # Every guard trip below is a named refusal (REFUSED: <CODE>: <why> in guards.log, where
   # window.json reads refusal_code and why), and its record, with the numbers that tripped it,
   # goes to guards.log first. A trip used to leave refusal_code null: the wall/cap record had no
@@ -635,6 +796,9 @@ colab_check_cap_and_ram() {
   local guard_rc=0 guard_out=""
   guard_out="$("${py_bin}" "${guards_py}" "${guard_args[@]}" </dev/null)" || guard_rc=$?
   [ -n "${guard_out}" ] && printf '%s\n' "${guard_out}" >> "${out_dir}/guards.log"
+  if [ "${mode}" = "live" ] && ! colab_midrun_rate_check "${py_bin}" "${out_dir}"; then
+    return 1
+  fi
   if [ "${guard_rc}" -ne 0 ]; then
     colab_refuse_from_guard_record "${py_bin}" "${out_dir}" "${guard_out}" GUARD_FAILED
     return 1
@@ -722,6 +886,7 @@ colab_run_exec_with_live_guards() {
 
   colab exec "${exec_args[@]}" </dev/null > "${out_dir}/vitals.log" 2>&1 &
   EXEC_PID="$!"
+  printf '%s\n' "${EXEC_PID}" >> "${out_dir}/.watcher_tracked_pids.txt" 2>/dev/null || true
 
   while kill -0 "${EXEC_PID}" 2>/dev/null; do
     sleep "${poll_s}"
@@ -730,7 +895,11 @@ colab_run_exec_with_live_guards() {
     fi
     local now_epoch elapsed_s cur_size idle_s cur_setup_bytes setup_idle_s run_only_bytes
     now_epoch="$(date -u +%s)"
-    elapsed_s="$((now_epoch - start_epoch))"
+    if [ -f "${out_dir}/session_open_epoch.txt" ]; then
+      elapsed_s="$("${py_bin}" -c 'import sys, time; print(f"{max(0.0, time.time() - float(open(sys.argv[1], encoding="utf-8").read().strip())):.6f}")' "${out_dir}/session_open_epoch.txt" 2>/dev/null || echo "$((now_epoch - start_epoch))")"
+    else
+      elapsed_s="$((now_epoch - start_epoch))"
+    fi
 
     local check_rc=0
     colab_check_cap_and_ram "${py_bin}" "${guards_py}" "live" "${elapsed_s}" "${wall_s}" "${grace_s}" "${cap}" "${margin}" "${out_dir}" || check_rc=$?
@@ -846,7 +1015,7 @@ colab_salvage_bundle_after_failure() {
     step_t="${restart_t}"
     [ "${remaining_s}" -lt "${step_t}" ] && step_t="${remaining_s}"
     local restart_rc=0
-    colab_run_bounded "${step_t}" "${kill_grace}" colab restart-kernel -s "${session}" >> "${out_dir}/bundle_now.log" 2>&1 || restart_rc=$?
+    colab_run_bounded_salvage_step "${step_t}" "${kill_grace}" colab restart-kernel -s "${session}" >> "${out_dir}/bundle_now.log" 2>&1 || restart_rc=$?
     if colab_rc_is_timeout "${restart_rc}"; then
       echo "SALVAGE_STEP_TIMEOUT restart-kernel timeout_s=${step_t} kill_grace_s=${kill_grace} rc=${restart_rc}" >> "${out_dir}/guards.log"
     fi
@@ -861,7 +1030,7 @@ colab_salvage_bundle_after_failure() {
     step_t="${exec_t}"
     [ "${remaining_s}" -lt "${step_t}" ] && step_t="${remaining_s}"
     local exec_rc=0
-    colab_run_bounded "${step_t}" "${kill_grace}" colab exec -s "${session}" -f "${bundle_now_py}" --timeout 300 \
+    colab_run_bounded_salvage_step "${step_t}" "${kill_grace}" colab exec -s "${session}" -f "${bundle_now_py}" --timeout 300 \
       --env "SDLAB_CONTENT=/content" --env "SDLAB_BUNDLE_RC=${failed_rc}" >> "${out_dir}/bundle_now.log" 2>&1 || exec_rc=$?
     if colab_rc_is_timeout "${exec_rc}"; then
       echo "SALVAGE_STEP_TIMEOUT bundle-now timeout_s=${step_t} kill_grace_s=${kill_grace} rc=${exec_rc}" >> "${out_dir}/guards.log"
@@ -879,7 +1048,9 @@ colab_salvage_bundle_after_failure() {
     remaining_s=$((deadline_s - elapsed_s))
     step_t="${dl_t}"
     [ "${remaining_s}" -lt "${step_t}" ] && step_t="${remaining_s}"
-    dl_out="$(colab_run_bounded "${step_t}" "${kill_grace}" colab download -s "${session}" "${remote_path}" "${local_dst}" 2>&1)" || dl_rc=$?
+    colab_run_bounded_salvage_step "${step_t}" "${kill_grace}" colab download -s "${session}" "${remote_path}" "${local_dst}" > "${out_dir}/.salvage_dl.out" 2>&1 || dl_rc=$?
+    dl_out="$(cat "${out_dir}/.salvage_dl.out" 2>/dev/null || true)"
+    rm -f "${out_dir}/.salvage_dl.out"
     printf '%s\n' "${dl_out}" >> "${out_dir}/colab.log"
     if colab_rc_is_timeout "${dl_rc}"; then
       echo "SALVAGE_STEP_TIMEOUT download timeout_s=${step_t} kill_grace_s=${kill_grace} rc=${dl_rc}" >> "${out_dir}/guards.log"
@@ -907,16 +1078,21 @@ colab_stop_and_log_closing() {
     local stop_rc=0
     colab_run_bounded "${stop_timeout}" "${kill_grace}" colab stop -s "${session}" >> "${out_dir}/colab.log" 2>&1 || stop_rc=$?
     if [ "${stop_rc}" -eq 0 ]; then
+      echo "STOP_COMPLETED attempt=${attempt}/${attempts} session=${session}" >> "${out_dir}/guards.log"
+      echo "STOP_COMPLETED attempt=${attempt}/${attempts} session=${session}" >> "${out_dir}/stop.log"
       break
     fi
     if colab_rc_is_timeout "${stop_rc}"; then
       echo "STOP_TIMEOUT attempt=${attempt}/${attempts} session=${session} timeout_s=${stop_timeout} kill_grace_s=${kill_grace} rc=${stop_rc}" >> "${out_dir}/guards.log"
+      echo "STOP_TIMEOUT attempt=${attempt}/${attempts} session=${session} timeout_s=${stop_timeout} kill_grace_s=${kill_grace} rc=${stop_rc}" >> "${out_dir}/stop.log"
     else
       echo "STOP_FAILED attempt=${attempt}/${attempts} session=${session} rc=${stop_rc}" >> "${out_dir}/guards.log"
+      echo "STOP_FAILED attempt=${attempt}/${attempts} session=${session} rc=${stop_rc}" >> "${out_dir}/stop.log"
     fi
     if [ "${attempt}" -lt "${attempts}" ]; then
       local next_attempt=$((attempt + 1))
       echo "STOP_RETRY attempt=${next_attempt}/${attempts} session=${session}" >> "${out_dir}/guards.log"
+      echo "STOP_RETRY attempt=${next_attempt}/${attempts} session=${session}" >> "${out_dir}/stop.log"
     fi
     attempt=$((attempt + 1))
   done
@@ -1029,6 +1205,198 @@ colab_shape_gate_arm() {
   printf '%s\n' "${shape}" > "${out_dir}/shape_requested.txt"
 }
 
+# colab_dry_cap_budget <py_bin> <guards_py> <lane> <card> <cap> <margin> <max_rate> <default_rate> <min_runtime_s>:
+# print the cap trip arithmetic (launch_guards.py --dry) and exit before any colab call.
+colab_dry_cap_budget() {
+  local py_bin="$1"
+  local guards_py="$2"
+  local lane="$3"
+  local card="$4"
+  local cap="$5"
+  local margin="$6"
+  local max_rate="$7"
+  local default_rate="$8"
+  local min_runtime_s="$9"
+  colab_compute_cleanup_bounds "${lane}"
+  local priced_rate="${default_rate}"
+  local eff_max_rate="${max_rate:-${default_rate}}"
+  if ! colab_card_is_cpu "${card}"; then
+    if ! [[ "${max_rate}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "${max_rate}" =~ ^0+(\.0+)?$ ]]; then
+      echo "REFUSED: MAX_RATE_REQUIRED: a GPU card (${card}) needs --max-rate <units/h>, the highest window rate it may run at" >&2
+      return 2
+    fi
+    priced_rate="${max_rate}"
+    eff_max_rate="${max_rate}"
+  fi
+  local dry_args=(
+    "--dry"
+    "--cap" "${cap}"
+    "--margin" "${margin}"
+    "--cleanup-bound-s" "${COLAB_CLEANUP_BOUND_S}"
+    "--rate" "${priced_rate}"
+    "--max-rate" "${eff_max_rate}"
+  )
+  if [ -n "${min_runtime_s}" ]; then
+    if ! [[ "${min_runtime_s}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      echo "REFUSED: CAP_TOO_SMALL_FOR_CLEANUP: --min-runtime-s ${min_runtime_s} must be a non-negative number of seconds" >&2
+      return 2
+    fi
+    dry_args+=("--min-runtime-s" "${min_runtime_s}")
+  fi
+  "${py_bin}" "${guards_py}" "${dry_args[@]}" </dev/null
+}
+
+# colab_cap_budget_gate <py_bin> <guards_py> <out_dir> <lane> <card> <cap> <margin> <max_rate> <default_rate> <min_runtime_s>:
+# refuse CAP_TOO_SMALL_FOR_CLEANUP before any colab call when cap - margin - cleanup_reserve <= 0
+# or when the cap leaves less runtime than --min-runtime-s.
+colab_cap_budget_gate() {
+  local py_bin="$1"
+  local guards_py="$2"
+  local out_dir="$3"
+  local lane="$4"
+  local card="$5"
+  local cap="$6"
+  local margin="$7"
+  local max_rate="$8"
+  local default_rate="$9"
+  local min_runtime_s="${10:-}"
+  colab_compute_cleanup_bounds "${lane}"
+  if [ -n "${min_runtime_s}" ] && ! [[ "${min_runtime_s}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    colab_refuse_logged "${out_dir}" CAP_TOO_SMALL_FOR_CLEANUP "--min-runtime-s ${min_runtime_s} must be a non-negative number of seconds"
+    return 2
+  fi
+  local priced_rate="${default_rate}"
+  local eff_max_rate="${default_rate}"
+  if ! colab_card_is_cpu "${card}"; then
+    priced_rate="${max_rate}"
+    eff_max_rate="${max_rate}"
+  fi
+  local budget_args=(
+    "--check-cap-budget"
+    "--cap" "${cap}"
+    "--margin" "${margin}"
+    "--cleanup-bound-s" "${COLAB_CLEANUP_BOUND_S}"
+    "--rate" "${priced_rate}"
+    "--max-rate" "${eff_max_rate}"
+  )
+  if [ -n "${min_runtime_s}" ]; then
+    budget_args+=("--min-runtime-s" "${min_runtime_s}")
+  fi
+  local budget_rc=0 budget_out=""
+  budget_out="$("${py_bin}" "${guards_py}" "${budget_args[@]}" </dev/null 2>/dev/null)" || budget_rc=$?
+  [ -n "${budget_out}" ] && printf '%s\n' "${budget_out}" >> "${out_dir}/guards.log"
+  if [ "${budget_rc}" -ne 0 ]; then
+    colab_refuse_from_guard_record "${py_bin}" "${out_dir}" "${budget_out}" CAP_TOO_SMALL_FOR_CLEANUP
+    return 2
+  fi
+  export COLAB_ACTIVE_PY_BIN="${py_bin}"
+  export COLAB_ACTIVE_GUARDS_PY="${guards_py}"
+  export COLAB_ACTIVE_OUT_DIR="${out_dir}"
+  export COLAB_ACTIVE_CAP="${cap}"
+  export COLAB_ACTIVE_MARGIN="${margin}"
+}
+
+# colab_check_pre_exec_cap <out_dir>: evaluate the cap guard during pre-exec (between `colab new`
+# succeeding and `colab exec` starting: rate polls, shape check, and uploads) using elapsed time
+# since session_open_epoch.txt, the latest account balance, and the priced rate known at that moment
+# (on GPU: max(--max-rate, highest stable window rate so far); on CPU: configured/pre-open rate).
+# On a trip, records phase="pre_exec", logs REFUSED: CAP_GUARD_TRIPPED, and returns 1 so the caller's
+# EXIT trap stops the session immediately (without salvage, since EXEC_IN_FLIGHT=0).
+colab_check_pre_exec_cap() {
+  local out_dir="$1"
+  local checkpoint="${2:-pre_exec}"
+  [ -n "${out_dir}" ] && [ -f "${out_dir}/session_opened.txt" ] || return 0
+  [ "${EXEC_IN_FLIGHT:-0}" != "1" ] && [ ! -f "${out_dir}/cleanup_started.txt" ] && [ ! -f "${out_dir}/stop_reached.txt" ] || return 0
+  local py_bin="${COLAB_ACTIVE_PY_BIN:-${PY_BIN:-}}"
+  local guards_py="${COLAB_ACTIVE_GUARDS_PY:-${GUARDS_PY:-}}"
+  local cap="${COLAB_ACTIVE_CAP:-${CAP:-}}"
+  local margin="${COLAB_ACTIVE_MARGIN:-${MARGIN:-0.01}}"
+  local wall_s="${WALL_S:-1800}"
+  local grace_s="${GRACE_S:-120}"
+  [ -n "${py_bin}" ] && [ -n "${guards_py}" ] && [ -n "${cap}" ] || return 0
+
+  local guard_out=""
+  local guard_rc=0
+  guard_out="$("${py_bin}" - "${guards_py}" "${out_dir}" "${wall_s}" "${grace_s}" "${cap}" "${margin}" "${COLAB_CLEANUP_BOUND_S:-0}" "${COLAB_CARD_CLASS:-cpu}" "${RATE_CCU_PER_HOUR:-0.26}" "${checkpoint}" << 'PYEOF'
+import json, sys, time
+from pathlib import Path
+
+guards_py = Path(sys.argv[1])
+out_dir = Path(sys.argv[2])
+wall_s = float(sys.argv[3])
+grace_s = float(sys.argv[4])
+cap = float(sys.argv[5])
+margin = float(sys.argv[6])
+cleanup_bound_s = float(sys.argv[7])
+card_class = sys.argv[8]
+default_rate = float(sys.argv[9])
+checkpoint = sys.argv[10]
+
+sys.path.insert(0, str(guards_py.parent))
+import launch_guards as lg
+
+def _read_float(p: Path) -> float | None:
+    if not p.is_file():
+        return None
+    try:
+        return float(p.read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+
+open_epoch = _read_float(out_dir / "session_open_epoch.txt")
+elapsed_s = max(0.0, time.time() - open_epoch) if open_epoch is not None else 0.0
+
+if card_class == "gpu":
+    max_rate = _read_float(out_dir / "max_rate.txt") or default_rate
+    state_f = out_dir / "rate_window.json"
+    try:
+        state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.is_file() else {}
+    except Exception:
+        state = {}
+    proj = lg.gpu_projection_rate(state, max_rate)
+    priced_rate = float(proj) if proj is not None and float(proj) > 0.0 else float(max_rate)
+else:
+    priced_rate = _read_float(out_dir / "rate_for_projection.txt") or default_rate
+
+start_bal = _read_float(out_dir / "start_balance.txt")
+cur_bal = _read_float(out_dir / "end_balance.txt")
+if cur_bal is None:
+    cur_bal = start_bal
+err_f = out_dir / "usage_parse_error.txt"
+usage_err = err_f.read_text(encoding="utf-8").strip() if err_f.is_file() and err_f.stat().st_size > 0 else None
+
+argv = [
+    "--mode", "pre_exec",
+    "--phase", "pre_exec",
+    "--checkpoint", checkpoint,
+    "--elapsed-s", f"{elapsed_s:.6f}",
+    "--wall-s", str(wall_s),
+    "--grace-s", str(grace_s),
+    "--cap", str(cap),
+    "--margin", str(margin),
+    "--cleanup-bound-s", str(cleanup_bound_s),
+    "--rate", str(priced_rate),
+]
+if start_bal is not None:
+    argv += ["--start-balance", str(start_bal)]
+if cur_bal is not None:
+    argv += ["--current-balance", str(cur_bal)]
+if usage_err:
+    argv += ["--usage-parse-error", usage_err]
+raise SystemExit(lg.main(argv))
+PYEOF
+)" || guard_rc=$?
+
+  if [ -n "${guard_out}" ]; then
+    printf '%s\n' "${guard_out}" >> "${out_dir}/guards.log"
+  fi
+  if [ "${guard_rc}" -ne 0 ]; then
+    printf 'pre_exec\n' > "${out_dir}/cap_trip_phase.txt"
+    colab_refuse_from_guard_record "${py_bin}" "${out_dir}" "${guard_out}" CAP_GUARD_TRIPPED
+    return 1
+  fi
+}
+
 # colab_check_session_shape <session> <out_dir> <shape>: after `colab new`, the session's row in
 # `colab sessions` must print the Shape the request asked for. Writes shape_check.json (requested,
 # expected and observed values) and refuses SHAPE_MISMATCH otherwise; the caller's EXIT trap stops
@@ -1099,37 +1467,644 @@ colab_open_session_locked() {
     new_args+=("-s" "${session}")
   fi
 
+  local open_lock_timeout="${COLAB_OPEN_LOCK_TIMEOUT_S:-180}"
+  local new_timeout="${COLAB_NEW_TIMEOUT_S:-180}"
+  local kill_grace="${COLAB_KILL_GRACE_S:-10}"
+  local open_rc=0
   if command -v flock >/dev/null 2>&1; then
     (
-      flock -x 9
+      local lock_rc=0
+      colab_run_bounded "${open_lock_timeout}" "${kill_grace}" flock -x 9 || lock_rc=$?
+      if [ "${lock_rc}" -ne 0 ]; then
+        if colab_rc_is_timeout "${lock_rc}"; then
+          echo "OPEN_LOCK_TIMEOUT lock=${lock_file} session=${session} timeout_s=${open_lock_timeout} kill_grace_s=${kill_grace} rc=${lock_rc}" >> "${out_dir}/guards.log"
+        fi
+        colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_file} within ${open_lock_timeout} s (rc=${lock_rc})"
+        exit "${lock_rc}"
+      fi
       printf '1\n' > "${lock_file}.held"
-      colab "${new_args[@]}" </dev/null >> "${out_dir}/colab.log" 2>&1
+      printf '1\n' > "${out_dir}/session_open_started.txt"
+      local new_rc=0
+      colab_run_bounded "${new_timeout}" "${kill_grace}" colab "${new_args[@]}" >> "${out_dir}/colab.log" 2>&1 || new_rc=$?
       rm -f "${lock_file}.held"
-    ) 9>"${lock_file}"
+      if colab_rc_is_timeout "${new_rc}"; then
+        echo "NEW_TIMEOUT session=${session} timeout_s=${new_timeout} kill_grace_s=${kill_grace} rc=${new_rc}" >> "${out_dir}/guards.log"
+      fi
+      if [ "${new_rc}" -ne 0 ]; then
+        colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} failed (rc=${new_rc})"
+        exit "${new_rc}"
+      fi
+    ) 9>"${lock_file}" || open_rc=$?
+    if [ "${open_rc}" -ne 0 ]; then
+      return "${open_rc}"
+    fi
   else
     local lock_dir="${lock_file}.lockdir"
-    while ! mkdir "${lock_dir}" 2>/dev/null; do
-      sleep 0.1
-    done
+    local lock_rc=0
+    colab_run_bounded "${open_lock_timeout}" "${kill_grace}" bash -c 'while ! mkdir "$1" 2>/dev/null; do sleep 0.1; done' _ "${lock_dir}" || lock_rc=$?
+    if [ "${lock_rc}" -ne 0 ]; then
+      if colab_rc_is_timeout "${lock_rc}"; then
+        echo "OPEN_LOCK_TIMEOUT lock=${lock_file} session=${session} timeout_s=${open_lock_timeout} kill_grace_s=${kill_grace} rc=${lock_rc}" >> "${out_dir}/guards.log"
+      fi
+      colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_dir} within ${open_lock_timeout} s (rc=${lock_rc})"
+      return "${lock_rc}"
+    fi
     printf '1\n' > "${lock_file}.held"
+    printf '1\n' > "${out_dir}/session_open_started.txt"
     local rc=0
-    colab "${new_args[@]}" </dev/null >> "${out_dir}/colab.log" 2>&1 || rc=$?
+    colab_run_bounded "${new_timeout}" "${kill_grace}" colab "${new_args[@]}" >> "${out_dir}/colab.log" 2>&1 || rc=$?
     rm -f "${lock_file}.held"
     rmdir "${lock_dir}" 2>/dev/null || true
+    if colab_rc_is_timeout "${rc}"; then
+      echo "NEW_TIMEOUT session=${session} timeout_s=${new_timeout} kill_grace_s=${kill_grace} rc=${rc}" >> "${out_dir}/guards.log"
+    fi
     if [ "${rc}" -ne 0 ]; then
+      colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} failed (rc=${rc})"
       return "${rc}"
     fi
   fi
   printf '1\n' > "${out_dir}/session_opened.txt"
+  # The cap clock starts the moment `colab new` succeeds on both GPU and CPU: rate polls, shape check,
+  # and uploads are billed time and are checked against effective_trip throughout pre-exec.
+  START_EPOCH="$(date -u +%s)"
+  export START_EPOCH
+  "${PY_BIN:?the kit must set PY_BIN}" -c 'import sys, time; open(sys.argv[1], "w", encoding="utf-8").write(f"{time.time():.6f}\n")' "${out_dir}/session_open_epoch.txt" 2>/dev/null \
+    || printf '%s\n' "${START_EPOCH}" > "${out_dir}/session_open_epoch.txt"
+  date -u -d "@${START_EPOCH}" +%Y-%m-%dT%H:%M:%SZ > "${out_dir}/cap_clock_started_at.txt"
+  colab_check_pre_exec_cap "${out_dir}" "post_new" || return 1
   if ! colab_card_is_cpu "${card}"; then
-    # The cap and wall clock starts the moment `colab new` succeeds: the rate polls and everything
-    # after them are billed time and count.
-    START_EPOCH="$(date -u +%s)"
-    date -u -d "@${START_EPOCH}" +%Y-%m-%dT%H:%M:%SZ > "${out_dir}/cap_clock_started_at.txt"
     colab_check_session_shape "${session}" "${out_dir}" "${shape}" || return 1
+    colab_check_pre_exec_cap "${out_dir}" "post_shape_check" || return 1
     colab_read_post_open_rate "${PY_BIN:?the kit must set PY_BIN}" "${out_dir}" "${COLAB_RATE_READ_POLLS}" \
       "${COLAB_RATE_READ_INTERVAL_S}" "$(cat "${out_dir}/max_rate.txt")" || return 1
+    colab_check_pre_exec_cap "${out_dir}" "post_rate_read" || return 1
   fi
+}
+
+# colab_run_wall_watcher <main_pid> <wall_limit_s> <py_bin> <guards_py> <out_dir> <lane> <session> <card> <cap> <wall_s> <grace_s> <margin> <opened_at> <shas_json>:
+# independent wall watcher with pre-trip liveness polling and post-trip escalation. During the
+# <wall_limit_s> pre-trip wait, polls <main_pid> (`kill -0`) about every 1 s. If <main_pid> exits
+# normally before the trip (`STOP_COMPLETED` logged), or dies before `colab new` (neither
+# `session_open_started.txt` nor `session_opened.txt` exists), the watcher cleans up and exits 0
+# without calling `colab stop`. If <main_pid> disappears before the trip after a session open was
+# started/completed and before `STOP_COMPLETED`, the watcher kills tracked child pids, runs bounded
+# `colab_stop_and_log_closing`, and writes `watcher_wait: "launcher_gone_pre_trip"` and
+# `stop_path: "watcher"`, plus `window.json` and `outcome.draft.json`. Otherwise, when <wall_limit_s>
+# elapses, writes `wall_trip_epoch.txt`, logs `REFUSED: WALL_GUARD_TRIPPED`, sends SIGTERM to
+# <main_pid>, and waits for bounded trap cleanup or escalates.
+colab_run_wall_watcher() {
+  local main_pid="$1"
+  local wall_limit_s="$2"
+  local py_bin="$3"
+  local guards_py="$4"
+  local out_dir="$5"
+  local lane="$6"
+  local session="$7"
+  local card="$8"
+  local cap="$9"
+  local wall_s="${10}"
+  local grace_s="${11}"
+  local margin="${12}"
+  local opened_at="${13}"
+  local shas_json="${14}"
+
+  exec >/dev/null 2>&1 </dev/null
+  trap - EXIT TERM INT
+  colab_compute_cleanup_bounds "${lane}"
+  local escalate_s="${COLAB_WALL_ESCALATE_S:-30}"
+  local in_flight_bound_s="${COLAB_IN_FLIGHT_BOUND_S:-310}"
+  local first_wait_s="${escalate_s}"
+  if [ "${in_flight_bound_s}" -gt "${first_wait_s}" ]; then
+    first_wait_s="${in_flight_bound_s}"
+  fi
+  local cleanup_stop_by_s="${COLAB_CLEANUP_STOP_ATTEMPTED_BY_S:-310}"
+  local watcher_pid="${BASHPID:-$$}"
+
+  local pre_trip_rc=0
+  "${py_bin}" - "${main_pid}" "${watcher_pid}" "${wall_limit_s}" "${session}" "${out_dir}" << 'PYEOF' || pre_trip_rc=$?
+import os, signal, sys, time
+from pathlib import Path
+
+main_pid = int(sys.argv[1])
+watcher_pid = int(sys.argv[2])
+wall_limit_s = float(sys.argv[3])
+session = sys.argv[4]
+out_dir = Path(sys.argv[5])
+watcher_wait_p = out_dir / "watcher_wait.txt"
+tracked_p = out_dir / ".watcher_tracked_pids.txt"
+early_trip_p = out_dir / "early_wall_trip.txt"
+self_pid = os.getpid()
+
+def stop_completed() -> bool:
+    if (out_dir / "cleanup_finished.txt").is_file():
+        return True
+    marker = f"session={session}"
+    for log_name in ("stop.log", "guards.log"):
+        lp = out_dir / log_name
+        if not lp.is_file():
+            continue
+        try:
+            for line in lp.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("STOP_COMPLETED ") and marker in line:
+                    return True
+        except OSError:
+            continue
+    return False
+
+tracked_pids: set[int] = set()
+last_written_pids: set[int] = set()
+
+
+import subprocess
+
+_proc_cache_ts = 0.0
+_proc_cache_val: tuple[dict[int, int], dict[int, list[int]]] = ({}, {})
+
+def _msys_proc_map() -> tuple[dict[int, int], dict[int, list[int]]]:
+    global _proc_cache_ts, _proc_cache_val
+    if os.name != "nt":
+        return {}, {}
+    now_m = time.monotonic()
+    if now_m - _proc_cache_ts < 0.3 and _proc_cache_val[0]:
+        return _proc_cache_val
+    winpid_map: dict[int, int] = {}
+    children_map: dict[int, list[int]] = {}
+    ps_exe = "C:/Program Files/Git/usr/bin/ps.exe" if Path("C:/Program Files/Git/usr/bin/ps.exe").is_file() else "ps"
+    try:
+        r = subprocess.run([ps_exe], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        for line in r.stdout.splitlines()[1:]:
+            parts = line.strip().split()
+            while parts and not parts[0].isdigit():
+                parts = parts[1:]
+            if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit() and parts[3].isdigit():
+                mpid, mppid, wpid = int(parts[0]), int(parts[1]), int(parts[3])
+                winpid_map[mpid] = wpid
+                children_map.setdefault(mppid, []).append(mpid)
+        if main_pid not in winpid_map:
+            bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
+            r2 = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
+            if r2.returncode == 0:
+                winpid_map[main_pid] = main_pid
+    except Exception:
+        pass
+    _proc_cache_ts = now_m
+    _proc_cache_val = (winpid_map, children_map)
+    return winpid_map, children_map
+
+def record_children(flush: bool = False) -> None:
+    if tracked_p.is_file():
+        try:
+            for line in tracked_p.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pid = int(line)
+                    if pid not in (main_pid, watcher_pid, self_pid):
+                        tracked_pids.add(pid)
+        except OSError:
+            pass
+    stack = [main_pid, *list(tracked_pids)]
+    seen: set[int] = set()
+    used_task_children = False
+    while stack:
+        cur = stack.pop()
+        if cur in seen or cur in (watcher_pid, self_pid):
+            continue
+        seen.add(cur)
+        if cur != main_pid:
+            tracked_pids.add(cur)
+        ch_file = Path(f"/proc/{cur}/task/{cur}/children")
+        if ch_file.is_file():
+            used_task_children = True
+            try:
+                for tok in ch_file.read_text(encoding="utf-8").split():
+                    if tok.isdigit():
+                        stack.append(int(tok))
+            except OSError:
+                pass
+    if not used_task_children and os.name != "nt":
+        children: dict[int, list[int]] = {}
+        for stat_p in Path("/proc").glob("[0-9]*/stat"):
+            try:
+                data = stat_p.read_text(encoding="utf-8")
+                pid_s, rest = data.split(" (", 1)
+                ppid_s = rest.rsplit(") ", 1)[1].split()[1]
+                children.setdefault(int(ppid_s), []).append(int(pid_s))
+            except Exception:
+                continue
+        stack = [main_pid, *list(tracked_pids)]
+        seen = set()
+        while stack:
+            cur = stack.pop()
+            if cur in seen or cur in (watcher_pid, self_pid):
+                continue
+            seen.add(cur)
+            if cur != main_pid:
+                tracked_pids.add(cur)
+            stack.extend(children.get(cur, []))
+    if tracked_pids and (flush or tracked_pids != last_written_pids):
+        try:
+            tracked_p.write_text("".join(f"{p}\n" for p in sorted(tracked_pids)), encoding="utf-8", newline="\n")
+            last_written_pids.clear()
+            last_written_pids.update(tracked_pids)
+        except OSError:
+            pass
+
+def launcher_alive() -> bool:
+    if os.name == "nt":
+        winpid_map, _ = _msys_proc_map()
+        if main_pid in winpid_map:
+            return True
+        bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
+        for _ in range(3):
+            try:
+                r = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
+                if r.returncode == 0:
+                    return True
+            except Exception:
+                return True
+            time.sleep(0.15)
+        return False
+    try:
+        os.kill(main_pid, 0)
+        return True
+    except OSError:
+        return False
+
+def session_was_opened() -> bool:
+    return (out_dir / "session_open_started.txt").is_file() or (out_dir / "session_opened.txt").is_file()
+
+def kill_tracked() -> None:
+    record_children(flush=True)
+    sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+    for pid in sorted(tracked_pids, reverse=True):
+        if pid not in (main_pid, watcher_pid, self_pid):
+            if os.name == "nt":
+                try:
+                    subprocess.run(["bash", "-c", f"kill -9 {pid}"], capture_output=True, timeout=2)
+                except Exception:
+                    pass
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+
+deadline = time.monotonic() + max(0.0, wall_limit_s)
+while True:
+    record_children()
+    if stop_completed():
+        sys.exit(0)
+    if early_trip_p.is_file():
+        break
+    if not launcher_alive():
+        if stop_completed():
+            sys.exit(0)
+        if not session_was_opened():
+            kill_tracked()
+            sys.exit(0)
+        record_children(flush=True)
+        watcher_wait_p.write_text("launcher_gone_pre_trip\n", encoding="utf-8", newline="\n")
+        sys.exit(1)
+    rem = deadline - time.monotonic()
+    if rem <= 0.0:
+        break
+    time.sleep(min(0.4, rem))
+
+record_children(flush=True)
+sys.exit(2)
+PYEOF
+
+  local wait_rc=0
+  if [ "${pre_trip_rc}" -eq 0 ]; then
+    rm -f "${out_dir}/.watcher_tracked_pids.txt"
+    return 0
+  elif [ "${pre_trip_rc}" -eq 1 ]; then
+    wait_rc=1
+  elif [ "${pre_trip_rc}" -eq 2 ]; then
+    "${py_bin}" -c 'import sys, time; open(sys.argv[1], "w", encoding="utf-8").write(f"{time.time():.6f}\n")' "${out_dir}/wall_trip_epoch.txt" 2>/dev/null \
+      || date -u +%s > "${out_dir}/wall_trip_epoch.txt"
+    echo "REFUSED: WALL_GUARD_TRIPPED: independent wall watcher: ${wall_limit_s} s (wall - grace) elapsed" >> "${out_dir}/guards.log"
+    kill -TERM "${main_pid}" 2>/dev/null || true
+
+    "${py_bin}" - "${main_pid}" "${watcher_pid}" "${escalate_s}" "${in_flight_bound_s}" "${cleanup_stop_by_s}" "${session}" "${out_dir}" << 'PYEOF' || wait_rc=$?
+import os, sys, time
+from pathlib import Path
+
+main_pid = int(sys.argv[1])
+watcher_pid = int(sys.argv[2])
+escalate_s = float(sys.argv[3])
+in_flight_bound_s = float(sys.argv[4])
+cleanup_stop_by_s = float(sys.argv[5])
+session = sys.argv[6]
+out_dir = Path(sys.argv[7])
+cleanup_started_p = out_dir / "cleanup_started.txt"
+stop_reached_p = out_dir / "stop_reached.txt"
+watcher_wait_p = out_dir / "watcher_wait.txt"
+tracked_p = out_dir / ".watcher_tracked_pids.txt"
+self_pid = os.getpid()
+
+def stop_completed() -> bool:
+    if (out_dir / "cleanup_finished.txt").is_file():
+        return True
+    marker = f"session={session}"
+    for log_name in ("stop.log", "guards.log"):
+        lp = out_dir / log_name
+        if not lp.is_file():
+            continue
+        try:
+            for line in lp.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("STOP_COMPLETED ") and marker in line:
+                    return True
+        except OSError:
+            continue
+    return False
+
+tracked_pids: set[int] = set()
+
+
+import subprocess
+
+_proc_cache_ts = 0.0
+_proc_cache_val: tuple[dict[int, int], dict[int, list[int]]] = ({}, {})
+
+def _msys_proc_map() -> tuple[dict[int, int], dict[int, list[int]]]:
+    global _proc_cache_ts, _proc_cache_val
+    if os.name != "nt":
+        return {}, {}
+    now_m = time.monotonic()
+    if now_m - _proc_cache_ts < 0.3 and _proc_cache_val[0]:
+        return _proc_cache_val
+    winpid_map: dict[int, int] = {}
+    children_map: dict[int, list[int]] = {}
+    ps_exe = "C:/Program Files/Git/usr/bin/ps.exe" if Path("C:/Program Files/Git/usr/bin/ps.exe").is_file() else "ps"
+    try:
+        r = subprocess.run([ps_exe], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        for line in r.stdout.splitlines()[1:]:
+            parts = line.strip().split()
+            while parts and not parts[0].isdigit():
+                parts = parts[1:]
+            if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit() and parts[3].isdigit():
+                mpid, mppid, wpid = int(parts[0]), int(parts[1]), int(parts[3])
+                winpid_map[mpid] = wpid
+                children_map.setdefault(mppid, []).append(mpid)
+        if main_pid not in winpid_map:
+            bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
+            r2 = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
+            if r2.returncode == 0:
+                winpid_map[main_pid] = main_pid
+    except Exception:
+        pass
+    _proc_cache_ts = now_m
+    _proc_cache_val = (winpid_map, children_map)
+    return winpid_map, children_map
+
+def record_children() -> None:
+    if tracked_p.is_file():
+        try:
+            for line in tracked_p.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pid = int(line)
+                    if pid not in (main_pid, watcher_pid, self_pid):
+                        tracked_pids.add(pid)
+        except OSError:
+            pass
+    if os.name != "nt":
+        children: dict[int, list[int]] = {}
+        for stat_p in Path("/proc").glob("[0-9]*/stat"):
+            try:
+                data = stat_p.read_text(encoding="utf-8")
+                pid_s, rest = data.split(" (", 1)
+                ppid_s = rest.rsplit(") ", 1)[1].split()[1]
+                children.setdefault(int(ppid_s), []).append(int(pid_s))
+            except Exception:
+                continue
+        stack = [main_pid, *list(tracked_pids)]
+        seen: set[int] = set()
+        while stack:
+            cur = stack.pop()
+            if cur in seen or cur in (watcher_pid, self_pid):
+                continue
+            seen.add(cur)
+            if cur != main_pid:
+                tracked_pids.add(cur)
+            stack.extend(children.get(cur, []))
+    if tracked_pids:
+        try:
+            tracked_p.write_text("".join(f"{p}\n" for p in sorted(tracked_pids)), encoding="utf-8", newline="\n")
+        except OSError:
+            pass
+
+def launcher_alive() -> bool:
+    if os.name == "nt":
+        winpid_map, _ = _msys_proc_map()
+        if main_pid in winpid_map:
+            return True
+        bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
+        for _ in range(3):
+            try:
+                r = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
+                if r.returncode == 0:
+                    return True
+            except Exception:
+                return True
+            time.sleep(0.15)
+        return False
+    try:
+        os.kill(main_pid, 0)
+        return True
+    except OSError:
+        return False
+
+trip_mono = time.monotonic()
+first_wait_s = max(escalate_s, in_flight_bound_s)
+first_deadline = trip_mono + first_wait_s
+cleanup_seen = False
+
+while time.monotonic() < first_deadline:
+    record_children()
+    if stop_completed():
+        watcher_wait_p.write_text("cleanup_seen\n", encoding="utf-8", newline="\n")
+        sys.exit(0)
+    if cleanup_started_p.exists() or stop_reached_p.exists():
+        cleanup_seen = True
+        watcher_wait_p.write_text("cleanup_seen\n", encoding="utf-8", newline="\n")
+        break
+    if not launcher_alive():
+        if stop_completed():
+            watcher_wait_p.write_text("cleanup_seen\n", encoding="utf-8", newline="\n")
+            sys.exit(0)
+        if cleanup_started_p.exists() or stop_reached_p.exists():
+            cleanup_seen = True
+            break
+        watcher_wait_p.write_text("escalated_launcher_gone\n", encoding="utf-8", newline="\n")
+        sys.exit(1)
+    time.sleep(0.3 if os.name == "nt" else 0.05)
+
+if not cleanup_seen:
+    record_children()
+    if stop_completed():
+        watcher_wait_p.write_text("cleanup_seen\n", encoding="utf-8", newline="\n")
+        sys.exit(0)
+    elif cleanup_started_p.exists() or stop_reached_p.exists():
+        cleanup_seen = True
+        watcher_wait_p.write_text("cleanup_seen\n", encoding="utf-8", newline="\n")
+    elif not launcher_alive():
+        watcher_wait_p.write_text("escalated_launcher_gone\n", encoding="utf-8", newline="\n")
+        sys.exit(1)
+    else:
+        watcher_wait_p.write_text("escalated_no_cleanup\n", encoding="utf-8", newline="\n")
+        sys.exit(1)
+
+stop_deadline = trip_mono + cleanup_stop_by_s
+while time.monotonic() < stop_deadline:
+    record_children()
+    if stop_completed():
+        watcher_wait_p.write_text("cleanup_seen\n", encoding="utf-8", newline="\n")
+        sys.exit(0)
+    if not launcher_alive():
+        if stop_completed():
+            watcher_wait_p.write_text("cleanup_seen\n", encoding="utf-8", newline="\n")
+            sys.exit(0)
+        watcher_wait_p.write_text("escalated_launcher_gone\n", encoding="utf-8", newline="\n")
+        sys.exit(1)
+    time.sleep(0.3 if os.name == "nt" else 0.05)
+
+record_children()
+if stop_completed():
+    watcher_wait_p.write_text("cleanup_seen\n", encoding="utf-8", newline="\n")
+    sys.exit(0)
+if not launcher_alive():
+    watcher_wait_p.write_text("escalated_launcher_gone\n", encoding="utf-8", newline="\n")
+    sys.exit(1)
+watcher_wait_p.write_text("escalated_cleanup_overran\n", encoding="utf-8", newline="\n")
+sys.exit(1)
+PYEOF
+  else
+    rm -f "${out_dir}/.watcher_tracked_pids.txt"
+    return 0
+  fi
+
+  if [ "${wait_rc}" -ne 1 ] || grep -q "^STOP_COMPLETED .*session=${session}" "${out_dir}/stop.log" 2>/dev/null; then
+    rm -f "${out_dir}/.watcher_tracked_pids.txt"
+    return 0
+  fi
+
+  local watcher_wait_state
+  watcher_wait_state="$(cat "${out_dir}/watcher_wait.txt" 2>/dev/null || echo escalated_no_cleanup)"
+  printf '1\n' > "${out_dir}/watcher_escalated.txt"
+  printf 'watcher\n' > "${out_dir}/stop_path.txt"
+  echo "WALL_WATCHER_ESCALATED session=${session} escalate_s=${escalate_s} first_wait_s=${first_wait_s} cleanup_stop_attempted_by_s=${cleanup_stop_by_s} watcher_wait=${watcher_wait_state}" >> "${out_dir}/guards.log"
+  if [ -f "${out_dir}/session_open_started.txt" ] || [ -f "${out_dir}/session_opened.txt" ]; then
+    colab_stop_and_log_closing "${py_bin}" "${session}" "${out_dir}"
+  fi
+  local closed_at
+  closed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  colab_write_window_and_outcome \
+    "${py_bin}" "${out_dir}" "${lane}" "${session}" "${card}" \
+    "${cap}" "${wall_s}" "${grace_s}" "${margin}" \
+    "${opened_at}" "${closed_at}" 137 "${shas_json}" || true
+  if [ "${watcher_wait_state}" = "launcher_gone_pre_trip" ] || [ "${watcher_wait_state}" = "escalated_launcher_gone" ] || [ -f "${out_dir}/stop_reached.txt" ]; then
+    if [ -f "${out_dir}/.watcher_tracked_pids.txt" ]; then
+      while IFS= read -r tpid; do
+        tpid="${tpid//$'
+'/}"
+        if [ -n "${tpid}" ] && [ "${tpid}" != "${main_pid}" ] && [ "${tpid}" != "${watcher_pid}" ]; then
+          pkill -9 -P "${tpid}" 2>/dev/null || true
+          kill -9 "${tpid}" 2>/dev/null || true
+        fi
+      done < "${out_dir}/.watcher_tracked_pids.txt"
+    fi
+    "${py_bin}" - "${main_pid}" "${watcher_pid}" "${out_dir}/.watcher_tracked_pids.txt" << 'PYEOF'
+import os, signal, sys
+from pathlib import Path
+
+main_pid = int(sys.argv[1])
+watcher_pid = int(sys.argv[2])
+tracked_p = Path(sys.argv[3])
+self_pid = os.getpid()
+roots: list[int] = []
+if tracked_p.is_file():
+    for line in tracked_p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            roots.append(int(line))
+children: dict[int, list[int]] = {}
+for stat_p in Path("/proc").glob("[0-9]*/stat"):
+    try:
+        data = stat_p.read_text(encoding="utf-8")
+        pid_s, rest = data.split(" (", 1)
+        ppid_s = rest.rsplit(") ", 1)[1].split()[1]
+        children.setdefault(int(ppid_s), []).append(int(pid_s))
+    except Exception:
+        continue
+roots.extend(children.get(main_pid, []))
+out: list[int] = []
+seen: set[int] = set()
+stack = list(roots)
+while stack:
+    cur = stack.pop()
+    if cur in seen or cur in (main_pid, watcher_pid, self_pid):
+        continue
+    seen.add(cur)
+    out.append(cur)
+    stack.extend(children.get(cur, []))
+sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+for pid in reversed(out):
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+PYEOF
+  fi
+  if [ -f "${out_dir}/.watcher_tracked_pids.txt" ]; then
+    while IFS= read -r tpid; do
+      tpid="${tpid//$'
+'/}"
+      if [ -n "${tpid}" ] && [ "${tpid}" != "${main_pid}" ] && [ "${tpid}" != "${watcher_pid}" ]; then
+        pkill -9 -P "${tpid}" 2>/dev/null || true
+        kill -9 "${tpid}" 2>/dev/null || true
+      fi
+    done < "${out_dir}/.watcher_tracked_pids.txt"
+  fi
+  rm -f "${out_dir}/.watcher_tracked_pids.txt"
+  colab_scrub_all_logs "${py_bin}" "${guards_py}" "${out_dir}" || true
+
+  "${py_bin}" - "${main_pid}" "${watcher_pid}" << 'PYEOF'
+import os, signal, sys
+from pathlib import Path
+
+main_pid = int(sys.argv[1])
+watcher_pid = int(sys.argv[2])
+children: dict[int, list[int]] = {}
+for stat_p in Path("/proc").glob("[0-9]*/stat"):
+    try:
+        data = stat_p.read_text(encoding="utf-8")
+        pid_s, rest = data.split(" (", 1)
+        ppid_s = rest.rsplit(") ", 1)[1].split()[1]
+        children.setdefault(int(ppid_s), []).append(int(pid_s))
+    except Exception:
+        continue
+
+def subtree(root: int) -> list[int]:
+    out: list[int] = []
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        if cur == watcher_pid:
+            continue
+        out.append(cur)
+        stack.extend(children.get(cur, []))
+    return out
+
+sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+for pid in reversed(subtree(main_pid)):
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+PYEOF
+  pkill -9 -P "${main_pid}" 2>/dev/null || true
+  kill -9 "${main_pid}" 2>/dev/null || true
 }
 
 colab_scrub_all_logs() {
@@ -1283,6 +2258,8 @@ REFUSAL_CODES = (
     "VENV_IMPORT_OUTSIDE_VENV",
     "VENV_IMPORT_FAILED",
     "WHEEL_DIR_REQUIRED",
+    "OPEN_LOCK_TIMEOUT",
+    "SESSION_OPEN_FAILED",
     "UPLOAD_FAILED",
     "DOWNLOAD_FAILED",
     "REMOTE_DIR_CREATE_FAILED",
@@ -1318,6 +2295,7 @@ REFUSAL_CODES = (
     "SHAPE_MISMATCH",
     "MAX_RATE_REQUIRED",
     "TRAIN_MAX_RATE_REQUIRED",
+    "CAP_TOO_SMALL_FOR_CLEANUP",
     "TRAIN_SAMPLE_MISSING",
     "TRAIN_WALL_REQUIRED",
     "TRAIN_CAP_REQUIRED",
@@ -1358,6 +2336,7 @@ REFUSAL_CODES = (
     "FIT_PROBE_FAILED",
     "REPO_BUILD_FAILED",
     "TRANSLATION_FAILED",
+    "TRANSLATION_UNVERIFIED",
     "TOKEN_STAGING_FAILED",
     "TOKEN_SHRED_FAILED",
     "INPUT_FILE_MISSING",
@@ -1479,6 +2458,10 @@ if lane == "train":
     }
 
 kill_grace_s = int(os.environ.get("COLAB_KILL_GRACE_S", "10"))
+dl_timeout_s = int(os.environ.get("COLAB_DOWNLOAD_TIMEOUT_S", "300"))
+up_timeout_s = int(os.environ.get("COLAB_UPLOAD_TIMEOUT_S", "120"))
+sess_timeout_s = int(os.environ.get("COLAB_SESSIONS_TIMEOUT_S", "30"))
+in_flight_bound_s = max(dl_timeout_s, up_timeout_s, sess_timeout_s) + kill_grace_s
 salvage_restart_s = int(os.environ.get("COLAB_SALVAGE_RESTART_TIMEOUT_S", "180"))
 salvage_exec_s = int(os.environ.get("COLAB_SALVAGE_EXEC_TIMEOUT_S", "330"))
 salvage_download_s = int(os.environ.get("COLAB_SALVAGE_DOWNLOAD_TIMEOUT_S", "300"))
@@ -1491,8 +2474,103 @@ salvage_deadline_s = int(os.environ.get("SALVAGE_DEADLINE_S", str(salvage_steps_
 stop_timeout_s = int(os.environ.get("COLAB_STOP_TIMEOUT_S", "60"))
 stop_attempts = int(os.environ.get("COLAB_STOP_ATTEMPTS", "2"))
 stop_bound_s = stop_attempts * (stop_timeout_s + kill_grace_s)
-cleanup_stop_attempted_by_s = min(salvage_steps_sum_s, salvage_deadline_s) if lane in ("train", "translate") else 0
+salvage_bound_s = min(salvage_steps_sum_s, salvage_deadline_s) if lane in ("train", "translate") else 0
+cleanup_stop_attempted_by_s = in_flight_bound_s + salvage_bound_s
 cleanup_bound_s = cleanup_stop_attempted_by_s + stop_bound_s
+stop_path_raw = read_text_file(out_dir / "stop_path.txt")
+stop_path = stop_path_raw if stop_path_raw in ("trap", "watcher") else "trap"
+watcher_wait_raw = read_text_file(out_dir / "watcher_wait.txt")
+watcher_wait = (
+    watcher_wait_raw
+    if watcher_wait_raw in (
+        "none",
+        "cleanup_seen",
+        "escalated_no_cleanup",
+        "escalated_cleanup_overran",
+        "escalated_launcher_gone",
+        "launcher_gone_pre_trip",
+    )
+    else "none"
+)
+cap_trip_phase = read_text_file(out_dir / "cap_trip_phase.txt")
+
+cap_trip_formula = (
+    "effective_trip = cap - margin - cleanup_reserve; cleanup_reserve = (cleanup_bound_s / 3600) * priced_rate"
+)
+priced_rate_for_cap: float | None = None
+if rate_used_for_cap_and_projection is not None and rate_used_for_cap_and_projection > 0.0:
+    priced_rate_for_cap = rate_used_for_cap_and_projection
+elif (out_dir / "max_rate.txt").is_file():
+    priced_rate_for_cap = read_float_file(out_dir / "max_rate.txt")
+if priced_rate_for_cap is None and (out_dir / "guards.log").is_file():
+    for gline in reversed((out_dir / "guards.log").read_text(encoding="utf-8", errors="replace").splitlines()):
+        if gline.startswith("{") and '"priced_rate"' in gline:
+            try:
+                grec = json.loads(gline)
+                pr = grec.get("priced_rate") or (grec.get("cap") or {}).get("priced_rate")
+                if pr is not None and float(pr) > 0.0:
+                    priced_rate_for_cap = float(pr)
+                    break
+            except Exception:
+                pass
+if priced_rate_for_cap is None and card in ("CPU-high-mem", "CPU"):
+    priced_rate_for_cap = float(os.environ.get("RATE_CCU_PER_HOUR", "0.26"))
+
+if priced_rate_for_cap is not None:
+    cleanup_reserve_units: float | None = round((cleanup_bound_s / 3600.0) * float(priced_rate_for_cap), 6)
+    effective_trip_units: float | None = round(float(cap) - float(margin) - cleanup_reserve_units, 6)
+    death_time_exact_s = max(0.0, (effective_trip_units / float(priced_rate_for_cap)) * 3600.0) if float(priced_rate_for_cap) > 0.0 else 0.0
+    worst_case_cap_path: float | None = round(effective_trip_units + float(margin) + cleanup_reserve_units, 6)
+    worst_case_launcher_death_path: float | None = round(((death_time_exact_s + cleanup_bound_s) / 3600.0) * float(priced_rate_for_cap), 6)
+    worst_case_total_spend: float | None = round(max(worst_case_cap_path, worst_case_launcher_death_path), 6)
+else:
+    cleanup_reserve_units = None
+    effective_trip_units = None
+    worst_case_cap_path = None
+    worst_case_launcher_death_path = None
+    worst_case_total_spend = None
+
+assumptions = {
+    "cap_path": "live launcher trips cap guard and runs cleanup_on_exit",
+    "launcher_death_path": (
+        "wall watcher survives launcher death to poll kill -0 every 1 s and run bounded colab stop"
+    ),
+}
+
+# style-dataset-lab #72 item 1 fix: window record gets spend_ccu floor max(start - end, rate * elapsed / 3600).
+from datetime import datetime as _dt, timezone as _tz
+start_balance_val = read_float_file(out_dir / "start_balance.txt")
+end_balance_val = read_float_file(out_dir / "end_balance.txt")
+drop_ccu = (
+    max(0.0, float(start_balance_val) - float(end_balance_val))
+    if (start_balance_val is not None and end_balance_val is not None)
+    else 0.0
+)
+session_was_opened = (out_dir / "session_opened.txt").is_file() or (out_dir / "session_open_started.txt").is_file()
+elapsed_window_s = 0.0
+if session_was_opened:
+    open_ep = read_float_file(out_dir / "session_open_epoch.txt")
+    close_ep: float | None = None
+    try:
+        close_ep = _dt.strptime(closed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc).timestamp()
+    except Exception:
+        pass
+    if open_ep is not None and close_ep is not None and close_ep >= open_ep:
+        elapsed_window_s = max(0.0, close_ep - open_ep)
+    else:
+        try:
+            t0 = _dt.strptime(cap_clock_started_at or opened_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc).timestamp()
+            t1 = _dt.strptime(closed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc).timestamp()
+            elapsed_window_s = max(0.0, t1 - t0)
+        except Exception:
+            elapsed_window_s = 0.0
+rate_for_floor = (
+    float(rate_measured if (rate_measured is not None and rate_measured > 0.0) else (priced_rate_for_cap or 0.0))
+    if session_was_opened
+    else 0.0
+)
+rate_floor_ccu = max(0.0, (rate_for_floor * elapsed_window_s) / 3600.0)
+spend_ccu = round(max(drop_ccu, rate_floor_ccu), 6)
 
 window_payload = {
     **vm_facts,
@@ -1506,13 +2584,29 @@ window_payload = {
     "refusal_code": refusal_code,
     "why": refusal_why,
     "cap": cap,
+    "cap_ccu": cap,
     "wall_s": wall_s,
     "grace_s": grace_s,
     "margin": margin,
     "cleanup_stop_attempted_by_s": cleanup_stop_attempted_by_s,
     "cleanup_bound_s": cleanup_bound_s,
-    "start_balance": read_float_file(out_dir / "start_balance.txt"),
-    "end_balance": read_float_file(out_dir / "end_balance.txt"),
+    "stop_path": stop_path,
+    "watcher_wait": watcher_wait,
+    "phase": cap_trip_phase if cap_trip_phase else ("live" if (out_dir / "session_opened.txt").is_file() else "pre_open"),
+    "cap_trip_phase": cap_trip_phase,
+    "cleanup_reserve_units": cleanup_reserve_units,
+    "effective_trip_units": effective_trip_units,
+    "cap_trip_formula": cap_trip_formula,
+    "formula": cap_trip_formula,
+    "worst_case_cap_path": worst_case_cap_path,
+    "worst_case_launcher_death_path": worst_case_launcher_death_path,
+    "worst_case_total_spend": worst_case_total_spend,
+    "worst_case_total_spend_units": worst_case_total_spend,
+    "assumptions": assumptions,
+    "start_balance": start_balance_val,
+    "end_balance": end_balance_val,
+    "elapsed_s": round(elapsed_window_s, 3),
+    "spend_ccu": spend_ccu,
     "rate_measured": rate_measured,
     "rate_measured_pre_open": rate_measured_pre_open,
     "rate_measured_post_open": rate_measured_post_open,
@@ -1540,6 +2634,9 @@ outcome_payload = {
     "status": final_status,
     "refusal_code": refusal_code,
     "why": refusal_why,
+    "phase": cap_trip_phase if cap_trip_phase else ("live" if (out_dir / "session_opened.txt").is_file() else "pre_open"),
+    "cap_trip_phase": cap_trip_phase,
+    "watcher_wait": watcher_wait,
     "exit_code": exit_code,
     "opened_at": opened_at,
     "closed_at": closed_at,

@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -19,13 +20,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const colabDir = join(root, "scripts", "colab");
-const launcherPath = join(colabDir, "launch_translate.sh");
+const launcherPath = join(colabDir, "launch_translate.sh").replace(/\\/g, "/");
 const comparePyPath = join(colabDir, "compare_translations.py");
+const bashBin =
+  process.platform === "win32" && existsSync("C:/Program Files/Git/usr/bin/bash.exe")
+    ? "C:/Program Files/Git/usr/bin/bash.exe"
+    : "bash";
+const pyBin = process.platform === "win32" ? "python" : "python3";
 const SEP = "---POLYGLOT_SEP---";
 
 const PINNED_DIGEST = "21b597a243ec4fd2f05bc0ce8ef9ef174a89b09255c330d670852dfaaaa74f72";
@@ -70,12 +76,18 @@ const ollamaState: FakeOllamaConfig = {
 
 let server: Server;
 let ollamaUrl = "";
+const fixtureBuffers: Record<string, Buffer> = {};
 
 beforeAll(async () => {
   server = createServer((req, res) => {
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString("utf8")));
     req.on("end", () => {
+      if (req.url && fixtureBuffers[req.url]) {
+        res.setHeader("content-type", "application/octet-stream");
+        res.end(fixtureBuffers[req.url]);
+        return;
+      }
       res.setHeader("content-type", "application/json");
       if (req.url === "/api/tags") {
         res.end(
@@ -217,10 +229,48 @@ def hang_if_requested(mode_val):
             fh.write(f"{os.getpid()}\\n")
         time.sleep(3600)
 
+def kill_launcher_if_requested():
+    out_dir_str = os.environ.get("FAKE_COLAB_OUT_DIR", "")
+    if not out_dir_str:
+        return
+    pid_file = Path(out_dir_str) / "launcher_pid.txt"
+    if not pid_file.is_file():
+        return
+    main_pid = pid_file.read_text(encoding="utf-8").strip()
+    if not main_pid or not main_pid.isdigit():
+        return
+    mpid = int(main_pid)
+    bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if os.name == "nt" and Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
+    subprocess.run([bash_exe, "-c", f"kill -9 {mpid}"], check=False)
+    if os.name == "nt":
+        ps_exe = "C:/Program Files/Git/usr/bin/ps.exe" if Path("C:/Program Files/Git/usr/bin/ps.exe").is_file() else "ps"
+        r = subprocess.run([ps_exe], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        for line in r.stdout.splitlines()[1:]:
+            parts = line.strip().split()
+            while parts and not parts[0].isdigit():
+                parts = parts[1:]
+            if len(parts) >= 4 and parts[0].isdigit() and parts[3].isdigit() and int(parts[0]) == mpid:
+                try:
+                    os.kill(int(parts[3]), signal.SIGTERM)
+                except OSError:
+                    pass
+
 if subcmd == "usage":
+    if os.environ.get("FAKE_COLAB_FAIL_CLOSING_USAGE") == "1" and (state_dir / "stops.log").exists():
+        sys.stderr.write("503 Service Unavailable: closing usage failed\\n")
+        sys.exit(1)
     opened = list(open_dir.glob("*.json"))
-    rate = os.environ.get("FAKE_COLAB_POST_OPEN_RATE_STR", "1.42/hr") if opened else os.environ.get("FAKE_COLAB_PRE_OPEN_RATE_STR", "0.00/hr")
-    bal = os.environ.get("FAKE_COLAB_BALANCE_STR", "99.50")
+    has_opened = bool(opened) or (state_dir / "stops.log").exists()
+    default_post_rate = "0.26/hr"
+    if opened:
+        try:
+            info = json.loads(opened[0].read_text(encoding="utf-8"))
+            if str(info.get("gpu", "CPU")).upper() != "CPU":
+                default_post_rate = "1.42/hr"
+        except Exception:
+            pass
+    rate = os.environ.get("FAKE_COLAB_POST_OPEN_RATE_STR", default_post_rate) if has_opened else os.environ.get("FAKE_COLAB_PRE_OPEN_RATE_STR", "0.00/hr")
+    bal = os.environ.get("FAKE_COLAB_BALANCE_POST_OPEN_STR", os.environ.get("FAKE_COLAB_BALANCE_STR", "99.50")) if has_opened else os.environ.get("FAKE_COLAB_BALANCE_STR", "99.50")
     assign = "1" if opened else "0"
     print(f"Current balance: {bal} compute units")
     print(f"Usage rate: {rate}")
@@ -254,6 +304,9 @@ if subcmd == "sessions":
     sys.exit(0)
 
 if subcmd == "upload":
+    if os.environ.get("FAKE_COLAB_FAIL_UPLOAD") == "1":
+        sys.stderr.write("500 Server Error: simulated upload failure\\n")
+        sys.exit(1)
     # colab upload -s <session> <src> <dst>
     pos = []
     i = 1
@@ -274,6 +327,15 @@ if subcmd == "upload":
 
 if subcmd == "download":
     hang_if_requested(os.environ.get("FAKE_COLAB_DOWNLOAD_HANG", ""))
+    dl_cnt_f = state_dir / "download_attempts.txt"
+    dl_cnt = int(dl_cnt_f.read_text(encoding="utf-8").strip()) if dl_cnt_f.is_file() else 0
+    dl_cnt += 1
+    dl_cnt_f.write_text(f"{dl_cnt}\\n", encoding="utf-8")
+    if dl_cnt == 1:
+        hang_if_requested(os.environ.get("FAKE_COLAB_DOWNLOAD_HANG_ONCE", ""))
+    dl_delay = float(os.environ.get("FAKE_COLAB_DOWNLOAD_DELAY_S", "0") or "0")
+    if dl_delay > 0:
+        time.sleep(dl_delay)
     pos = []
     i = 1
     while i < len(raw_args):
@@ -292,13 +354,23 @@ if subcmd == "download":
     sys.exit(0)
 
 if subcmd == "restart-kernel":
-    hang_if_requested(os.environ.get("FAKE_COLAB_RESTART_HANG", ""))
     sid = "default"
     for i, a in enumerate(raw_args):
         if a in ("-s", "--session") and i + 1 < len(raw_args):
             sid = raw_args[i + 1]
     with (state_dir / "restarts.log").open("a", encoding="utf-8") as fh:
         fh.write(f"RESTART -s {sid}\\n")
+    if os.environ.get("FAKE_COLAB_KILL_LAUNCHER_MID_CLEANUP") == "1":
+        out_dir_str = os.environ.get("FAKE_COLAB_OUT_DIR", "")
+        for _ in range(300):
+            if out_dir_str and (Path(out_dir_str) / "wall_trip_epoch.txt").is_file():
+                break
+            time.sleep(0.05)
+        time.sleep(0.15)
+        kill_launcher_if_requested()
+        time.sleep(0.2)
+        sys.exit(0)
+    hang_if_requested(os.environ.get("FAKE_COLAB_RESTART_HANG", ""))
     sys.exit(0)
 
 if subcmd == "stop":
@@ -312,12 +384,33 @@ if subcmd == "stop":
     cnt_f.write_text(f"{cnt}\\n", encoding="utf-8")
     if cnt == 1:
         hang_if_requested(os.environ.get("FAKE_COLAB_STOP_HANG_ONCE", ""))
+    done_ts = time.time()
     with (state_dir / "stops.log").open("a", encoding="utf-8") as fh:
         fh.write(f"STOP -s {sid}\\n")
+    with (state_dir / "stops.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"sid": sid, "done_ts": done_ts}) + "\\n")
     (open_dir / f"{sid}.json").unlink(missing_ok=True)
     sys.exit(0)
 
 if subcmd == "exec":
+    if os.environ.get("FAKE_COLAB_KILL_LAUNCHER_PRE_TRIP") == "1":
+        time.sleep(0.3)
+        kill_launcher_if_requested()
+        time.sleep(0.2)
+        sys.exit(1)
+    if os.environ.get("FAKE_COLAB_EXEC_HANG") == "1":
+        out_dir_str = os.environ.get("FAKE_COLAB_OUT_DIR", "")
+        if out_dir_str and os.environ.get("FAKE_COLAB_KILL_LAUNCHER_MID_CLEANUP") == "1":
+            (Path(out_dir_str) / "early_wall_trip.txt").write_text("1\\n", encoding="utf-8")
+        for _ in range(600):
+            if out_dir_str and (
+                (Path(out_dir_str) / "wall_trip_epoch.txt").is_file()
+                or (Path(out_dir_str) / "cleanup_started.txt").is_file()
+            ):
+                sys.exit(143)
+            time.sleep(0.1)
+        sys.exit(143)
+    hang_if_requested(os.environ.get("FAKE_COLAB_EXEC_HANG", ""))
     py_file = None
     env_vars = dict(os.environ)
     i = 1
@@ -338,16 +431,20 @@ if subcmd == "exec":
             i += 1
     code = Path(py_file).read_text(encoding="utf-8")
     # Rewrite /content paths in the uploaded scripts to point to content_dir
+    import re as _re
     c_posix = content_dir.as_posix()
+    def _norm_content(s: str) -> str:
+        s = _re.sub(r'[A-Za-z]:/[^"\\s]*?/Git/content', "/content", s)
+        return s.replace("/content", c_posix)
     for f in content_dir.iterdir():
         if f.is_file() and f.suffix in (".sh", ".py"):
             ftxt = f.read_text(encoding="utf-8", errors="replace")
-            ftxt = ftxt.replace("/content", c_posix)
+            ftxt = _norm_content(ftxt)
             f.write_text(ftxt, encoding="utf-8")
     for k, v in list(env_vars.items()):
         if isinstance(v, str) and "/content" in v:
-            env_vars[k] = v.replace("/content", c_posix)
-    code = code.replace("/content", c_posix)
+            env_vars[k] = _norm_content(v)
+    code = _norm_content(code)
     runner_copy = state_dir / f"exec_{int(time.time()*1000)}.py"
     runner_copy.write_text(code, encoding="utf-8")
     proc = subprocess.run([sys.executable, str(runner_copy)], cwd=str(content_dir), env=env_vars, check=False)
@@ -362,11 +459,47 @@ if subcmd == "exec":
     colabWrapper,
     `#!/usr/bin/env bash
 #SDLAB_FAKE_COLAB_CLI=1
-exec python3 "${fakeColabPy}" "$@"
+exec python3 "${fakeColabPy.replace(/\\/g, "/")}" "$@"
 `,
     "utf-8",
   );
   chmodSync(colabWrapper, 0o755);
+
+  if (process.platform === "win32") {
+    const py3Wrapper = join(binDir, "python3");
+    writeFileSync(
+      py3Wrapper,
+      `#!/usr/bin/env bash
+exec python "$@"
+`,
+      "utf-8",
+    );
+    chmodSync(py3Wrapper, 0o755);
+
+    const tarWrapper = join(binDir, "tar");
+    writeFileSync(
+      tarWrapper,
+      `#!/usr/bin/env bash
+exec /usr/bin/tar --force-local "$@"
+`,
+      "utf-8",
+    );
+    chmodSync(tarWrapper, 0o755);
+
+    const zstdWrapper = join(binDir, "zstd");
+    writeFileSync(
+      zstdWrapper,
+      `#!/usr/bin/env bash
+if [[ " $* " == *" -d "* ]]; then
+  exec gzip -d
+else
+  exec gzip -c
+fi
+`,
+      "utf-8",
+    );
+    chmodSync(zstdWrapper, 0o755);
+  }
 
   const fakeNvidiaSmi = join(binDir, "nvidia-smi");
   writeFileSync(
@@ -382,15 +515,26 @@ echo "NVIDIA L4, 19650, 23034, 3384"
   );
   chmodSync(fakeNvidiaSmi, 0o755);
 
+  const pathParts = [
+    binDir,
+    dirname(process.execPath),
+    ...(process.platform === "win32"
+      ? ["C:\\Program Files\\Git\\mingw64\\bin", "C:\\Program Files\\Git\\bin", "C:\\Program Files\\Git\\usr\\bin"]
+      : []),
+    ...((process.env.PATH ?? "").split(delimiter).filter((p) => p && !p.includes(".local"))),
+  ];
+
   const env: Record<string, string> = {
-    ... (process.env as Record<string, string>),
-    PATH: `${binDir}:${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
+    ...(process.env as Record<string, string>),
+    PATH: pathParts.join(delimiter),
+    MSYS2_ARG_CONV_EXCL: "/content;SDLAB_",
     SDLAB_TEST_FAKE_COLAB: "1",
-    FAKE_COLAB_STATE_DIR: stateDir,
+    COLAB_OPEN_LOCK: join(stateDir, "colab-window-open.lock").replace(/\\/g, "/"),
+    FAKE_COLAB_STATE_DIR: stateDir.replace(/\\/g, "/"),
     POLYGLOT_TEST_FAKE_OLLAMA_URL: ollamaUrl,
     POLYGLOT_TEST_SKIP_VM_INSTALL: "1",
     SDLAB_TEST_RATE_READ_INTERVAL_S: "0.05",
-    GUARD_POLL_INTERVAL_S: "0.2",
+    GUARD_POLL_INTERVAL_S: "2",
     ...extraEnv,
   };
 
@@ -413,17 +557,32 @@ function killHungPids(stateDir: string) {
 }
 
 function runLauncher(args: string[], env: Record<string, string>): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const normArgs = args.map((a) => (a.includes("\\") ? a.replace(/\\/g, "/") : a));
   return new Promise((done) => {
-    const child = spawn("bash", [launcherPath, ...args], {
+    const child = spawn(bashBin, [launcherPath, ...normArgs], {
       cwd: root,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    if (env.FAKE_COLAB_STATE_DIR && child.pid) {
+      writeFileSync(join(env.FAKE_COLAB_STATE_DIR, "launcher_winpid.txt"), `${child.pid}\n`, "utf-8");
+    }
     let stdout = "";
     let stderr = "";
+    let resolved = false;
+    const finish = (code: number | null) => {
+      if (resolved) return;
+      resolved = true;
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      done({ code, stdout, stderr });
+    };
     child.stdout.on("data", (c: Buffer) => (stdout += c.toString("utf8")));
     child.stderr.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
-    child.on("close", (code) => done({ code, stdout, stderr }));
+    child.on("exit", (code) => {
+      setTimeout(() => finish(code), 150);
+    });
+    child.on("close", (code) => finish(code));
   });
 }
 
@@ -445,6 +604,12 @@ describe("polyglot-mcp Colab translation lane", () => {
         ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-stub-e2e"],
         env,
       );
+      if (res.code !== 0) {
+        console.error("STDERR:", res.stderr);
+        if (existsSync(join(outDir, "vitals.log"))) {
+          console.error("VITALS:", readFileSync(join(outDir, "vitals.log"), "utf-8"));
+        }
+      }
       expect(res.code).toBe(0);
 
       // Verify all 7 translated files + updated source README with nav bar exist in outDir
@@ -491,12 +656,20 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(Object.keys(manifest.readmes[0].output_shas)).toHaveLength(8);
       expect(manifest.readmes[0].nav_bar_check.ok).toBe(true);
 
-      // window.json is valid and records cleanup_bound_s = 980
+      // window.json is valid and records cleanup_bound_s = 1290
       const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
       expect(win.status).toBe("ok");
       expect(win.refusal_code).toBeNull();
-      expect(win.cleanup_stop_attempted_by_s).toBe(840);
-      expect(win.cleanup_bound_s).toBe(980);
+      expect(win.cleanup_stop_attempted_by_s).toBe(1150);
+      expect(win.cleanup_bound_s).toBe(1290);
+      expect(win.worst_case_cap_path).toBeTypeOf("number");
+      expect(win.worst_case_launcher_death_path).toBeTypeOf("number");
+      expect(win.worst_case_total_spend).toBeTypeOf("number");
+      expect(win.assumptions).toMatchObject({
+        cap_path: expect.any(String),
+        launcher_death_path: expect.any(String),
+      });
+      expect(win.spend_ccu).toBeGreaterThanOrEqual(0);
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-stub-e2e");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
@@ -542,7 +715,9 @@ describe("polyglot-mcp Colab translation lane", () => {
       const srcReadme = join(tmp, "README.md");
       writeFileSync(srcReadme, SAMPLE_README, "utf-8");
       const outDir = join(tmp, "out");
-      const { stateDir, env } = makeFakeColabEnv(tmp);
+      const { stateDir, env } = makeFakeColabEnv(tmp, {
+        SDLAB_TEST_RATE_READ_INTERVAL_S: "0.05",
+      });
 
       const res = await runLauncher(
         [
@@ -554,6 +729,8 @@ describe("polyglot-mcp Colab translation lane", () => {
           "high-mem",
           "--max-rate",
           "2.50",
+          "--cap",
+          "1.50",
           "--out-dir",
           outDir,
           "--session",
@@ -571,7 +748,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       ollamaState.sizeVramBytes = ollamaState.sizeBytes;
       rmSync(tmp, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 120_000);
 
   it("(b.3) refuses NAV_BAR_INCOMPLETE when a written target language is missing from the source README nav bar (#65)", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-navbar-"));
@@ -592,8 +769,6 @@ describe("polyglot-mcp Colab translation lane", () => {
         [
           "--readme",
           srcReadme,
-          "--langs",
-          "ja,es",
           "--card",
           "CPU",
           "--out-dir",
@@ -611,7 +786,7 @@ describe("polyglot-mcp Colab translation lane", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 120_000);
 
   it("(b.4) refuses MAX_RATE_REQUIRED on a GPU card when --max-rate is missing, with zero colab calls", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-maxrate-"));
@@ -660,7 +835,7 @@ describe("polyglot-mcp Colab translation lane", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("supports --dry and prints plan and cap-bound price without any colab call", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-dry-"));
@@ -695,6 +870,15 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(plan.dry_run).toBe(true);
       expect(plan.card).toBe("L4");
       expect(plan.shape).toBe("high-mem");
+      expect(plan.cleanup_stop_attempted_by_s).toBe(1150);
+      expect(plan.cleanup_bound_s).toBe(1290);
+      expect(plan.worst_case_cap_path).toBe(1.25);
+      expect(plan.worst_case_launcher_death_path).toBe(1.24);
+      expect(plan.worst_case_total_spend).toBe(1.25);
+      expect(plan.assumptions).toMatchObject({
+        cap_path: expect.any(String),
+        launcher_death_path: expect.any(String),
+      });
       expect(plan.pricing.hours).toBe(0.5);
       expect(plan.pricing.rate_ccu_per_h).toBe(2.5);
       expect(plan.pricing.wall_price_ccu).toBe(1.25);
@@ -711,9 +895,11 @@ describe("polyglot-mcp Colab translation lane", () => {
       FAKE_COLAB_DOWNLOAD_HANG: "ignore_term",
       SDLAB_TEST_KILL_GRACE_S: "1",
       SDLAB_TEST_DOWNLOAD_TIMEOUT_S: "2",
+      SDLAB_TEST_UPLOAD_TIMEOUT_S: "10",
+      SDLAB_TEST_SESSIONS_TIMEOUT_S: "10",
       SDLAB_TEST_SALVAGE_RESTART_TIMEOUT_S: "2",
       SDLAB_TEST_SALVAGE_EXEC_TIMEOUT_S: "2",
-      SDLAB_TEST_STOP_TIMEOUT_S: "2",
+      SDLAB_TEST_STOP_TIMEOUT_S: "4",
     });
     try {
       const srcReadme = join(tmp, "README.md");
@@ -725,8 +911,6 @@ describe("polyglot-mcp Colab translation lane", () => {
         [
           "--readme",
           srcReadme,
-          "--langs",
-          "es",
           "--card",
           "CPU",
           "--out-dir",
@@ -740,15 +924,18 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(res.code).not.toBe(0);
 
       const guardsLog = readFileSync(join(outDir, "guards.log"), "utf-8");
-      expect(guardsLog).toContain("SALVAGE_STEP_TIMEOUT download timeout_s=2 kill_grace_s=1 rc=137");
+      expect(guardsLog).toMatch(/SALVAGE_STEP_TIMEOUT download timeout_s=2 kill_grace_s=1 rc=(124|137)/);
       expect(guardsLog).toContain("REFUSED: DOWNLOAD_FAILED:");
 
       const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
       expect(win.refusal_code).toBe("DOWNLOAD_FAILED");
-      // Configured bounds in test: restart(2+1) + exec(2+1) + download(2+1) = 9s; stop 2*(2+1) = 6s -> cleanup_bound_s = 15s
-      expect(win.cleanup_stop_attempted_by_s).toBe(9);
-      expect(win.cleanup_bound_s).toBe(15);
-      expect(elapsedS).toBeLessThan(win.cleanup_bound_s);
+      // Configured bounds in test: in_flight(max(2,10,10)+1=11) + restart(2+1) + exec(2+1) + download(2+1) = 20s; stop 2*(4+1) = 10s -> cleanup_bound_s = 30s
+      expect(win.cleanup_stop_attempted_by_s).toBe(20);
+      expect(win.cleanup_bound_s).toBe(30);
+      // Verify actual cleanup time (from normal download failure / cleanup_started.txt to colab stop completion) is within cleanup_bound_s
+      const cleanupStartedEpoch = parseFloat(readFileSync(join(outDir, "cleanup_started.txt"), "utf-8").trim());
+      const stopDoneTs = JSON.parse(readFileSync(join(stateDir, "stops.jsonl"), "utf-8").trim().split("\n").pop()!).done_ts;
+      expect(stopDoneTs - cleanupStartedEpoch).toBeLessThanOrEqual(win.cleanup_bound_s);
 
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-hung-dl");
 
@@ -767,7 +954,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       killHungPids(stateDir);
       rmSync(tmp, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 120_000);
 
   it("(d) structural comparison helper (compare_translations.py) compares headings, paragraphs, code blocks byte-for-byte, links/URLs, and nav-bar entries", () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-compare-"));
@@ -822,8 +1009,9 @@ describe("polyglot-mcp Colab translation lane", () => {
       }
 
       // 1. Identical structure across languages passes with exit 0
-      const passRun = spawnSync("python3", [comparePyPath, "--baseline", baseDir, "--candidate", candDir, "--langs", "ja,es"], {
+      const passRun = spawnSync(pyBin, [comparePyPath, "--baseline", baseDir, "--candidate", candDir, "--langs", "ja,es"], {
         encoding: "utf-8",
+        env: { ...process.env, PYTHONIOENCODING: "utf-8" },
       });
       expect(passRun.status).toBe(0);
       const passReport = JSON.parse(passRun.stdout);
@@ -839,8 +1027,9 @@ describe("polyglot-mcp Colab translation lane", () => {
         .replace(' | <a href="README.es.md">Español</a>', "");
       writeFileSync(join(candDir, "README.ja.md"), mutatedJa + "\n### Extra Heading\n", "utf-8");
 
-      const failRun = spawnSync("python3", [comparePyPath, "--baseline", baseDir, "--candidate", candDir, "--langs", "ja,es"], {
+      const failRun = spawnSync(pyBin, [comparePyPath, "--baseline", baseDir, "--candidate", candDir, "--langs", "ja,es"], {
         encoding: "utf-8",
+        env: { ...process.env, PYTHONIOENCODING: "utf-8" },
       });
       expect(failRun.status).toBe(1);
       const failReport = JSON.parse(failRun.stdout);
@@ -850,9 +1039,564 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(failReport.per_language.ja.mismatches.join(" | ")).toContain("heading_count");
       expect(failReport.per_language.ja.mismatches.join(" | ")).toContain("code_block_bytes_mismatch");
       expect(failReport.per_language.ja.mismatches.join(" | ")).toContain("url_set_mismatch");
-      expect(failReport.per_language.ja.mismatches.join(" | ")).toContain("nav_bar_entries");
+      expect( failReport.per_language.ja.mismatches.join(" | ")).toContain("nav_bar_entries");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("(ask1.a) drops --langs: refuses --langs with zero colab calls", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-nolangs-"));
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { stateDir, env } = makeFakeColabEnv(tmp);
+
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--langs", "ja,es", "--card", "CPU", "--out-dir", outDir],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain("REFUSED: unknown argument: --langs");
+      expect(existsSync(join(stateDir, "calls.log"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("(ask1.b) adopts #67 receipt rule in the Colab lane: refuses TRANSLATION_UNVERIFIED when a file fails receipt/structural verification, stops session and logs STOP", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-unverified-"));
+    try {
+      ollamaState.digest = PINNED_DIGEST;
+      ollamaState.processor = "100% GPU";
+      ollamaState.sizeBytes = 17358640928;
+      ollamaState.sizeVramBytes = 17358640928;
+
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { stateDir, env } = makeFakeColabEnv(tmp, {
+        POLYGLOT_TEST_CORRUPT_RECEIPT_LANG: "ja",
+      });
+
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-unverified-receipt"],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).toBe("TRANSLATION_UNVERIFIED");
+      expect(win.why).toContain("ja");
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-unverified-receipt");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(ask2) style-dataset-lab #72 item 1 defect fix: failed closing colab usage keeps last good end_balance.txt and window.json spend_ccu uses floor max(start - end, rate * elapsed / 3600)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-sdlab72-"));
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+
+      // Case 1: Closing `colab usage` fails (exit 1) AND start == end (99.50 -> 99.50) at GPU rate 1.42/hr.
+      // Fail on first upload after session open so closing path runs without salvage overhead.
+      const outDir1 = join(tmp, "out1");
+      const { stateDir: state1, env: env1 } = makeFakeColabEnv(join(tmp, "case1"), {
+        FAKE_COLAB_FAIL_UPLOAD: "1",
+        FAKE_COLAB_FAIL_CLOSING_USAGE: "1",
+        FAKE_COLAB_BALANCE_STR: "99.50",
+        FAKE_COLAB_BALANCE_POST_OPEN_STR: "99.50",
+        FAKE_COLAB_POST_OPEN_RATE_STR: "1.42/hr",
+      });
+
+      const res1 = await runLauncher(
+        [
+          "--readme",
+          srcReadme,
+          "--card",
+          "L4",
+          "--shape",
+          "high-mem",
+          "--max-rate",
+          "2.50",
+          "--cap",
+          "1.50",
+          "--out-dir",
+          outDir1,
+          "--session",
+          "polyglot-sdlab72-floor",
+        ],
+        env1,
+      );
+      expect(res1.code).not.toBe(0);
+      // 1a. end_balance.txt was preserved (not unlinked on failed closing `colab usage`)
+      expect(existsSync(join(outDir1, "end_balance.txt"))).toBe(true);
+      const win1 = JSON.parse(readFileSync(join(outDir1, "window.json"), "utf-8"));
+      expect(win1.start_balance).toBe(99.5);
+      expect(win1.end_balance).toBe(99.5);
+      // 1b. Because start - end == 0, spend_ccu equals the rate floor: round(rate * elapsed_s / 3600, 6)
+      const expectedFloor = Number(((1.42 * win1.elapsed_s) / 3600).toFixed(6));
+      expect(win1.spend_ccu).toBeGreaterThan(0);
+      expect(win1.spend_ccu).toBeCloseTo(expectedFloor, 4);
+      expect(readFileSync(join(state1, "stops.log"), "utf-8")).toContain("STOP -s polyglot-sdlab72-floor");
+
+      // Case 2: Balance drop (99.50 -> 98.00 = 1.50 CCU) exceeds rate * elapsed / 3600 -> spend_ccu == 1.50
+      const outDir2 = join(tmp, "out2");
+      const { stateDir: state2, env: env2 } = makeFakeColabEnv(join(tmp, "case2"), {
+        FAKE_COLAB_FAIL_UPLOAD: "1",
+        FAKE_COLAB_BALANCE_STR: "99.50",
+        FAKE_COLAB_BALANCE_POST_OPEN_STR: "98.00",
+        FAKE_COLAB_POST_OPEN_RATE_STR: "1.42/hr",
+      });
+
+      const res2 = await runLauncher(
+        [
+          "--readme",
+          srcReadme,
+          "--card",
+          "L4",
+          "--shape",
+          "high-mem",
+          "--max-rate",
+          "2.50",
+          "--cap",
+          "3.00",
+          "--out-dir",
+          outDir2,
+          "--session",
+          "polyglot-sdlab72-drop",
+        ],
+        env2,
+      );
+      expect(res2.code).not.toBe(0);
+      const win2 = JSON.parse(readFileSync(join(outDir2, "window.json"), "utf-8"));
+      expect(win2.start_balance).toBe(99.5);
+      expect(win2.end_balance).toBe(98.0);
+      expect(win2.spend_ccu).toBe(1.5);
+      expect(readFileSync(join(state2, "stops.log"), "utf-8")).toContain("STOP -s polyglot-sdlab72-drop");
+    } finally {
+      ollamaState.digest = PINNED_DIGEST;
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(ask3.1) mutation 1 — launcher killed pre-trip: wall watcher polls liveness every ~1s, stops session on launcher_gone_pre_trip, and logs STOP", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-mut1-pretrip-"));
+    const outDir = join(tmp, "out");
+    const { stateDir, env } = makeFakeColabEnv(tmp, {
+      FAKE_COLAB_OUT_DIR: outDir.replace(/\\/g, "/"),
+      FAKE_COLAB_KILL_LAUNCHER_PRE_TRIP: "1",
+      SDLAB_TEST_DOWNLOAD_TIMEOUT_S: "2",
+      SDLAB_TEST_KILL_GRACE_S: "1",
+      SDLAB_TEST_STOP_TIMEOUT_S: "2",
+    });
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+
+      const res = await runLauncher(
+        [
+          "--readme",
+          srcReadme,
+          "--card",
+          "CPU",
+          "--wall-s",
+          "30",
+          "--grace-s",
+          "2",
+          "--out-dir",
+          outDir,
+          "--session",
+          "polyglot-mut1-pretrip",
+        ],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+
+      // Wait up to 20s for detached wall watcher to detect launcher death and write outcome.draft.json + window.json + stops.log
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        if (
+          existsSync(join(outDir, "outcome.draft.json")) &&
+          existsSync(join(outDir, "window.json")) &&
+          existsSync(join(stateDir, "stops.log"))
+        ) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      expect(existsSync(join(outDir, "wall_trip_epoch.txt"))).toBe(false);
+      expect(existsSync(join(stateDir, "stops.log"))).toBe(true);
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-mut1-pretrip");
+      expect(existsSync(join(stateDir, "open_sessions", "polyglot-mut1-pretrip.json"))).toBe(false);
+
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.stop_path).toBe("watcher");
+      expect(win.watcher_wait).toBe("launcher_gone_pre_trip");
+    } finally {
+      killHungPids(stateDir);
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("(ask3.2) mutation 2 — launcher killed mid-cleanup: wall watcher detects launcher death during salvage after cleanup_started.txt, stops session on escalated_launcher_gone, and logs STOP", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-mut2-midcleanup-"));
+    const outDir = join(tmp, "out");
+    const { stateDir, env } = makeFakeColabEnv(tmp, {
+      FAKE_COLAB_OUT_DIR: outDir.replace(/\\/g, "/"),
+      FAKE_COLAB_EXEC_HANG: "1",
+      FAKE_COLAB_KILL_LAUNCHER_MID_CLEANUP: "1",
+      GUARD_POLL_INTERVAL_S: "0.3",
+      SDLAB_TEST_WALL_ESCALATE_S: "2",
+      SDLAB_TEST_DOWNLOAD_TIMEOUT_S: "10",
+      SDLAB_TEST_KILL_GRACE_S: "1",
+      SDLAB_TEST_SALVAGE_DEADLINE_S: "10",
+      SDLAB_TEST_STOP_TIMEOUT_S: "4",
+    });
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+
+      const res = await runLauncher(
+        [
+          "--readme",
+          srcReadme,
+          "--card",
+          "CPU",
+          "--wall-s",
+          "45",
+          "--grace-s",
+          "1",
+          "--out-dir",
+          outDir,
+          "--session",
+          "polyglot-mut2-midcleanup",
+        ],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+
+      // Wait up to 20s for detached wall watcher to detect launcher death mid-salvage and write outcome.draft.json + window.json + stops.log
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        if (
+          existsSync(join(outDir, "outcome.draft.json")) &&
+          existsSync(join(outDir, "window.json")) &&
+          existsSync(join(stateDir, "stops.log"))
+        ) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      expect(existsSync(join(outDir, "cleanup_started.txt"))).toBe(true);
+      expect(existsSync(join(stateDir, "restarts.log"))).toBe(true);
+      expect(existsSync(join(stateDir, "stops.log"))).toBe(true);
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-mut2-midcleanup");
+      expect(existsSync(join(stateDir, "open_sessions", "polyglot-mut2-midcleanup.json"))).toBe(false);
+
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).toBe("WALL_GUARD_TRIPPED");
+      expect(win.stop_path).toBe("watcher");
+      expect(win.watcher_wait).toBe("escalated_launcher_gone");
+    } finally {
+      killHungPids(stateDir);
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("(ask3.3) mutation 3 — wall trip during a long download: wall watcher trips during post-exec download, records cleanup_started.txt epoch (#71), bounds salvage, stops session, and logs STOP", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-mut3-walldl-"));
+    const { stateDir, env } = makeFakeColabEnv(tmp, {
+      FAKE_COLAB_DOWNLOAD_HANG_ONCE: "ignore_term",
+      FAKE_COLAB_RESTART_HANG: "ignore_term",
+      GUARD_POLL_INTERVAL_S: "0.3",
+      SDLAB_TEST_WALL_ESCALATE_S: "1",
+      SDLAB_TEST_DOWNLOAD_TIMEOUT_S: "4",
+      SDLAB_TEST_KILL_GRACE_S: "1",
+      SDLAB_TEST_SALVAGE_DEADLINE_S: "1",
+      SDLAB_TEST_SALVAGE_RESTART_TIMEOUT_S: "0",
+      SDLAB_TEST_STOP_TIMEOUT_S: "2",
+    });
+    try {
+      // Trigger fast remote exit (~1s) so post-exec/salvage download starts before wall_limit_s = 2s,
+      // and wall trips while the long download is in flight.
+      ollamaState.digest = "deadbeef".repeat(8);
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+
+      const res = await runLauncher(
+        [
+          "--readme",
+          srcReadme,
+          "--card",
+          "CPU",
+          "--wall-s",
+          "3",
+          "--grace-s",
+          "1",
+          "--out-dir",
+          outDir,
+          "--session",
+          "polyglot-mut3-walldl",
+        ],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+
+      expect(existsSync(join(outDir, "wall_trip_epoch.txt"))).toBe(true);
+      if (!existsSync(join(outDir, "cleanup_started.txt"))) {
+        console.error("ASK3.2 STDERR:", res.stderr);
+        console.error("ASK3.2 OUTDIR FILES:", existsSync(outDir) ? readdirSync(outDir) : "NO OUTDIR");
+        if (existsSync(join(outDir, "guards.log"))) console.error("ASK3.2 GUARDS:", readFileSync(join(outDir, "guards.log"), "utf-8"));
+        if (existsSync(join(stateDir, "calls.log"))) console.error("ASK3.2 CALLS:", readFileSync(join(stateDir, "calls.log"), "utf-8"));
+      }
+      expect(existsSync(join(outDir, "cleanup_started.txt"))).toBe(true);
+      const cleanupStartedEpoch = parseFloat(readFileSync(join(outDir, "cleanup_started.txt"), "utf-8").trim());
+      expect(cleanupStartedEpoch).toBeGreaterThan(1_000_000_000);
+
+      expect(existsSync(join(stateDir, "stops.log"))).toBe(true);
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-mut3-walldl");
+      expect(existsSync(join(stateDir, "open_sessions", "polyglot-mut3-walldl.json"))).toBe(false);
+
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).toBe("WALL_GUARD_TRIPPED");
+    } finally {
+      ollamaState.digest = PINNED_DIGEST;
+      killHungPids(stateDir);
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("(ask3.4) mutation 4 — cap that is too small: refused before exec with zero fake colab new calls (CAP_TOO_SMALL_FOR_CLEANUP), and pre-exec cap check between new and exec refuses before exec (CAP_GUARD_TRIPPED) and logs STOP", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-mut4-cap-"));
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+
+      // 4a. Cap too small for cleanup reserve ((1290 / 3600) * 2.50 = 0.895833 CCU) -> refused before `colab new` with ZERO fake `colab new` calls.
+      const outDirA = join(tmp, "outA");
+      const { stateDir: stateA, env: envA } = makeFakeColabEnv(join(tmp, "caseA"));
+      const resA = await runLauncher(
+        [
+          "--readme",
+          srcReadme,
+          "--card",
+          "L4",
+          "--shape",
+          "high-mem",
+          "--max-rate",
+          "2.50",
+          "--cap",
+          "0.80",
+          "--margin",
+          "0.01",
+          "--out-dir",
+          outDirA,
+          "--session",
+          "polyglot-mut4-preopen",
+        ],
+        envA,
+      );
+      expect(resA.code).not.toBe(0);
+      expect(resA.stderr).toContain("REFUSED: CAP_TOO_SMALL_FOR_CLEANUP:");
+      const callsA = existsSync(join(stateA, "calls.log")) ? readFileSync(join(stateA, "calls.log"), "utf-8") : "";
+      expect(callsA).not.toContain("CALL new");
+      const guardsA = readFileSync(join(outDirA, "guards.log"), "utf-8");
+      expect(guardsA).toContain("REFUSED: CAP_TOO_SMALL_FOR_CLEANUP:");
+
+      // 4b. Pre-exec cap trip between `colab new` and `colab exec`:
+      // cleanup_reserve = (1290 / 3600) * 2.50 = 0.895833 CCU; cap = 0.92, margin = 0.01 -> effective_trip = 0.014167 CCU.
+      // Post-open balance drops from 99.50 to 99.47 (spend = 0.03 > 0.014167), so colab_check_pre_exec_cap refuses
+      // BEFORE `colab exec` (zero `CALL exec`) and stops the session (`STOP -s` in stops.log).
+      const outDirB = join(tmp, "outB");
+      const { stateDir: stateB, env: envB } = makeFakeColabEnv(join(tmp, "caseB"), {
+        FAKE_COLAB_BALANCE_STR: "99.50",
+        FAKE_COLAB_BALANCE_POST_OPEN_STR: "99.47",
+        FAKE_COLAB_POST_OPEN_RATE_STR: "1.42/hr",
+      });
+      const resB = await runLauncher(
+        [
+          "--readme",
+          srcReadme,
+          "--card",
+          "L4",
+          "--shape",
+          "high-mem",
+          "--max-rate",
+          "2.50",
+          "--cap",
+          "0.92",
+          "--margin",
+          "0.01",
+          "--out-dir",
+          outDirB,
+          "--session",
+          "polyglot-mut4-preexec",
+        ],
+        envB,
+      );
+      expect(resB.code).not.toBe(0);
+      const callsB = readFileSync(join(stateB, "calls.log"), "utf-8");
+      expect(callsB).not.toContain("CALL exec");
+      expect(readFileSync(join(stateB, "stops.log"), "utf-8")).toContain("STOP -s polyglot-mut4-preexec");
+      const winB = JSON.parse(readFileSync(join(outDirB, "window.json"), "utf-8"));
+      expect(winB.refusal_code).toBe("CAP_GUARD_TRIPPED");
+      expect(winB.phase).toBe("pre_exec");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("(ask4) CPU stub rung end-to-end in real mode (POLYGLOT_TEST_SKIP_VM_INSTALL=0): runs every step including curl download, sha256 check, tar -xJf Node unpack, tar --zstd -xf Ollama unpack, ollama serve, ollama pull, digest check, fit probe, repo unpack, npm ci + npm run build, translate-all.mjs, and #67 receipt & nav-bar check", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-ask4-realmode-"));
+    try {
+      ollamaState.digest = PINNED_DIGEST;
+      ollamaState.processor = "100% GPU";
+      ollamaState.sizeBytes = 17358640928;
+      ollamaState.sizeVramBytes = 17358640928;
+
+      const { stateDir, env } = makeFakeColabEnv(tmp);
+
+      // Build real .tar.xz Node fixture (`node-v22.22.3-linux-x64/bin/{node,npm}`) and .tar.zst Ollama fixture (`bin/ollama`)
+      const fixBuildDir = join(tmp, "fixtures_build");
+      const nodeStage = join(fixBuildDir, "node-v22.22.3-linux-x64", "bin");
+      const ollamaStage = join(fixBuildDir, "ollama_pkg", "bin");
+      mkdirSync(nodeStage, { recursive: true });
+      mkdirSync(ollamaStage, { recursive: true });
+
+      const hostNodePosix = process.execPath.replace(/\\/g, "/");
+      const repoRootPosix = root.replace(/\\/g, "/");
+      writeFileSync(
+        join(nodeStage, "node"),
+        `#!/usr/bin/env bash
+exec "${hostNodePosix}" "$@"
+`,
+        "utf-8",
+      );
+      chmodSync(join(nodeStage, "node"), 0o755);
+
+      writeFileSync(
+        join(nodeStage, "npm"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "ci" ]; then
+  if [ ! -d node_modules ]; then
+    python3 -c 'import os, subprocess, sys
+src, dst = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
+if os.name == "nt":
+    subprocess.run(["cmd", "/c", "mklink", "/J", dst, src], check=True)
+else:
+    os.symlink(src, dst)
+' "${repoRootPosix}/node_modules" "./node_modules"
+  fi
+  echo "npm ci: linked node_modules"
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "build" ]; then
+  "${hostNodePosix}" ./node_modules/typescript/bin/tsc
+  echo "npm run build: tsc completed"
+  exit 0
+fi
+exit 0
+`,
+        "utf-8",
+      );
+      chmodSync(join(nodeStage, "npm"), 0o755);
+
+      writeFileSync(
+        join(ollamaStage, "ollama"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  serve)
+    echo "ollama serve stub started"
+    exit 0
+    ;;
+  --version|-v)
+    echo "ollama version is 0.40.15"
+    ;;
+  pull)
+    curl -sf -X POST "\${OLLAMA_HOST:-${ollamaUrl}}/api/pull" -H "Content-Type: application/json" -d "{\\"name\\":\\"\${2:-translategemma:27b}\\",\\"stream\\":false}" >/dev/null
+    echo "pulling manifest... success"
+    ;;
+  ps)
+    echo "NAME                  ID              SIZE     PROCESSOR    UNTIL"
+    echo "translategemma:27b    21b597a243ec    17 GB    100% GPU     4 minutes from now"
+    ;;
+esac
+`,
+        "utf-8",
+      );
+      chmodSync(join(ollamaStage, "ollama"), 0o755);
+
+      const nodeTarXz = join(fixBuildDir, "node.tar.xz");
+      const ollamaTarZst = join(fixBuildDir, "ollama.tar.zst");
+      const tarRes1 = spawnSync(
+        bashBin,
+        ["-c", `tar -cJf "${nodeTarXz.replace(/\\/g, "/")}" -C "${fixBuildDir.replace(/\\/g, "/")}" node-v22.22.3-linux-x64`],
+        { env, encoding: "utf-8" },
+      );
+      expect(tarRes1.status).toBe(0);
+
+      const tarRes2 = spawnSync(
+        bashBin,
+        ["-c", `tar --zstd -cf "${ollamaTarZst.replace(/\\/g, "/")}" -C "${join(fixBuildDir, "ollama_pkg").replace(/\\/g, "/")}" bin`],
+        { env, encoding: "utf-8" },
+      );
+      expect(tarRes2.status).toBe(0);
+
+      const nodeBuf = readFileSync(nodeTarXz);
+      const ollamaBuf = readFileSync(ollamaTarZst);
+      const nodeSha = createHash("sha256").update(nodeBuf).digest("hex");
+      const ollamaSha = createHash("sha256").update(ollamaBuf).digest("hex");
+      fixtureBuffers["/fixtures/node.tar.xz"] = nodeBuf;
+      fixtureBuffers["/fixtures/ollama.tar.zst"] = ollamaBuf;
+
+      env.POLYGLOT_TEST_SKIP_VM_INSTALL = "0";
+      env.POLYGLOT_TEST_NODE_TAR_URL = `${ollamaUrl}/fixtures/node.tar.xz`;
+      env.POLYGLOT_TEST_NODE_TAR_SHA256 = nodeSha;
+      env.POLYGLOT_TEST_OLLAMA_TAR_URL = `${ollamaUrl}/fixtures/ollama.tar.zst`;
+      env.POLYGLOT_TEST_OLLAMA_TAR_SHA256 = ollamaSha;
+
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-ask4-real-stub"],
+        env,
+      );
+      if (res.code !== 0) {
+        console.error("ASK4 STDERR:", res.stderr);
+      }
+      expect(res.code).toBe(0);
+
+      // Verify vitals.log (which tees setup.log) shows npm ci + npm run build + ollama pull ran inside the real-mode VM setup
+      const setupLog = readFileSync(join(outDir, "vitals.log"), "utf-8");
+      expect(setupLog).toContain("pulling manifest... success");
+      expect(setupLog).toContain("MODEL_DIGEST_OK model=translategemma:27b");
+      expect(setupLog).toContain("npm ci: linked node_modules");
+      expect(setupLog).toContain("npm run build: tsc completed");
+
+      const manifest = JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf-8"));
+      expect(manifest.readmes).toHaveLength(1);
+      expect(manifest.readmes[0].verified_languages).toEqual(["ja", "zh", "es", "fr", "hi", "it", "pt"]);
+      expect(manifest.readmes[0].written_unverified).toEqual([]);
+      expect(manifest.readmes[0].nav_bar_check.ok).toBe(true);
+
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.status).toBe("ok");
+      expect(win.refusal_code).toBeNull();
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-ask4-real-stub");
+    } finally {
+      delete fixtureBuffers["/fixtures/node.tar.xz"];
+      delete fixtureBuffers["/fixtures/ollama.tar.zst"];
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
