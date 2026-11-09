@@ -528,3 +528,64 @@ describe("OllamaClient — cloud auth", () => {
     expect(spy).toHaveBeenCalled();
   });
 });
+
+
+describe("OllamaClient — stream cancel and ensureModel pull timer unref (polyglot-mcp#59)", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("isAvailable cancels res.body and swallows cancel rejections", async () => {
+    const cancel = vi.fn().mockRejectedValue(new Error("stream already closed"));
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: { cancel },
+    });
+    const client = new OllamaClient("http://localhost:11434");
+    await expect(client.isAvailable()).resolves.toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("listModels cancels res.body on non-ok response even if cancel rejects", async () => {
+    const cancel = vi.fn().mockRejectedValue(new Error("stream already closed"));
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      body: { cancel },
+    });
+    const client = new OllamaClient("http://localhost:11434");
+    await expect(client.listModels()).rejects.toThrow("Ollama list failed (503)");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("ensureModel pulls a missing local model with an unref'd abort timer", async () => {
+    const encoder = new TextEncoder();
+    const pullStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"status":"downloading","completed":50,"total":100}\n'));
+        controller.enqueue(encoder.encode('{"status":"verifying sha256"}\n'));
+        controller.close();
+      },
+    });
+    const spy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ models: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: pullStream,
+      });
+    globalThis.fetch = spy;
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const client = new OllamaClient("http://localhost:11434");
+    await expect(client.ensureModel("translategemma:27b")).resolves.toBe(true);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[1][0]).toBe("http://localhost:11434/api/pull");
+    stderrSpy.mockRestore();
+  });
+});

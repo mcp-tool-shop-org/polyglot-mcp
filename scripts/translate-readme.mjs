@@ -169,5 +169,15 @@ if (result.untranslated.length > 0) {
   if (untranslatedError) console.error(`\n${untranslatedError.hint}`);
 }
 
+// Flush stdout (wait for the write callback or drain, not a sleep) before
+// exiting so POLYGLOT_WRITTEN and any receipt lines reach the parent pipe.
+await new Promise((resolveFlush) => {
+  if (!process.stdout.write("", () => resolveFlush())) {
+    process.stdout.once("drain", resolveFlush);
+  }
+});
+
 if (lostSpanError) process.exit(EXIT_LOST_SPAN);
 if (untranslatedFailed) process.exit(EXIT_UNTRANSLATED);
+process.exit(0);
+

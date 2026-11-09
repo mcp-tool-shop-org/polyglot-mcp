@@ -11,7 +11,13 @@
  * --cache-clear     Clear the cached translations of each language before translating it
  * --concurrency=N   Run N languages in parallel (default 2, max 3)
  * --timeout=S       Per-language child timeout in seconds (default 900, or POLYGLOT_TIMEOUT_MS in ms)
+ * --silence-timeout=S
+ *                   Post-receipt silence window in seconds before a silent child
+ *                   whose on-disk SHA-256 matches POLYGLOT_WRITTEN is treated as
+ *                   done (DONE_AFTER_SILENCE) and killed (default 15, or
+ *                   POLYGLOT_SILENCE_TIMEOUT_MS in ms)
  * --no-nav-bar      Skip language nav bar injection
+
  * --on-lost-span=fail|report
  *                   When a protected span (inline code, a protected term, an
  *                   "N of M" count) is missing from a translation: fail
@@ -41,7 +47,10 @@ import {
   parseUntranslatedPolicy,
 } from "../dist/survival.js";
 import {
+  DEFAULT_POST_WRITE_SILENCE_MS,
+  DONE_AFTER_SILENCE,
   checkSourceNavBar,
+  doesReceiptMatchDisk,
   parseWriteReceipt,
   resolveNavBarLangCodes,
   verifyTranslatedFile,
@@ -52,7 +61,7 @@ const __dirname = dirname(__filename);
 const translateScript = resolve(__dirname, "translate-readme.mjs");
 
 const USAGE =
-  "Usage: node scripts/translate-all.mjs <readme-path> [--fast] [--no-cache] [--cache-clear] [--concurrency=N] [--timeout=S] [--no-nav-bar] [--on-lost-span=fail|report] [--on-untranslated=fail|report] [--help]";
+  "Usage: node scripts/translate-all.mjs <readme-path> [--fast] [--no-cache] [--cache-clear] [--concurrency=N] [--timeout=S] [--silence-timeout=S] [--no-nav-bar] [--on-lost-span=fail|report] [--on-untranslated=fail|report] [--help]";
 
 const rawArgv = process.argv.slice(2);
 if (rawArgv.includes("--help") || rawArgv.includes("-h")) {
@@ -64,12 +73,14 @@ if (rawArgv.includes("--help") || rawArgv.includes("-h")) {
   console.log("  --cache-clear               Clear cached translations before translating");
   console.log("  --concurrency=N             Run N languages in parallel (default 2, max 3)");
   console.log("  --timeout=S                 Per-language child timeout in seconds (default 900; or POLYGLOT_TIMEOUT_MS in ms)");
+  console.log("  --silence-timeout=S         Post-receipt silence window in seconds (default 15; or POLYGLOT_SILENCE_TIMEOUT_MS in ms)");
   console.log("  --no-nav-bar                Skip language nav bar injection");
   console.log("  --on-lost-span=fail|report  Policy when a protected span is missing (default: fail)");
   console.log("  --on-untranslated=fail|report  Policy when prose comes back in English (default: fail)");
   console.log("  --help, -h                  Print this help message and exit 0");
   process.exit(0);
 }
+
 
 const args = rawArgv.filter((a) => !a.startsWith("--"));
 const flags = rawArgv.filter((a) => a.startsWith("--"));
@@ -130,6 +141,27 @@ const rawTimeoutMs = timeoutFlag
 const childTimeoutMs = Number.isFinite(rawTimeoutMs) && rawTimeoutMs > 0 ? rawTimeoutMs : DEFAULT_CHILD_TIMEOUT_MS;
 const timeoutLabel = childTimeoutMs % 1000 === 0 ? `${childTimeoutMs / 1000}s` : `${childTimeoutMs}ms`;
 
+// Parse --silence-timeout=S (or --post-write-silence=S / --silence=S) flag or
+// POLYGLOT_SILENCE_TIMEOUT_MS / POLYGLOT_SILENCE_MS env var (default 15s = 15_000ms)
+const DEFAULT_SILENCE_TIMEOUT_MS = DEFAULT_POST_WRITE_SILENCE_MS;
+const silenceFlag = flags.find(
+  (f) =>
+    f.startsWith("--silence-timeout=") ||
+    f.startsWith("--post-write-silence=") ||
+    f.startsWith("--silence="),
+);
+const rawSilenceMs = silenceFlag
+  ? Number(silenceFlag.slice(silenceFlag.indexOf("=") + 1)) * 1000
+  : process.env.POLYGLOT_SILENCE_TIMEOUT_MS
+    ? Number(process.env.POLYGLOT_SILENCE_TIMEOUT_MS)
+    : process.env.POLYGLOT_SILENCE_MS
+      ? Number(process.env.POLYGLOT_SILENCE_MS)
+      : DEFAULT_SILENCE_TIMEOUT_MS;
+const silenceTimeoutMs =
+  Number.isFinite(rawSilenceMs) && rawSilenceMs > 0 ? rawSilenceMs : DEFAULT_SILENCE_TIMEOUT_MS;
+const silenceLabel =
+  silenceTimeoutMs % 1000 === 0 ? `${silenceTimeoutMs / 1000}s` : `${silenceTimeoutMs}ms`;
+
 const readmeDir = dirname(absReadmePath);
 const sourceMarkdown = readFileSync(absReadmePath, "utf-8");
 
@@ -145,6 +177,9 @@ const passFlags = [
     (f) =>
       !f.startsWith("--concurrency") &&
       !f.startsWith("--timeout=") &&
+      !f.startsWith("--silence-timeout=") &&
+      !f.startsWith("--post-write-silence=") &&
+      !f.startsWith("--silence=") &&
       f !== "--no-nav-bar" &&
       !f.startsWith("--on-lost-span") &&
       !f.startsWith("--on-untranslated"),
@@ -152,6 +187,7 @@ const passFlags = [
   `--on-lost-span=${onLostSpan}`,
   `--on-untranslated=${onUntranslated}`,
 ];
+
 
 /** Every language's lost spans, from the children's POLYGLOT_LOST_SPANS lines. */
 const lostSpans = [];
@@ -198,12 +234,48 @@ async function translateLang(lang) {
     });
 
     let killed = false;
-    const timer = setTimeout(() => { killed = true; child.kill(); }, childTimeoutMs);
+    let doneAfterSilence = false;
+    let badReceiptSilenceKilled = false;
+    let silenceTimer = null;
+
+    const clearSilenceTimer = () => {
+      if (silenceTimer !== null) {
+        clearTimeout(silenceTimer);
+        silenceTimer = null;
+      }
+    };
+
+    const timer = setTimeout(() => {
+      killed = true;
+      clearSilenceTimer();
+      child.kill();
+    }, childTimeoutMs);
 
     // Read the child's stdout: it carries the write receipt and lost-span list,
     // and an unread pipe can fill and stall the child.
     let stdout = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+
+    const armSilenceTimerIfReceipt = () => {
+      const receipt = parseWriteReceipt(stdout);
+      if (!receipt) return;
+      clearSilenceTimer();
+      silenceTimer = setTimeout(() => {
+        silenceTimer = null;
+        const latestReceipt = parseWriteReceipt(stdout);
+        if (doesReceiptMatchDisk(readmeDir, latestReceipt)) {
+          doneAfterSilence = true;
+          child.kill();
+        } else {
+          badReceiptSilenceKilled = true;
+          child.kill();
+        }
+      }, silenceTimeoutMs);
+    };
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      armSilenceTimerIfReceipt();
+    });
 
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
@@ -212,10 +284,12 @@ async function translateLang(lang) {
       if (match) {
         segProgress[lang.code] = { done: parseInt(match[1]), total: parseInt(match[2]) };
       }
+      armSilenceTimerIfReceipt();
     });
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      clearSilenceTimer();
       const elapsed = ((Date.now() - langStart) / 1000).toFixed(1);
       delete segProgress[lang.code];
 
@@ -250,12 +324,20 @@ async function translateLang(lang) {
       untranslatedLines.push(...untranslated);
       fallbacks.push(...langFallbacks);
 
-      if ((code === 0 || code === EXIT_LOST_SPAN || code === EXIT_UNTRANSLATED) && !killed) {
+      if ((code === 0 || code === EXIT_LOST_SPAN || code === EXIT_UNTRANSLATED || doneAfterSilence) && !killed) {
         // Exit 2: the file was written but lost protected spans (--on-lost-span=fail).
         // Exit 3: the file was written but prose came back in English (--on-untranslated=fail).
         const result = finishLang(lang, langStart, receipt);
-        if (code === EXIT_UNTRANSLATED) result.status = "untranslated";
-        if (code === EXIT_LOST_SPAN) result.status = "lost-span";
+        if (doneAfterSilence) {
+          result.outcome = DONE_AFTER_SILENCE;
+          result.doneAfterSilence = true;
+        }
+        if (code === EXIT_UNTRANSLATED || (doneAfterSilence && onUntranslated === "fail" && untranslated.length > 0)) {
+          result.status = "untranslated";
+        }
+        if (code === EXIT_LOST_SPAN || (doneAfterSilence && onLostSpan === "fail" && lost.length > 0)) {
+          result.status = "lost-span";
+        }
         if (lost.length > 0) result.lostSpans = lost.length;
         if (untranslated.length > 0) result.untranslated = untranslated.length;
         if (langFallbacks.length > 0) {
@@ -265,18 +347,26 @@ async function translateLang(lang) {
         }
         completed++;
         renderProgress();
-        const mark = code === 0 ? "✓" : "✗";
+        const mark = result.status === "ok" ? "✓" : "✗";
         const notes = [];
+        if (doneAfterSilence) notes.push(`${DONE_AFTER_SILENCE} (${silenceLabel})`);
         if (lost.length > 0) notes.push(`${lost.length} protected span(s) lost`);
         if (untranslated.length > 0) notes.push(`${untranslated.length} prose line(s) untranslated`);
         if (langFallbacks.length > 0) notes.push(`${langFallbacks.length} fallback(s), ${result.retried} retried`);
         const note = notes.length > 0 ? ` — ${notes.join("; ")}` : "";
+        if (doneAfterSilence) {
+          console.log(`POLYGLOT_DONE_AFTER_SILENCE ${lang.code} ${result.file} ${silenceLabel}`);
+        }
         process.stderr.write(`\n  ${mark} ${lang.name} — ${result.time}s${note}\n`);
         resolve_(result);
       } else {
         completed++;
         renderProgress();
-        const reason = killed ? `timeout (${timeoutLabel})` : `exit code ${code}`;
+        const reason = killed
+          ? `timeout (${timeoutLabel})`
+          : badReceiptSilenceKilled
+            ? `receipt_sha_mismatch (killed after ${silenceLabel} silence)`
+            : `exit code ${code}`;
         process.stderr.write(`\n  ✗ ${lang.name} — FAILED after ${elapsed}s (${reason})\n`);
         resolve_({
           lang: lang.code,
@@ -288,6 +378,7 @@ async function translateLang(lang) {
         });
       }
     });
+
   });
 }
 
@@ -341,6 +432,8 @@ for (const r of results) {
     }
   } else {
     r.status = "written-unverified";
+    delete r.outcome;
+    delete r.doneAfterSilence;
     r.failedChecks = verification.failedChecks;
     r.failed_checks = verification.failedChecks;
     r.verificationError = verification.failedChecks.join("; ");
@@ -349,6 +442,7 @@ for (const r of results) {
     }
   }
 }
+
 
 failed = results.filter(
   (r) => r.status === "error" || r.status === "written-after-error" || r.status === "written-unverified",
@@ -471,6 +565,7 @@ renderProgress();
 process.stderr.write("\n");
 const totalElapsed = ((Date.now() - totalStart) / 1000).toFixed(1);
 
+const doneAfterSilenceResults = results.filter((r) => r.outcome === DONE_AFTER_SILENCE);
 const writtenAfterErrorResults = results.filter((r) => r.status === "written-after-error");
 const unverifiedResults = results.filter((r) => r.status === "written-unverified");
 
@@ -491,6 +586,7 @@ console.log(JSON.stringify({
   languages: results.length,
   // A language marked "untranslated", "written-after-error", or "written-unverified" is not a clean success.
   succeeded: results.filter((r) => r.status === "ok" || r.status === "lost-span").length,
+  doneAfterSilence: doneAfterSilenceResults.map((r) => r.lang),
   untranslatedLanguages: results.filter((r) => r.status === "untranslated").length,
   writtenAfterError: writtenAfterErrorResults.map((r) => r.lang),
   writtenUnverified: unverifiedResults.map((r) => ({
@@ -516,6 +612,16 @@ console.log("=".repeat(60));
 if (!navBarCheck.ok) {
   console.error(`\nREFUSED: ${navBarCheck.refusalCode}: ${navBarCheck.why}`);
 }
+
+if (doneAfterSilenceResults.length > 0) {
+  console.error(
+    `\n⚠ ${doneAfterSilenceResults.length} language(s) finished via ${DONE_AFTER_SILENCE} (killed after ${silenceLabel} silence with verified receipt):`,
+  );
+  for (const r of doneAfterSilenceResults) {
+    console.error(`  - ${r.lang} (${r.name}, ${r.file})`);
+  }
+}
+
 
 if (writtenAfterErrorResults.length > 0) {
   console.error(

@@ -21,6 +21,9 @@ import {
   checkSourceNavBar,
   parseMarkdownStructure,
   parseWriteReceipt,
+  doesReceiptMatchDisk,
+  DONE_AFTER_SILENCE,
+  DEFAULT_POST_WRITE_SILENCE_MS,
   resolveNavBarLangCodes,
   verifyTranslatedMarkdown,
   verifyTranslatedFile,
@@ -564,6 +567,36 @@ describe("parseMarkdownStructure, verifyTranslatedMarkdown & verifyTranslatedFil
         ["fr"],
       );
       expect(Array.from(codes)).toEqual(["ja", "it", "pt"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe("doesReceiptMatchDisk and post-write silence constants (polyglot-mcp#59)", () => {
+  it("exports DONE_AFTER_SILENCE and DEFAULT_POST_WRITE_SILENCE_MS", () => {
+    expect(DONE_AFTER_SILENCE).toBe("DONE_AFTER_SILENCE");
+    expect(DEFAULT_POST_WRITE_SILENCE_MS).toBe(15_000);
+  });
+
+  it("returns true only when the receipt's file exists on disk and its SHA-256 matches", () => {
+    const dir = mkdtempSync(join(tmpdir(), "polyglot-receipt-disk-"));
+    try {
+      expect(doesReceiptMatchDisk(dir, null)).toBe(false);
+      expect(doesReceiptMatchDisk(dir, { path: "README.ja.md", sha256: "a".repeat(64) })).toBe(false);
+
+      const content = "# タイトル\n\nBody\n";
+      const filePath = join(dir, "README.ja.md");
+      writeFileSync(filePath, content, "utf-8");
+      const sha = createHash("sha256").update(Buffer.from(content, "utf-8")).digest("hex");
+
+      expect(doesReceiptMatchDisk(dir, { path: "README.ja.md", sha256: sha })).toBe(true);
+      expect(doesReceiptMatchDisk(dir, { path: "README.ja.md", sha256: sha.toUpperCase() })).toBe(true);
+      expect(doesReceiptMatchDisk(dir, { path: "README.ja.md", sha256: "0".repeat(64) })).toBe(false);
+      expect(doesReceiptMatchDisk(dir, { path: "", sha256: sha })).toBe(false);
+      // Passing "." resolves to the directory itself (existsSync === true), so readFileSync throws EISDIR and hits catch.
+      expect(doesReceiptMatchDisk(dir, { path: ".", sha256: sha })).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
