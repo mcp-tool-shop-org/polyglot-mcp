@@ -314,6 +314,8 @@ def main(argv: list[str] | None = None) -> int:
     text = json.dumps(report, indent=2, ensure_ascii=False)
     if args.out is not None:
         args.out.write_text(text + "\n", encoding="utf-8", newline="\n")
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     print(text)
     return 0 if report["match"] else 1
 
