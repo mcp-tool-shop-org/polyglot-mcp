@@ -1,13 +1,18 @@
 # Colab CLI contract: one kernel per session, and history keeps code and outputs
 
-Source: google-colab-cli 0.7.4, read on 2026-11-06. The same contract is modelled by the reasoning-dataset-lab fake. This repo's fake is `tests/colab/fixtures/fake_colab.py`, and its section 4 behaviour is tested in `tests/colab/test_fake_single_kernel.py`.
+<!-- Ported from style-dataset-lab @ 20a098e7 (docs/colab-cli-contract.md at commit 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2).
+Local adaptations:
+  - this repo's fake CLI and tests live in `src/colabLane.test.ts` (rather than `tests/colab/fixtures/fake_colab.py`);
+  - section 6 reflects the 2026-11-09 Fleet ruling (`windowC2-26`) that a Colab L4 has a single `Standard` shape (`--high-mem` is ignored for L4, so `--card L4 --shape standard` is required and `--card L4 --shape high-mem` is refused before any `colab new` call with `SHAPE_HIGH_MEM_UNAVAILABLE`). -->
+
+Source: google-colab-cli 0.7.4, read on 2026-11-06. The same contract is modelled by the reasoning-dataset-lab and style-dataset-lab fakes. This repo's fake is in `src/colabLane.test.ts`.
 
 1. **`colab exec` serialises on one kernel per session.**
    - Every exec on a session reuses the stored `kernel_id` (`colab_cli/commands/execution.py:198-210`: `ColabRuntime(..., kernel_id=s.kernel_id, ...)`), and Jupyter runs a kernel's cells one at a time.
    - A second exec issued while a cell is still running waits behind that cell. This happens when the local client was killed or timed out. The second exec does not run concurrently.
    - Killing the local `colab exec` does not stop the VM cell.
    - To run anything else on that session first, interrupt or restart the kernel with `colab restart-kernel -s <session>` (`commands/session.py:220`, registered at `:354`). That command calls `runtime.restart()` (`:248-251`), which is `kernel_client.restart()` (`colab_cli/runtime.py:174-178`), a server-side kernel restart.
-   - The CLI source does not show what the server does to processes the cell spawned. Check that after a restart; the lane 3 kit's bundle-now kills the rung's processes by command line either way.
+   - The CLI source does not show what the server does to processes the cell spawned. Check that after a restart; the translation kit's `translate_bundle_now.py` kills the rung's processes by command line either way.
 2. **`colab upload` and `colab download` do not use the kernel.** They go through the contents API (`commands/files.py:93`, `:123`, `:161`, `:173` → `contents.upload` / `contents.download`), so they work while a cell runs.
 3. **History records exec code and exec outputs.** Every exec writes `{"code": ..., "outputs": ...}` to `~/.config/colab-cli/history/<session>.jsonl` (`execution.py:262-272`).
    - `--env` values become `os.environ[...] = <value>` lines at the top of the code (`execution.py:65-71`, prepended at `:235`), so they end up in the history and in argv.
@@ -32,6 +37,7 @@ Source: google-colab-cli 0.7.4, read on 2026-11-06. The same contract is modelle
    - Known limit: a neighbour opening on the same read this window's own rate rises folds that rise into the baseline. Pricing at the higher of `--max-rate` and the highest stable rate seen bounds the cost.
    - Every lane goes through one gate (`colab_gpu_rate_gate_arm`, then `colab_open_session_locked`, which refuses `GPU_RATE_GATE_NOT_ARMED` for a GPU card that was not armed).
 6. **`colab new --high-mem` picks the machine shape, and `colab sessions` shows it.**
-   - `--high-mem` becomes `shape=hm` on the assign request (`colab_cli/client.py:302-303`), except for L4, V5E1 and V6E1, where `resolve_assign_shape` drops it (`:90-95`, `:109-110`): those cards come in one high-memory shape.
+   - `--high-mem` becomes `shape=hm` on the assign request (`colab_cli/client.py:302-303`), except for L4, V5E1 and V6E1, where `resolve_assign_shape` drops it (`:90-95`, `:109-110`), and CLI help states `--high-mem` is ignored for L4.
+   - Real Colab evidence (`windowC2-26`) confirmed `colab new --gpu L4` with no `--high-mem` assigns `Hardware: L4 | Shape: Standard` (Fleet ruling, 2026-11-09: a Colab L4 has a single `Standard` shape). V5E1 and V6E1 exist in a single high-memory shape.
    - Each `colab sessions` row is `[name] endpoint | Hardware: X | Shape: Y | Variant: Z`, with `Y` `High-RAM` or `Standard` from the server's assignment (`commands/session.py:41-63`, `sessions_command` at `:254-277`; `client.py:114-118`).
-   - A GPU card therefore names its shape: `--shape standard|high-mem`, required, no default (`SHAPE_REQUIRED`). `--high-mem` is sent only for `high-mem`, and after the open the session's row must show the requested Shape, or the kit refuses `SHAPE_MISMATCH` and stops the session. `--shape standard` on L4, V5E1 or V6E1 is refused before any call (`SHAPE_STANDARD_UNAVAILABLE`). A CPU card keeps `--high-mem` and takes no `--shape`.
+   - A GPU card therefore names its shape: `--shape standard|high-mem`, required, no default (`SHAPE_REQUIRED`). `--high-mem` is sent only for `high-mem`, and after the open the session's row must show the requested Shape, or the kit refuses `SHAPE_MISMATCH` and stops the session. `--card L4 --shape high-mem` is refused before any `colab new` call (`SHAPE_HIGH_MEM_UNAVAILABLE`), while `--card L4 --shape standard` is accepted. `--shape standard` on V5E1 or V6E1 is refused before any call (`SHAPE_STANDARD_UNAVAILABLE`). A CPU card keeps `--high-mem` and takes no `--shape`.

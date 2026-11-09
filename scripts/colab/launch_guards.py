@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# Ported from style-dataset-lab scripts/colab/launch_guards.py at commit
-# 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2 (#69 merge; includes #71).
-# Polyglot adaptations: WORKER_PROC_RE includes translate-all.mjs, translate-readme.mjs, node.
+# Ported from style-dataset-lab @ 20a098e7 (scripts/colab/launch_guards.py at commit
+# 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2, #69 merge; includes #71).
+# Local adaptations: WORKER_PROC_RE includes translate-all.mjs, translate-readme.mjs, node.
 """C2 Colab launcher guards (DESIGN-v3 section 9.2 item 6 — lessons v4k, v4p, v4q).
 
 Provides:

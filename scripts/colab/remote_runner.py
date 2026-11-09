@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Ported from style-dataset-lab @ 20a098e7 (scripts/colab/remote_runner.py at commit
+# 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2).
+# Local adaptations:
+#   - _resolve_bash checks Git-for-Windows C:/Program Files/Git/usr/bin/bash.exe before PATH;
+#   - subprocess.Popen uses encoding="utf-8", errors="replace" for Windows UTF-8 safety.
 """Remote kernel runner executed via `colab exec -s <session> -f remote_runner.py`.
 
 Runs the uploaded remote shell script (`SDLAB_REMOTE_SCRIPT`, e.g.

@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Ported from style-dataset-lab @ 20a098e7 (scripts/colab/lane3_bundle_now.py at commit
+# 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2).
+# Local adaptations:
+#   - stops lingering polyglot translation workers (`translate-(all|readme)\.mjs`) under /content/polyglot_work;
+#   - scrubs logs and tars `/content/polyglot_out` into `/content/polyglot_translate_bundle.tar.gz`.
 """Run on the VM by the polyglot-mcp Colab kit's failure path (`colab exec -f translate_bundle_now.py`).
 
 After a rig-side kill (wall, cap, stall or dead harness) the kit has stopped only its own exec; the

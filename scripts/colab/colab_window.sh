@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Ported from style-dataset-lab scripts/colab/colab_window.sh at commit
-# 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2 (#69 merge; includes #71).
+# Ported from style-dataset-lab @ 20a098e7 (scripts/colab/colab_window.sh at commit
+# 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2, #69 merge; includes #71).
 # Polyglot adaptations:
 #   - lane == "translate" shares the 1150 s / 1290 s salvage cleanup bounds with "train";
-#   - MSYS/Git-Bash compatibility for backgrounded salvage step and wall-watcher process tracking;
-#   - polyglot-mcp REFUSAL_CODES (including TRANSLATION_UNVERIFIED);
+#   - MSYS/Git-Bash compatibility for backgrounded salvage step and wall-watcher process tracking
+#     (with bounded consecutive probe error counter and _msys_proc_map children traversal);
+#   - Fleet L4 shape ruling (2026-11-09): L4 has a single Standard shape (SHAPE_HIGH_MEM_UNAVAILABLE);
+#   - polyglot-mcp REFUSAL_CODES (including TRANSLATION_UNVERIFIED, VRAM_HEADROOM_LOW);
 #   - style-dataset-lab #72 item 1 fix: preserve end_balance.txt on failed closing colab usage
 #     and record spend_ccu = max(start - end, rate * elapsed / 3600) plus dual spend bounds in window.json.
 # Shared Colab window lifecycle, lock, live wall/cap/vitals/RAM guards, token scrubber, and EXIT trap.
@@ -261,8 +263,10 @@ colab_run_bounded_salvage_step() {
 # epoch (`time.time()` float seconds, matching wall_trip_epoch.txt) in cleanup_started.txt
 # at the very top of `cleanup_on_exit` (before post-failure salvage) so `colab_run_wall_watcher`
 # knows the main shell entered cleanup and waits up to COLAB_CLEANUP_STOP_ATTEMPTED_BY_S for salvage.
+COLAB_IN_CLEANUP=0
 colab_enter_cleanup_trap() {
   local out_dir="$1"
+  COLAB_IN_CLEANUP=1
   if [ -n "${out_dir}" ] && [ -d "${out_dir}" ] && [ ! -f "${out_dir}/cleanup_started.txt" ]; then
     local py_bin="${PY_BIN:-$(colab_resolve_python)}"
     "${py_bin}" -c 'import sys, time; open(sys.argv[1], "w", encoding="utf-8").write(f"{time.time():.6f}\n")' "${out_dir}/cleanup_started.txt" 2>/dev/null \
@@ -450,7 +454,11 @@ colab_download_checked() {
   local kill_grace="${COLAB_KILL_GRACE_S:-10}"
   local out=""
   local rc=0
-  out="$(colab_run_bounded "${dl_timeout}" "${kill_grace}" colab download -s "${session}" "${src}" "${dst}" 2>&1)" || rc=$?
+  COLAB_IN_DOWNLOAD_CHECKED=1
+  colab_run_bounded "${dl_timeout}" "${kill_grace}" colab download -s "${session}" "${src}" "${dst}" > "${out_dir}/.dl_checked.out" 2>&1 || rc=$?
+  COLAB_IN_DOWNLOAD_CHECKED=0
+  out="$(cat "${out_dir}/.dl_checked.out" 2>/dev/null || true)"
+  rm -f "${out_dir}/.dl_checked.out"
   printf '%s\n' "${out}" >> "${out_dir}/colab.log"
   if colab_rc_is_timeout "${rc}"; then
     echo "SALVAGE_STEP_TIMEOUT download timeout_s=${dl_timeout} kill_grace_s=${kill_grace} rc=${rc}" >> "${out_dir}/guards.log"
@@ -459,6 +467,9 @@ colab_download_checked() {
     rm -f "${dst}"
     colab_refuse_logged "${out_dir}" DOWNLOAD_FAILED "${src} -> ${dst}: colab download rc=${rc} http=$(_colab_http_status "${out}") (CLI output in colab.log)"
     return 1
+  fi
+  if [ "${COLAB_DEFERRED_TERM:-0}" = "1" ]; then
+    return 143
   fi
 }
 
@@ -1155,11 +1166,22 @@ colab_gpu_rate_gate_arm() {
 # not armed here, passes --high-mem only for high-mem, and checks the session row's Shape after open.
 #
 # google-colab-cli 0.7.4 drops --high-mem for L4, V5E1 and V6E1 (colab_cli/client.py:90-95,
-# HIGH_MEM_ONLY_ACCELERATORS; resolve_assign_shape returns None for them at :109-110): those cards
-# exist in a single high-memory shape, so --shape standard is refused for them before any colab call.
+# HIGH_MEM_ONLY_ACCELERATORS; resolve_assign_shape returns None for them at :109-110).
+# Fleet ruling (2026-11-09, windowC2-26): a Colab L4 has a single Standard shape
+# (`Hardware: L4 | Shape: Standard`; `--high-mem` is ignored), so `--card L4 --shape standard`
+# is accepted and `--card L4 --shape high-mem` is refused before any `colab new` call with
+# `SHAPE_HIGH_MEM_UNAVAILABLE`. V5E1 and V6E1 exist in a single high-memory shape, so `--shape standard`
+# is refused for them before any `colab` call with `SHAPE_STANDARD_UNAVAILABLE`.
 colab_card_is_single_shape() {
   case "${1^^}" in
-    L4 | V5E1 | V6E1) return 0 ;;
+    V5E1 | V6E1) return 0 ;;
+  esac
+  return 1
+}
+
+colab_card_is_standard_only_shape() {
+  case "${1^^}" in
+    L4) return 0 ;;
   esac
   return 1
 }
@@ -1198,6 +1220,10 @@ colab_shape_gate_arm() {
       return 2
       ;;
   esac
+  if [ "${shape}" = "high-mem" ] && colab_card_is_standard_only_shape "${card}"; then
+    colab_refuse_logged "${out_dir}" SHAPE_HIGH_MEM_UNAVAILABLE "${card} has a single Standard shape on Colab (--high-mem is ignored); pass --shape standard"
+    return 2
+  fi
   if [ "${shape}" = "standard" ] && colab_card_is_single_shape "${card}"; then
     colab_refuse_logged "${out_dir}" SHAPE_STANDARD_UNAVAILABLE "${card} has a single high-memory shape (google-colab-cli 0.7.4 colab_cli/client.py:90-95); pass --shape high-mem"
     return 2
@@ -1593,7 +1619,20 @@ out_dir = Path(sys.argv[5])
 watcher_wait_p = out_dir / "watcher_wait.txt"
 tracked_p = out_dir / ".watcher_tracked_pids.txt"
 early_trip_p = out_dir / "early_wall_trip.txt"
+test_mode_active = os.environ.get("TEST_MODE") == "1" and os.environ.get("SDLAB_TEST_FAKE_COLAB") == "1"
 self_pid = os.getpid()
+MAX_CONSECUTIVE_PROBE_ERRORS = 3
+consecutive_probe_errors = 0
+
+def log_probe_error(stage: str, reason: str) -> None:
+    try:
+        with (out_dir / "guards.log").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(
+                f"LAUNCHER_LIVENESS_PROBE_ERROR stage={stage} pid={main_pid} "
+                f"consecutive={consecutive_probe_errors}/{MAX_CONSECUTIVE_PROBE_ERRORS} reason={reason}\n"
+            )
+    except OSError:
+        pass
 
 def stop_completed() -> bool:
     if (out_dir / "cleanup_finished.txt").is_file():
@@ -1618,20 +1657,23 @@ last_written_pids: set[int] = set()
 import subprocess
 
 _proc_cache_ts = 0.0
-_proc_cache_val: tuple[dict[int, int], dict[int, list[int]]] = ({}, {})
+_proc_cache_val: tuple[dict[int, int], dict[int, list[int]], str | None] = ({}, {}, None)
 
-def _msys_proc_map() -> tuple[dict[int, int], dict[int, list[int]]]:
+def _msys_proc_map() -> tuple[dict[int, int], dict[int, list[int]], str | None]:
     global _proc_cache_ts, _proc_cache_val
     if os.name != "nt":
-        return {}, {}
+        return {}, {}, None
     now_m = time.monotonic()
-    if now_m - _proc_cache_ts < 0.3 and _proc_cache_val[0]:
+    if now_m - _proc_cache_ts < 0.3 and _proc_cache_val[0] and _proc_cache_val[2] is None:
         return _proc_cache_val
     winpid_map: dict[int, int] = {}
     children_map: dict[int, list[int]] = {}
+    err_reason: str | None = None
     ps_exe = "C:/Program Files/Git/usr/bin/ps.exe" if Path("C:/Program Files/Git/usr/bin/ps.exe").is_file() else "ps"
     try:
         r = subprocess.run([ps_exe], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        if r.returncode != 0:
+            err_reason = f"ps_rc={r.returncode}"
         for line in r.stdout.splitlines()[1:]:
             parts = line.strip().split()
             while parts and not parts[0].isdigit():
@@ -1645,11 +1687,11 @@ def _msys_proc_map() -> tuple[dict[int, int], dict[int, list[int]]]:
             r2 = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
             if r2.returncode == 0:
                 winpid_map[main_pid] = main_pid
-    except Exception:
-        pass
+    except Exception as exc:
+        err_reason = f"{type(exc).__name__}: {exc}"
     _proc_cache_ts = now_m
-    _proc_cache_val = (winpid_map, children_map)
-    return winpid_map, children_map
+    _proc_cache_val = (winpid_map, children_map, err_reason)
+    return winpid_map, children_map, err_reason
 
 def record_children(flush: bool = False) -> None:
     if tracked_p.is_file():
@@ -1681,16 +1723,19 @@ def record_children(flush: bool = False) -> None:
                         stack.append(int(tok))
             except OSError:
                 pass
-    if not used_task_children and os.name != "nt":
-        children: dict[int, list[int]] = {}
-        for stat_p in Path("/proc").glob("[0-9]*/stat"):
-            try:
-                data = stat_p.read_text(encoding="utf-8")
-                pid_s, rest = data.split(" (", 1)
-                ppid_s = rest.rsplit(") ", 1)[1].split()[1]
-                children.setdefault(int(ppid_s), []).append(int(pid_s))
-            except Exception:
-                continue
+    if not used_task_children:
+        if os.name == "nt":
+            _, children, _ = _msys_proc_map()
+        else:
+            children = {}
+            for stat_p in Path("/proc").glob("[0-9]*/stat"):
+                try:
+                    data = stat_p.read_text(encoding="utf-8")
+                    pid_s, rest = data.split(" (", 1)
+                    ppid_s = rest.rsplit(") ", 1)[1].split()[1]
+                    children.setdefault(int(ppid_s), []).append(int(pid_s))
+                except Exception:
+                    continue
         stack = [main_pid, *list(tracked_pids)]
         seen = set()
         while stack:
@@ -1710,25 +1755,59 @@ def record_children(flush: bool = False) -> None:
             pass
 
 def launcher_alive() -> bool:
+    global consecutive_probe_errors
+    fault = os.environ.get("SDLAB_TEST_PROBE_ERROR_MODE", "") if test_mode_active else ""
+    if fault == "always":
+        consecutive_probe_errors += 1
+        log_probe_error("pre_trip", "OSError: simulated_probe_error_always")
+        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
+            return False
+        return True
+    if fault == "once" and not (out_dir / ".probe_fault_once_done").exists():
+        (out_dir / ".probe_fault_once_done").write_text("1\n", encoding="utf-8")
+        consecutive_probe_errors += 1
+        log_probe_error("pre_trip", "OSError: simulated_probe_error_once")
+        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
+            return False
+        return True
     if os.name == "nt":
-        winpid_map, _ = _msys_proc_map()
+        winpid_map, _, ps_err = _msys_proc_map()
         if main_pid in winpid_map:
+            consecutive_probe_errors = 0
             return True
         bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
-        for _ in range(3):
-            try:
-                r = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
-                if r.returncode == 0:
-                    return True
-            except Exception:
+        last_exc: str | None = ps_err
+        try:
+            r = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
+            if r.returncode == 0:
+                consecutive_probe_errors = 0
                 return True
-            time.sleep(0.15)
-        return False
+            if ps_err is None:
+                consecutive_probe_errors = 0
+                return False
+        except Exception as exc:
+            last_exc = f"{type(exc).__name__}: {exc}"
+        consecutive_probe_errors += 1
+        log_probe_error("pre_trip", last_exc or "unknown_probe_error")
+        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
+            return False
+        return True
     try:
         os.kill(main_pid, 0)
+        consecutive_probe_errors = 0
         return True
-    except OSError:
+    except ProcessLookupError:
+        consecutive_probe_errors = 0
         return False
+    except PermissionError:
+        consecutive_probe_errors = 0
+        return True
+    except Exception as exc:
+        consecutive_probe_errors += 1
+        log_probe_error("pre_trip", f"{type(exc).__name__}: {exc}")
+        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
+            return False
+        return True
 
 def session_was_opened() -> bool:
     return (out_dir / "session_open_started.txt").is_file() or (out_dir / "session_opened.txt").is_file()
@@ -1753,7 +1832,7 @@ while True:
     record_children()
     if stop_completed():
         sys.exit(0)
-    if early_trip_p.is_file():
+    if test_mode_active and early_trip_p.is_file():
         break
     if not launcher_alive():
         if stop_completed():
@@ -1800,7 +1879,20 @@ cleanup_started_p = out_dir / "cleanup_started.txt"
 stop_reached_p = out_dir / "stop_reached.txt"
 watcher_wait_p = out_dir / "watcher_wait.txt"
 tracked_p = out_dir / ".watcher_tracked_pids.txt"
+test_mode_active = os.environ.get("TEST_MODE") == "1" and os.environ.get("SDLAB_TEST_FAKE_COLAB") == "1"
 self_pid = os.getpid()
+MAX_CONSECUTIVE_PROBE_ERRORS = 3
+consecutive_probe_errors = 0
+
+def log_probe_error(stage: str, reason: str) -> None:
+    try:
+        with (out_dir / "guards.log").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(
+                f"LAUNCHER_LIVENESS_PROBE_ERROR stage={stage} pid={main_pid} "
+                f"consecutive={consecutive_probe_errors}/{MAX_CONSECUTIVE_PROBE_ERRORS} reason={reason}\n"
+            )
+    except OSError:
+        pass
 
 def stop_completed() -> bool:
     if (out_dir / "cleanup_finished.txt").is_file():
@@ -1824,20 +1916,23 @@ tracked_pids: set[int] = set()
 import subprocess
 
 _proc_cache_ts = 0.0
-_proc_cache_val: tuple[dict[int, int], dict[int, list[int]]] = ({}, {})
+_proc_cache_val: tuple[dict[int, int], dict[int, list[int]], str | None] = ({}, {}, None)
 
-def _msys_proc_map() -> tuple[dict[int, int], dict[int, list[int]]]:
+def _msys_proc_map() -> tuple[dict[int, int], dict[int, list[int]], str | None]:
     global _proc_cache_ts, _proc_cache_val
     if os.name != "nt":
-        return {}, {}
+        return {}, {}, None
     now_m = time.monotonic()
-    if now_m - _proc_cache_ts < 0.3 and _proc_cache_val[0]:
+    if now_m - _proc_cache_ts < 0.3 and _proc_cache_val[0] and _proc_cache_val[2] is None:
         return _proc_cache_val
     winpid_map: dict[int, int] = {}
     children_map: dict[int, list[int]] = {}
+    err_reason: str | None = None
     ps_exe = "C:/Program Files/Git/usr/bin/ps.exe" if Path("C:/Program Files/Git/usr/bin/ps.exe").is_file() else "ps"
     try:
         r = subprocess.run([ps_exe], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        if r.returncode != 0:
+            err_reason = f"ps_rc={r.returncode}"
         for line in r.stdout.splitlines()[1:]:
             parts = line.strip().split()
             while parts and not parts[0].isdigit():
@@ -1851,11 +1946,11 @@ def _msys_proc_map() -> tuple[dict[int, int], dict[int, list[int]]]:
             r2 = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
             if r2.returncode == 0:
                 winpid_map[main_pid] = main_pid
-    except Exception:
-        pass
+    except Exception as exc:
+        err_reason = f"{type(exc).__name__}: {exc}"
     _proc_cache_ts = now_m
-    _proc_cache_val = (winpid_map, children_map)
-    return winpid_map, children_map
+    _proc_cache_val = (winpid_map, children_map, err_reason)
+    return winpid_map, children_map, err_reason
 
 def record_children() -> None:
     if tracked_p.is_file():
@@ -1868,8 +1963,10 @@ def record_children() -> None:
                         tracked_pids.add(pid)
         except OSError:
             pass
-    if os.name != "nt":
-        children: dict[int, list[int]] = {}
+    if os.name == "nt":
+        _, children, _ = _msys_proc_map()
+    else:
+        children = {}
         for stat_p in Path("/proc").glob("[0-9]*/stat"):
             try:
                 data = stat_p.read_text(encoding="utf-8")
@@ -1878,16 +1975,16 @@ def record_children() -> None:
                 children.setdefault(int(ppid_s), []).append(int(pid_s))
             except Exception:
                 continue
-        stack = [main_pid, *list(tracked_pids)]
-        seen: set[int] = set()
-        while stack:
-            cur = stack.pop()
-            if cur in seen or cur in (watcher_pid, self_pid):
-                continue
-            seen.add(cur)
-            if cur != main_pid:
-                tracked_pids.add(cur)
-            stack.extend(children.get(cur, []))
+    stack = [main_pid, *list(tracked_pids)]
+    seen: set[int] = set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen or cur in (watcher_pid, self_pid):
+            continue
+        seen.add(cur)
+        if cur != main_pid:
+            tracked_pids.add(cur)
+        stack.extend(children.get(cur, []))
     if tracked_pids:
         try:
             tracked_p.write_text("".join(f"{p}\n" for p in sorted(tracked_pids)), encoding="utf-8", newline="\n")
@@ -1895,25 +1992,59 @@ def record_children() -> None:
             pass
 
 def launcher_alive() -> bool:
+    global consecutive_probe_errors
+    fault = os.environ.get("SDLAB_TEST_PROBE_ERROR_MODE", "") if test_mode_active else ""
+    if fault == "always":
+        consecutive_probe_errors += 1
+        log_probe_error("post_trip", "OSError: simulated_probe_error_always")
+        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
+            return False
+        return True
+    if fault == "once" and not (out_dir / ".probe_fault_once_done").exists():
+        (out_dir / ".probe_fault_once_done").write_text("1\n", encoding="utf-8")
+        consecutive_probe_errors += 1
+        log_probe_error("post_trip", "OSError: simulated_probe_error_once")
+        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
+            return False
+        return True
     if os.name == "nt":
-        winpid_map, _ = _msys_proc_map()
+        winpid_map, _, ps_err = _msys_proc_map()
         if main_pid in winpid_map:
+            consecutive_probe_errors = 0
             return True
         bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
-        for _ in range(3):
-            try:
-                r = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
-                if r.returncode == 0:
-                    return True
-            except Exception:
+        last_exc: str | None = ps_err
+        try:
+            r = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
+            if r.returncode == 0:
+                consecutive_probe_errors = 0
                 return True
-            time.sleep(0.15)
-        return False
+            if ps_err is None:
+                consecutive_probe_errors = 0
+                return False
+        except Exception as exc:
+            last_exc = f"{type(exc).__name__}: {exc}"
+        consecutive_probe_errors += 1
+        log_probe_error("post_trip", last_exc or "unknown_probe_error")
+        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
+            return False
+        return True
     try:
         os.kill(main_pid, 0)
+        consecutive_probe_errors = 0
         return True
-    except OSError:
+    except ProcessLookupError:
+        consecutive_probe_errors = 0
         return False
+    except PermissionError:
+        consecutive_probe_errors = 0
+        return True
+    except Exception as exc:
+        consecutive_probe_errors += 1
+        log_probe_error("post_trip", f"{type(exc).__name__}: {exc}")
+        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
+            return False
+        return True
 
 trip_mono = time.monotonic()
 first_wait_s = max(escalate_s, in_flight_bound_s)
@@ -1993,29 +2124,17 @@ PYEOF
   watcher_wait_state="$(cat "${out_dir}/watcher_wait.txt" 2>/dev/null || echo escalated_no_cleanup)"
   printf '1\n' > "${out_dir}/watcher_escalated.txt"
   printf 'watcher\n' > "${out_dir}/stop_path.txt"
-  echo "WALL_WATCHER_ESCALATED session=${session} escalate_s=${escalate_s} first_wait_s=${first_wait_s} cleanup_stop_attempted_by_s=${cleanup_stop_by_s} watcher_wait=${watcher_wait_state}" >> "${out_dir}/guards.log"
-  if [ -f "${out_dir}/session_open_started.txt" ] || [ -f "${out_dir}/session_opened.txt" ]; then
-    colab_stop_and_log_closing "${py_bin}" "${session}" "${out_dir}"
+  if [ -f "${out_dir}/.watcher_tracked_pids.txt" ]; then
+    while IFS= read -r tpid; do
+      tpid="${tpid//$'\r'/}"
+      if [ -n "${tpid}" ] && [ "${tpid}" != "${main_pid}" ] && [ "${tpid}" != "${watcher_pid}" ]; then
+        pkill -9 -P "${tpid}" 2>/dev/null || true
+        kill -9 "${tpid}" 2>/dev/null || true
+      fi
+    done < "${out_dir}/.watcher_tracked_pids.txt"
   fi
-  local closed_at
-  closed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  colab_write_window_and_outcome \
-    "${py_bin}" "${out_dir}" "${lane}" "${session}" "${card}" \
-    "${cap}" "${wall_s}" "${grace_s}" "${margin}" \
-    "${opened_at}" "${closed_at}" 137 "${shas_json}" || true
-  if [ "${watcher_wait_state}" = "launcher_gone_pre_trip" ] || [ "${watcher_wait_state}" = "escalated_launcher_gone" ] || [ -f "${out_dir}/stop_reached.txt" ]; then
-    if [ -f "${out_dir}/.watcher_tracked_pids.txt" ]; then
-      while IFS= read -r tpid; do
-        tpid="${tpid//$'
-'/}"
-        if [ -n "${tpid}" ] && [ "${tpid}" != "${main_pid}" ] && [ "${tpid}" != "${watcher_pid}" ]; then
-          pkill -9 -P "${tpid}" 2>/dev/null || true
-          kill -9 "${tpid}" 2>/dev/null || true
-        fi
-      done < "${out_dir}/.watcher_tracked_pids.txt"
-    fi
-    "${py_bin}" - "${main_pid}" "${watcher_pid}" "${out_dir}/.watcher_tracked_pids.txt" << 'PYEOF'
-import os, signal, sys
+  "${py_bin}" - "${main_pid}" "${watcher_pid}" "${out_dir}/.watcher_tracked_pids.txt" << 'PYEOF'
+import os, signal, subprocess, sys
 from pathlib import Path
 
 main_pid = int(sys.argv[1])
@@ -2029,14 +2148,30 @@ if tracked_p.is_file():
         if line.isdigit():
             roots.append(int(line))
 children: dict[int, list[int]] = {}
-for stat_p in Path("/proc").glob("[0-9]*/stat"):
+winpid_map: dict[int, int] = {}
+if os.name == "nt":
+    ps_exe = "C:/Program Files/Git/usr/bin/ps.exe" if Path("C:/Program Files/Git/usr/bin/ps.exe").is_file() else "ps"
     try:
-        data = stat_p.read_text(encoding="utf-8")
-        pid_s, rest = data.split(" (", 1)
-        ppid_s = rest.rsplit(") ", 1)[1].split()[1]
-        children.setdefault(int(ppid_s), []).append(int(pid_s))
+        r = subprocess.run([ps_exe], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        for line in r.stdout.splitlines()[1:]:
+            parts = line.strip().split()
+            while parts and not parts[0].isdigit():
+                parts = parts[1:]
+            if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit() and parts[3].isdigit():
+                mpid, mppid, wpid = int(parts[0]), int(parts[1]), int(parts[3])
+                winpid_map[mpid] = wpid
+                children.setdefault(mppid, []).append(mpid)
     except Exception:
-        continue
+        pass
+else:
+    for stat_p in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            data = stat_p.read_text(encoding="utf-8")
+            pid_s, rest = data.split(" (", 1)
+            ppid_s = rest.rsplit(") ", 1)[1].split()[1]
+            children.setdefault(int(ppid_s), []).append(int(pid_s))
+        except Exception:
+            continue
 roots.extend(children.get(main_pid, []))
 out: list[int] = []
 seen: set[int] = set()
@@ -2049,59 +2184,109 @@ while stack:
     out.append(cur)
     stack.extend(children.get(cur, []))
 sig = getattr(signal, "SIGKILL", signal.SIGTERM)
-for pid in reversed(out):
-    try:
-        os.kill(pid, sig)
-    except OSError:
-        pass
+bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if os.name == "nt" and Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
+if os.name == "nt":
+    mpids_to_kill = [str(p) for p in reversed(out)]
+    if mpids_to_kill:
+        try:
+            subprocess.run([bash_exe, "-c", "kill -9 " + " ".join(mpids_to_kill) + " 2>/dev/null || true"], capture_output=True, timeout=3)
+        except Exception:
+            pass
+    for pid in reversed(out):
+        wpid = winpid_map.get(pid)
+        if wpid and wpid not in (main_pid, watcher_pid, self_pid):
+            try:
+                os.kill(wpid, sig)
+            except OSError:
+                pass
+else:
+    for pid in reversed(out):
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
 PYEOF
+  echo "WALL_WATCHER_ESCALATED session=${session} escalate_s=${escalate_s} first_wait_s=${first_wait_s} cleanup_stop_attempted_by_s=${cleanup_stop_by_s} watcher_wait=${watcher_wait_state}" >> "${out_dir}/guards.log"
+  if [ -f "${out_dir}/session_open_started.txt" ] || [ -f "${out_dir}/session_opened.txt" ]; then
+    colab_stop_and_log_closing "${py_bin}" "${session}" "${out_dir}"
   fi
-  if [ -f "${out_dir}/.watcher_tracked_pids.txt" ]; then
-    while IFS= read -r tpid; do
-      tpid="${tpid//$'
-'/}"
-      if [ -n "${tpid}" ] && [ "${tpid}" != "${main_pid}" ] && [ "${tpid}" != "${watcher_pid}" ]; then
-        pkill -9 -P "${tpid}" 2>/dev/null || true
-        kill -9 "${tpid}" 2>/dev/null || true
-      fi
-    done < "${out_dir}/.watcher_tracked_pids.txt"
-  fi
+  local closed_at
+  closed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  colab_write_window_and_outcome \
+    "${py_bin}" "${out_dir}" "${lane}" "${session}" "${card}" \
+    "${cap}" "${wall_s}" "${grace_s}" "${margin}" \
+    "${opened_at}" "${closed_at}" 137 "${shas_json}" || true
   rm -f "${out_dir}/.watcher_tracked_pids.txt"
   colab_scrub_all_logs "${py_bin}" "${guards_py}" "${out_dir}" || true
 
   "${py_bin}" - "${main_pid}" "${watcher_pid}" << 'PYEOF'
-import os, signal, sys
+import os, signal, subprocess, sys
 from pathlib import Path
 
 main_pid = int(sys.argv[1])
 watcher_pid = int(sys.argv[2])
+self_pid = os.getpid()
 children: dict[int, list[int]] = {}
-for stat_p in Path("/proc").glob("[0-9]*/stat"):
+winpid_map: dict[int, int] = {}
+if os.name == "nt":
+    ps_exe = "C:/Program Files/Git/usr/bin/ps.exe" if Path("C:/Program Files/Git/usr/bin/ps.exe").is_file() else "ps"
     try:
-        data = stat_p.read_text(encoding="utf-8")
-        pid_s, rest = data.split(" (", 1)
-        ppid_s = rest.rsplit(") ", 1)[1].split()[1]
-        children.setdefault(int(ppid_s), []).append(int(pid_s))
+        r = subprocess.run([ps_exe], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        for line in r.stdout.splitlines()[1:]:
+            parts = line.strip().split()
+            while parts and not parts[0].isdigit():
+                parts = parts[1:]
+            if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit() and parts[3].isdigit():
+                mpid, mppid, wpid = int(parts[0]), int(parts[1]), int(parts[3])
+                winpid_map[mpid] = wpid
+                children.setdefault(mppid, []).append(mpid)
     except Exception:
-        continue
+        pass
+else:
+    for stat_p in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            data = stat_p.read_text(encoding="utf-8")
+            pid_s, rest = data.split(" (", 1)
+            ppid_s = rest.rsplit(") ", 1)[1].split()[1]
+            children.setdefault(int(ppid_s), []).append(int(pid_s))
+        except Exception:
+            continue
 
 def subtree(root: int) -> list[int]:
     out: list[int] = []
+    seen: set[int] = set()
     stack = [root]
     while stack:
         cur = stack.pop()
-        if cur == watcher_pid:
+        if cur in seen or cur in (watcher_pid, self_pid):
             continue
+        seen.add(cur)
         out.append(cur)
         stack.extend(children.get(cur, []))
     return out
 
 sig = getattr(signal, "SIGKILL", signal.SIGTERM)
-for pid in reversed(subtree(main_pid)):
-    try:
-        os.kill(pid, sig)
-    except OSError:
-        pass
+targets = list(reversed(subtree(main_pid)))
+if os.name == "nt":
+    bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
+    if targets:
+        try:
+            subprocess.run([bash_exe, "-c", "kill -9 " + " ".join(str(p) for p in targets) + " 2>/dev/null || true"], capture_output=True, timeout=3)
+        except Exception:
+            pass
+    for pid in targets:
+        wpid = winpid_map.get(pid)
+        if wpid and wpid not in (watcher_pid, self_pid):
+            try:
+                os.kill(wpid, sig)
+            except OSError:
+                pass
+else:
+    for pid in targets:
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
 PYEOF
   pkill -9 -P "${main_pid}" 2>/dev/null || true
   kill -9 "${main_pid}" 2>/dev/null || true
@@ -2292,6 +2477,7 @@ REFUSAL_CODES = (
     "SHAPE_INVALID",
     "SHAPE_NOT_FOR_CPU",
     "SHAPE_STANDARD_UNAVAILABLE",
+    "SHAPE_HIGH_MEM_UNAVAILABLE",
     "SHAPE_MISMATCH",
     "MAX_RATE_REQUIRED",
     "TRAIN_MAX_RATE_REQUIRED",
@@ -2319,6 +2505,7 @@ REFUSAL_CODES = (
     # polyglot-mcp Colab translation lane refusal codes.
     "MODEL_DIGEST_MISMATCH",
     "MODEL_NOT_FULLY_ON_GPU",
+    "VRAM_HEADROOM_LOW",
     "NAV_BAR_INCOMPLETE",
     "PIN_OVERRIDE_IN_LIVE_RUN",
     "OUT_DIR_REQUIRED",

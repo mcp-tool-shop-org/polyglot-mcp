@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
+# Ported from style-dataset-lab @ 20a098e7 (scripts/colab/launch_lane3_stub.sh and
+# scripts/colab/launch_lane1_stub.sh at commit 20a098e7e9a385ed3a7b4e4f53c203fe73533fe2).
+# Local adaptations:
+#   - installs pinned Node.js v22.22.3 + Ollama v0.40.15 and verifies translategemma:27b digest;
+#   - enforces numeric VRAM fit probe (measured peak 22,547 MiB + 1,024 MiB headroom <= card total VRAM)
+#     plus 100% GPU residency in `ollama ps`;
+#   - runs `scripts/translate-all.mjs` across all 7 languages, enforces #67 verified write receipts
+#     & structural Markdown checks + #65 source nav-bar completeness, and stages multi-README outputs
+#     into `/content/polyglot_out/translations` only after every README slot passes verification.
 # Launch kit for polyglot-mcp Colab translation windows (README translations via TranslateGemma 27B
 # on Ollama). Runs the repo's existing `scripts/translate-all.mjs` unchanged against the VM's
-# Ollama, verifies the model digest and GPU fit probe (`ollama ps` 100% GPU), checks that every
+# Ollama, verifies the model digest and GPU fit probe (`ollama ps` 100% GPU + numeric VRAM headroom), checks that every
 # written target language appears in the source README's nav bar (`NAV_BAR_INCOMPLETE`), writes
 # `SHA256SUMS` and `manifest.json`, and enforces the full Colab guard and bounded-cleanup contract.
 #
@@ -24,17 +33,21 @@ PINNED_TRANSLATEGEMMA_MODEL="translategemma:27b"
 PINNED_MODEL_DIGEST="21b597a243ec4fd2f05bc0ce8ef9ef174a89b09255c330d670852dfaaaa74f72"
 # Ollama's default context length when num_ctx is not overridden by src/translate.ts or src/ollama.ts (4096; target 16384 when OLLAMA_CONTEXT_LENGTH=16384 is set)
 PINNED_TRANSLATOR_CONTEXT="4096"
+# R&D measured peak VRAM for translategemma:27b on Ollama 0.40.15 (GPU ledger, polyglot row, 2026-11-09)
+# plus required safety headroom before translation starts (22547 + 1024 = 23571 MiB).
+PINNED_MODEL_PEAK_VRAM_MIB="22547"
+PINNED_VRAM_HEADROOM_MIB="1024"
 
-PINNED_LAUNCH_GUARDS_SHA="3bfb6716b527217fe79c2fcdb46b61382488957a47701af684a3ee0748a6e9c5"
-PINNED_REMOTE_RUNNER_SHA="af43622d7434664e079667044ac3f8f0456eb797975435922857f79299080daf"
-PINNED_COLAB_WINDOW_SHA="a18f2c7125cb658aea9139b6d31a3a254481196faaf344b3754a206d4ad7d333"
-PINNED_BUNDLE_NOW_SHA="56aaebc2b1e46785c614e3d02344e30d24e356ab2b547ad5df39cec1640e7f8d"
+PINNED_LAUNCH_GUARDS_SHA="0c8f9cc805bccf5ac32b65386c8072ca40e0127fc2ae235a350be27be0623d3e"
+PINNED_REMOTE_RUNNER_SHA="834e669de7f611c8d3b0e24dcd65c568c0d97a2bafb6080b235ea9a22b4f99d9"
+PINNED_COLAB_WINDOW_SHA="670c34f0bd312cbededf93f660c157c7fab424ef74d6ed970bac4f4df0c3c4a2"
+PINNED_BUNDLE_NOW_SHA="9d550928857550352f80b7d86824a182922065927687d5c707878c0a6be33a43"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
 PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef05829e4194a"
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="9cd1b684062330a29d25d7ac1602e3a0a38fbe79ad31650747e1380d7a4462f4"
+PINNED_SELF_SHA="97f170164b7e51446f75fffd0e1c735c588354b41ad5136074d32ea0aabbca9d"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -183,6 +196,10 @@ if [ "${DRY_RUN}" = "1" ]; then
         exit 2
         ;;
     esac
+    if [ "${SHAPE}" = "high-mem" ] && colab_card_is_standard_only_shape "${CARD}"; then
+      echo "REFUSED: SHAPE_HIGH_MEM_UNAVAILABLE: ${CARD} has a single Standard shape on Colab (--high-mem is ignored); pass --shape standard" >&2
+      exit 2
+    fi
     if [ "${SHAPE}" = "standard" ] && colab_card_is_single_shape "${CARD}"; then
       echo "REFUSED: SHAPE_STANDARD_UNAVAILABLE: ${CARD} has a single high-memory shape; pass --shape high-mem" >&2
       exit 2
@@ -364,13 +381,16 @@ PIN_OVERRIDE_VARS=(
   SDLAB_TEST_UPLOAD_TIMEOUT_S
   SDLAB_TEST_WALL_ESCALATE_S
   POLYGLOT_TEST_CORRUPT_RECEIPT_LANG
+  POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT
   POLYGLOT_TEST_NODE_TAR_URL
   POLYGLOT_TEST_OLLAMA_TAR_URL
   POLYGLOT_TEST_NODE_TAR_SHA256
   POLYGLOT_TEST_OLLAMA_TAR_SHA256
+  SDLAB_TEST_PROBE_ERROR_MODE
 )
 colab_refuse_live_pin_overrides "${OUT_DIR}" "${TEST_MODE}" "${PIN_OVERRIDE_VARS[@]}"
 colab_apply_test_cleanup_overrides "${TEST_MODE}"
+export TEST_MODE
 
 EXP_GUARDS_SHA="${PINNED_LAUNCH_GUARDS_SHA}"
 EXP_RUNNER_SHA="${PINNED_REMOTE_RUNNER_SHA}"
@@ -636,7 +656,7 @@ cleanup_on_exit() {
   exit "${rc}"
 }
 trap cleanup_on_exit EXIT
-trap 'exit 143' TERM INT
+trap 'if [ "${COLAB_IN_CLEANUP:-0}" = "1" ]; then colab_on_cleanup_signal "${OUT_DIR}"; elif [ "${COLAB_IN_DOWNLOAD_CHECKED:-0}" = "1" ]; then COLAB_DEFERRED_TERM=1; else exit 143; fi' TERM INT
 
 # Pre-open cap and host-RAM check via launch_guards.py
 colab_check_cap_and_ram "${PY_BIN}" "${GUARDS_PY}" "stub" "0" "${WALL_S}" "${GRACE_S}" "${CAP}" "${MARGIN}" "${OUT_DIR}"
@@ -842,7 +862,7 @@ DIGPYEOF
     : > "${SMI_CSV}"
   fi
 
-  python3 - "${PS_JSON}" "${PS_TEXT}" "${SMI_CSV}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_TRANSLATOR_CONTEXT}" "${COLAB_CARD}" << 'FITPYEOF'
+  python3 - "${PS_JSON}" "${PS_TEXT}" "${SMI_CSV}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_TRANSLATOR_CONTEXT}" "${COLAB_CARD}" "${PINNED_MODEL_PEAK_VRAM_MIB}" "${PINNED_VRAM_HEADROOM_MIB}" << 'FITPYEOF'
 import json
 import re
 import sys
@@ -854,6 +874,9 @@ smi_p = Path(sys.argv[3])
 model_name = sys.argv[4]
 translator_ctx = int(sys.argv[5])
 card = sys.argv[6]
+measured_peak_vram_mib = int(sys.argv[7])
+required_headroom_mib = int(sys.argv[8])
+required_total_vram_mib = measured_peak_vram_mib + required_headroom_mib
 is_cpu_card = card in ("CPU", "CPU-high-mem")
 
 ps_data = json.loads(ps_json_p.read_text(encoding="utf-8")) if ps_json_p.is_file() else {}
@@ -912,6 +935,7 @@ if kv_cache_mib is None:
     kv_cache_mib = round(context_length * 0.375, 1)
 
 fully_on_gpu = (gpu_pct == 100.0 and processor_str == "100% GPU")
+vram_fit_ok = True if is_cpu_card else (vram_total_mib is not None and vram_total_mib >= required_total_vram_mib)
 probe = {
     "card": card,
     "gpu_name": gpu_name,
@@ -920,6 +944,10 @@ probe = {
     "vram_used_mib": vram_used_mib,
     "vram_total_mib": vram_total_mib,
     "vram_free_mib": vram_free_mib,
+    "measured_peak_vram_mib": measured_peak_vram_mib,
+    "required_headroom_mib": required_headroom_mib,
+    "required_total_vram_mib": required_total_vram_mib,
+    "vram_fit_ok": vram_fit_ok,
     "model_size_bytes": size_bytes,
     "model_size_vram_bytes": size_vram_bytes,
     "kv_cache_mib": kv_cache_mib,
@@ -935,6 +963,13 @@ if not fully_on_gpu:
     if not is_cpu_card or (processor_str and "CPU" in processor_str and processor_str != "100% CPU"):
         sys.stderr.write(
             f"REFUSED: MODEL_NOT_FULLY_ON_GPU: ollama ps reports processor={processor_str!r} gpu_percent={gpu_pct}% (size={size_bytes} size_vram={size_vram_bytes})\n"
+        )
+        raise SystemExit(1)
+
+if not is_cpu_card:
+    if vram_total_mib is None or vram_total_mib < required_total_vram_mib:
+        sys.stderr.write(
+            f"REFUSED: VRAM_HEADROOM_LOW: card={card} gpu_name={gpu_name!r} vram_total_mib={vram_total_mib} < required_total_vram_mib={required_total_vram_mib} (measured_peak_vram_mib={measured_peak_vram_mib} + required_headroom_mib={required_headroom_mib})\n"
         )
         raise SystemExit(1)
 FITPYEOF
@@ -991,7 +1026,10 @@ lang_file_map = {
 }
 
 outputs_root = out_root / "translations"
-outputs_root.mkdir(parents=True, exist_ok=True)
+staging_root = out_root / "_staging_translations"
+if staging_root.exists():
+    shutil.rmtree(staging_root)
+staging_root.mkdir(parents=True, exist_ok=True)
 
 slots = sorted(p for p in in_root.iterdir() if p.is_dir())
 single_slot = len(slots) == 1 and slots[0].name == "default"
@@ -1035,7 +1073,8 @@ for slot in slots:
 
     # Optional test-only fault injection to simulate #67 unverified receipt/structural check or #65 nav-bar drop
     corrupt_lang = os.environ.get("POLYGLOT_TEST_CORRUPT_RECEIPT_LANG", "").strip()
-    if corrupt_lang and summary_json.get("results"):
+    corrupt_slot = os.environ.get("POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT", "").strip()
+    if corrupt_lang and (not corrupt_slot or corrupt_slot == slot.name) and summary_json.get("results"):
         for r in summary_json["results"]:
             if r.get("lang") == corrupt_lang:
                 r["status"] = "written-unverified"
@@ -1073,7 +1112,7 @@ for slot in slots:
         "  const r = results.find((x) => x.lang === lang.code);"
         "  const fname = `README.${lang.file ?? lang.code}.md`;"
         "  const fpath = resolve(slotDir, fname);"
-        "  if (!r || r.status === 'written-unverified' || r.status === 'written-after-error' || r.status === 'failed' || r.status === 'untranslated') {"
+        "  if (!r || (r.status !== 'ok' && r.status !== 'done-after-silence')) {"
         "    const checks = (r && Array.isArray(r.failedChecks) && r.failedChecks.length) ? r.failedChecks : [r ? r.status : 'missing_result'];"
         "    if (checks.includes('receipt_sha_mismatch')) rejectedCodes.push(lang.code);"
         "    unverifiedDetails.push(`${lang.code}(${fname}: ${checks.join(',')})`);"
@@ -1113,6 +1152,8 @@ for slot in slots:
         check=False,
     )
     if nav_check_proc.returncode != 0:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        shutil.rmtree(outputs_root, ignore_errors=True)
         sys.stderr.write(nav_check_proc.stderr)
         sys.stderr.flush()
         with (out_root / "setup.log").open("a", encoding="utf-8") as sf:
@@ -1120,6 +1161,8 @@ for slot in slots:
         raise SystemExit(1)
 
     if proc.returncode != 0:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        shutil.rmtree(outputs_root, ignore_errors=True)
         msg = f"REFUSED: TRANSLATION_FAILED: translate-all.mjs exited {proc.returncode} for {slot.name}\n"
         sys.stderr.write(msg)
         with (out_root / "setup.log").open("a", encoding="utf-8") as sf:
@@ -1127,7 +1170,7 @@ for slot in slots:
         raise SystemExit(1)
 
     verify_payload = json.loads(nav_check_proc.stdout.strip())
-    dest_dir = outputs_root if single_slot else (outputs_root / slot.name)
+    dest_dir = staging_root if single_slot else (staging_root / slot.name)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     output_shas = {}
@@ -1135,6 +1178,8 @@ for slot in slots:
     for fname in copied_files:
         fp = slot / fname
         if not fp.is_file():
+            shutil.rmtree(staging_root, ignore_errors=True)
+            shutil.rmtree(outputs_root, ignore_errors=True)
             msg = f"REFUSED: TRANSLATION_FAILED: expected output file {fname} missing for {slot.name}\n"
             sys.stderr.write(msg)
             with (out_root / "setup.log").open("a", encoding="utf-8") as sf:
@@ -1144,7 +1189,7 @@ for slot in slots:
         shutil.copy2(fp, dst_fp)
         f_hex = hashlib.sha256(dst_fp.read_bytes()).hexdigest()
         output_shas[fname] = f"sha256:{f_hex}"
-        rel_out = dst_fp.relative_to(outputs_root).as_posix()
+        rel_out = dst_fp.relative_to(staging_root).as_posix()
         all_sha_entries.append((f_hex, rel_out))
 
     per_lang_status = {}
@@ -1167,6 +1212,10 @@ for slot in slots:
         "total_elapsed_s": elapsed_s,
         "nav_bar_check": verify_payload["navBarCheck"],
     })
+
+if outputs_root.exists():
+    shutil.rmtree(outputs_root)
+staging_root.rename(outputs_root)
 
 sha_lines = [f"{h}  {rel}\n" for h, rel in sorted(all_sha_entries, key=lambda x: x[1])]
 (outputs_root / "SHA256SUMS").write_text("".join(sha_lines), encoding="utf-8", newline="\n")
@@ -1233,6 +1282,8 @@ REMOTE_ENV=(
   "PINNED_TRANSLATEGEMMA_MODEL=${PINNED_TRANSLATEGEMMA_MODEL}"
   "PINNED_MODEL_DIGEST=${POLYGLOT_TEST_MODEL_DIGEST:-${PINNED_MODEL_DIGEST}}"
   "PINNED_TRANSLATOR_CONTEXT=${PINNED_TRANSLATOR_CONTEXT}"
+  "PINNED_MODEL_PEAK_VRAM_MIB=${PINNED_MODEL_PEAK_VRAM_MIB}"
+  "PINNED_VRAM_HEADROOM_MIB=${PINNED_VRAM_HEADROOM_MIB}"
   "COLAB_CARD=${CARD}"
   "REPO_COMMIT=${REPO_COMMIT}"
 )
@@ -1249,6 +1300,9 @@ if [ "${TEST_MODE}" = "1" ]; then
   fi
   if [ -n "${POLYGLOT_TEST_CORRUPT_RECEIPT_LANG:-}" ]; then
     REMOTE_ENV+=("POLYGLOT_TEST_CORRUPT_RECEIPT_LANG=${POLYGLOT_TEST_CORRUPT_RECEIPT_LANG}")
+  fi
+  if [ -n "${POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT:-}" ]; then
+    REMOTE_ENV+=("POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT=${POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT}")
   fi
   if [ -n "${POLYGLOT_TEST_NODE_TAR_URL:-}" ]; then
     REMOTE_ENV+=("POLYGLOT_TEST_NODE_TAR_URL=${POLYGLOT_TEST_NODE_TAR_URL}")
