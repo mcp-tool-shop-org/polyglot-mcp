@@ -121,7 +121,9 @@ export class OllamaClient {
   private async _generate(req: OllamaGenerateRequest): Promise<OllamaGenerateResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
+    timer.unref?.();
     const startMs = Date.now();
+
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}/api/generate`, {
@@ -228,7 +230,9 @@ export class OllamaClient {
   ): Promise<OllamaGenerateResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
+    timer.unref?.();
     const startMs = Date.now();
+
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}/api/generate`, {
@@ -338,12 +342,14 @@ export class OllamaClient {
   async listModels(): Promise<OllamaModel[]> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    timer.unref?.();
     try {
       const res = await fetch(`${this.baseUrl}/api/tags`, {
         headers: this.headers(),
         signal: controller.signal,
       });
       if (!res.ok) {
+        await res.body?.cancel().catch(() => {});
         throw new Error(`Ollama list failed (${res.status})`);
       }
       const data = (await res.json()) as { models: OllamaModel[] };
@@ -356,11 +362,13 @@ export class OllamaClient {
   async isAvailable(): Promise<boolean> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3_000);
+    timer.unref?.();
     try {
       const res = await fetch(`${this.baseUrl}/api/tags`, {
         headers: this.headers(),
         signal: controller.signal,
       });
+      await res.body?.cancel().catch(() => {});
       return res.ok;
     } catch {
       return false;
@@ -368,6 +376,7 @@ export class OllamaClient {
       clearTimeout(timer);
     }
   }
+
 
   async hasModel(name: string): Promise<boolean> {
     const models = await this.listModels();
@@ -432,7 +441,9 @@ export class OllamaClient {
     process.stderr.write(`Pulling ${name} (may be several GB)...\n`);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
+    timer.unref?.();
     try {
+
       const res = await fetch(`${this.baseUrl}/api/pull`, {
         method: "POST",
         headers: this.headers({ "Content-Type": "application/json" }),

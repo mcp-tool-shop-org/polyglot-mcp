@@ -55,6 +55,13 @@ export type CliLanguageStatus =
   | "written-unverified"
   | "error";
 
+/** Distinct outcome logged when a child printed a verified receipt and was killed after silence (#59). */
+export const DONE_AFTER_SILENCE = "DONE_AFTER_SILENCE" as const;
+
+/** Default post-receipt silence window (15 s) before `scripts/translate-all.mjs` treats a silent child with a verified on-disk SHA-256 as done (#59). */
+export const DEFAULT_POST_WRITE_SILENCE_MS = 15_000;
+
+
 export interface TranslateAllOptions {
   /** Source language code (default: "en"). */
   sourceLang?: string;
@@ -274,6 +281,27 @@ export function parseWriteReceipt(stdout: string): WriteReceipt | null {
   if (!path || !sha256) return null;
   return { path, sha256 };
 }
+
+/**
+ * Check whether a `POLYGLOT_WRITTEN` receipt matches the current SHA-256 of
+ * the file it names inside `readmeDir` (polyglot-mcp#59).
+ */
+export function doesReceiptMatchDisk(
+  readmeDir: string,
+  receipt: WriteReceipt | null | undefined
+): boolean {
+  if (!receipt || !receipt.path || !receipt.sha256) return false;
+  const filePath = resolve(readmeDir, receipt.path);
+  if (!existsSync(filePath)) return false;
+  try {
+    const diskBytes = readFileSync(filePath);
+    const diskSha256 = createHash("sha256").update(diskBytes).digest("hex");
+    return diskSha256 === receipt.sha256.trim().toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 
 /**
  * Verify that translated markdown is non-empty and structurally whole against

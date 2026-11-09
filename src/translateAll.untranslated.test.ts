@@ -10,8 +10,9 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -639,4 +640,283 @@ describe("translate-all.mjs — verified written files nav bar (polyglot-mcp#65)
       cleanup();
     }
   }, 60_000);
+});
+
+
+describe("polyglot-mcp#59 — child exit and post-write silence watchdog", () => {
+  let dir: string;
+  let readme: string;
+  let keepAliveServer: Server;
+  let keepAliveHost = "";
+  const openSockets = new Set<Socket>();
+
+  let tagsCalls = 0;
+
+  beforeAll(async () => {
+    keepAliveServer = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString("utf8")));
+      req.on("end", () => {
+        res.setHeader("content-type", "application/json");
+        res.setHeader("connection", "keep-alive");
+        res.setHeader("keep-alive", "timeout=60");
+        if (req.url === "/api/tags") {
+          tagsCalls++;
+          const payload = JSON.stringify({
+            models: [{ name: "translategemma:27b", size: 1, digest: "x", modified_at: "" }],
+          });
+          if (tagsCalls % 2 === 1) {
+            // Availability probe (isAvailable): write headers + payload and keep
+            // the stream actively open so an unconsumed response body holds its socket ref'd.
+            res.writeHead(200);
+            res.write(payload);
+            const iv = setInterval(() => {
+              if (!res.destroyed) res.write(" ");
+            }, 150);
+            iv.unref();
+            req.on("close", () => clearInterval(iv));
+            res.on("close", () => clearInterval(iv));
+            return;
+          }
+          // Model listing probe (listModels): complete JSON response on keep-alive socket.
+          res.end(payload);
+          return;
+        }
+        const prompt = (JSON.parse(body || "{}") as { prompt?: string }).prompt ?? "";
+        const lang = /translator\.[^]*? into ([A-Za-z ()]+):/.exec(prompt)?.[1] ?? "xx";
+        const text = prompt.split("\n\n\n").slice(1).join("\n\n\n");
+        const one = (part: string) => {
+          const headingMatch = /^(#{1,6}\s+)(.*)$/.exec(part);
+          if (headingMatch) return `${headingMatch[1]}[${lang}] ${headingMatch[2]}`;
+          return `[${lang}] ${part}`;
+        };
+        const response = text.includes(SEP)
+          ? text.split(/\n?---POLYGLOT_SEP---\n?/).map(one).join(`\n${SEP}\n`)
+          : one(text);
+        res.end(JSON.stringify({ model: "translategemma:27b", response, done: true }));
+      });
+    });
+    keepAliveServer.keepAliveTimeout = 60_000;
+    keepAliveServer.on("connection", (socket) => {
+      openSockets.add(socket);
+      socket.on("close", () => openSockets.delete(socket));
+    });
+    await new Promise<void>((resolve) => keepAliveServer.listen(0, "127.0.0.1", resolve));
+    keepAliveHost = `http://127.0.0.1:${(keepAliveServer.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    for (const s of openSockets) s.destroy();
+    await new Promise<void>((resolve) => keepAliveServer.close(() => resolve()));
+  });
+
+  const setupWithFakeChildren59 = (md: string, behaviors: Record<string, string> = {}) => {
+    dir = mkdtempSync(join(tmpdir(), "polyglot-exit59-"));
+    readme = join(dir, "README.md");
+    writeFileSync(readme, md, "utf-8");
+
+    const fakeBinDir = join(dir, "fake-bin");
+    mkdirSync(fakeBinDir, { recursive: true });
+    const preloadPath = join(fakeBinDir, "hang-preload.mjs");
+
+    writeFileSync(
+      preloadPath,
+      [
+        'import { createHash } from "node:crypto";',
+        'import { writeFileSync } from "node:fs";',
+        'import { basename } from "node:path";',
+        "",
+        "const entryScript = process.argv[1] || '';",
+        "if (entryScript.endsWith('translate-readme.mjs')) {",
+        '  const behaviors = JSON.parse(process.env.FAKE_LANG_BEHAVIORS || "{}");',
+        "  const readmeArg = process.argv[2];",
+        "  const langCode = process.argv[3];",
+        "  const mode = behaviors[langCode];",
+        "  if (mode) {",
+        '    const outPath = readmeArg ? readmeArg.replace(/README\\.md$/, "README." + langCode + ".md") : "";',
+        "    const validMd = (l) => [",
+        '      "# [" + l + "] Title",',
+        '      "",',
+        '      "[" + l + "] The first paragraph explains how the router picks a device for every job.",',
+        '      "",',
+        '      "## [" + l + "] Installation",',
+        '      "",',
+        '      "```bash",',
+        '      "npm install -g @mcptoolshop/polyglot-mcp",',
+        '      "polyglot-mcp --help",',
+        '      "```",',
+        '      "",',
+        '      "[" + l + "] The third paragraph lists the limits the guard enforces before it starts.",',
+        '      "",',
+        '    ].join("\\n");',
+        "    const writeWithReceipt = (content, customSha) => {",
+        '      const bytes = Buffer.from(content, "utf-8");',
+        "      writeFileSync(outPath, bytes);",
+        '      const sha = customSha ?? createHash("sha256").update(bytes).digest("hex");',
+        '      console.log("POLYGLOT_WRITTEN " + basename(outPath) + " " + sha);',
+        "    };",
+        '    if (mode === "write-valid-then-hang") {',
+        "      writeWithReceipt(validMd(langCode));",
+        "      await new Promise((r) => setTimeout(r, 60_000));",
+        '    } else if (mode === "write-bad-sha-then-hang") {',
+        '      writeWithReceipt(validMd(langCode), "0".repeat(64));',
+        "      await new Promise((r) => setTimeout(r, 60_000));",
+        '    } else if (mode === "write-valid-and-exit") {',
+        "      writeWithReceipt(validMd(langCode));",
+        "      process.exit(0);",
+        "    }",
+        "  }",
+        "}",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    return { preloadPath, behaviorsJson: JSON.stringify(behaviors) };
+  };
+
+  const cleanup = () => rmSync(dir, { recursive: true, force: true });
+
+  const runTranslateAll59 = (
+    extraArgs: string[],
+    opts: { preloadPath: string; behaviorsJson: string },
+  ): Promise<{ code: number | null; stdout: string; stderr: string; elapsedMs: number }> => {
+    return new Promise((done) => {
+      const startMs = Date.now();
+      const preloadUrl = pathToFileURL(opts.preloadPath).href;
+      const child = spawn(process.execPath, [join(root, "scripts", "translate-all.mjs"), readme, ...extraArgs], {
+        cwd: dir,
+        env: {
+          ...process.env,
+          FAKE_LANG_BEHAVIORS: opts.behaviorsJson,
+          NODE_OPTIONS: `--import "${preloadUrl}"`,
+          OLLAMA_HOST: host,
+          POLYGLOT_MODEL: "translategemma:27b",
+        },
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (c: Buffer) => (stdout += c.toString("utf8")));
+      child.stderr.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
+      child.on("close", (code) => done({ code, stdout, stderr, elapsedMs: Date.now() - startMs }));
+    });
+  };
+
+  const parseSummary = (stdout: string) =>
+    JSON.parse(stdout.slice(stdout.indexOf('{\n  "polyglot"')).split("\n====")[0]);
+
+  it("(a) translate-readme.mjs against a stub server that keeps its connection open exits 0 within a few seconds of writing", async () => {
+    dir = mkdtempSync(join(tmpdir(), "polyglot-exit59-a-"));
+    readme = join(dir, "README.md");
+    writeFileSync(readme, CLEAN, "utf-8");
+    try {
+      const startMs = Date.now();
+      const res = await new Promise<{
+        code: number | null;
+        stdout: string;
+        stderr: string;
+        timedOut: boolean;
+        elapsedMs: number;
+      }>((done) => {
+        const child = spawn(process.execPath, [join(root, "scripts", "translate-readme.mjs"), readme, "es", "--no-cache"], {
+          cwd: dir,
+          env: { ...process.env, OLLAMA_HOST: keepAliveHost, POLYGLOT_MODEL: "translategemma:27b" },
+        });
+        let stdout = "";
+        let stderr = "";
+        let timedOut = false;
+        const guard = setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, 3_500);
+        child.stdout.on("data", (c: Buffer) => (stdout += c.toString("utf8")));
+        child.stderr.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
+        child.on("close", (code) => {
+          clearTimeout(guard);
+          done({ code, stdout, stderr, timedOut, elapsedMs: Date.now() - startMs });
+        });
+      });
+
+      expect(res.timedOut).toBe(false);
+      expect(res.code).toBe(0);
+      expect(res.elapsedMs).toBeLessThan(3_000);
+      const writtenPath = join(dir, "README.es.md");
+      const diskSha = createHash("sha256").update(readFileSync(writtenPath)).digest("hex");
+      expect(res.stdout).toContain(`POLYGLOT_WRITTEN README.es.md ${diskSha}`);
+    } finally {
+      cleanup();
+    }
+  }, 15_000);
+
+  it("(b) translate-all with a stub child that writes a valid receipt and then hangs finishes (DONE_AFTER_SILENCE) well under the timeout", async () => {
+    const opts = setupWithFakeChildren59(STRUCTURED_README, {
+      ja: "write-valid-then-hang",
+      zh: "write-valid-and-exit",
+      es: "write-valid-and-exit",
+      fr: "write-valid-and-exit",
+      hi: "write-valid-and-exit",
+      it: "write-valid-and-exit",
+      pt: "write-valid-and-exit",
+    });
+    try {
+      const r = await runTranslateAll59(
+        ["--no-cache", "--concurrency=3", "--timeout=8", "--silence-timeout=0.3"],
+        opts,
+      );
+      expect(r.code).toBe(0);
+      expect(r.elapsedMs).toBeLessThan(7_500);
+
+      const summary = parseSummary(r.stdout);
+      expect(summary.succeeded).toBe(7);
+      expect(summary.failed).toBe(0);
+      const ja = summary.results.find((x: { lang: string }) => x.lang === "ja");
+      expect(Number(ja.time)).toBeLessThan(4.5);
+      expect(ja.status).toBe("ok");
+      expect(ja.outcome).toBe("DONE_AFTER_SILENCE");
+      expect(ja.doneAfterSilence).toBe(true);
+      expect(summary.doneAfterSilence).toEqual(["ja"]);
+      expect(r.stdout).toContain("POLYGLOT_DONE_AFTER_SILENCE ja README.ja.md 300ms");
+      expect(r.stderr).toContain("DONE_AFTER_SILENCE");
+
+      const srcAfter = readFileSync(readme, "utf-8");
+      expect(srcAfter).toContain('<a href="README.ja.md">日本語</a>');
+    } finally {
+      cleanup();
+    }
+  }, 30_000);
+
+  it("(c) a receipt whose sha doesn't match the file on disk is a failure and never DONE_AFTER_SILENCE", async () => {
+    const opts = setupWithFakeChildren59(STRUCTURED_README, {
+      ja: "write-bad-sha-then-hang",
+      zh: "write-valid-and-exit",
+      es: "write-valid-and-exit",
+      fr: "write-valid-and-exit",
+      hi: "write-valid-and-exit",
+      it: "write-valid-and-exit",
+      pt: "write-valid-and-exit",
+    });
+    try {
+      const r = await runTranslateAll59(
+        ["--no-cache", "--concurrency=3", "--timeout=8", "--silence-timeout=0.3"],
+        opts,
+      );
+      expect(r.code).toBe(1);
+      expect(r.elapsedMs).toBeLessThan(7_500);
+
+      const summary = parseSummary(r.stdout);
+      const ja = summary.results.find((x: { lang: string }) => x.lang === "ja");
+      expect(Number(ja.time)).toBeLessThan(4.5);
+      expect(ja.status).toBe("written-unverified");
+      expect(ja.failedChecks).toEqual(["receipt_sha_mismatch"]);
+      expect(ja.outcome).toBeUndefined();
+      expect(ja.doneAfterSilence).toBeUndefined();
+      expect(summary.doneAfterSilence).toEqual([]);
+      expect(r.stdout).not.toContain("POLYGLOT_DONE_AFTER_SILENCE");
+
+      const srcAfter = readFileSync(readme, "utf-8");
+      expect(srcAfter).not.toContain("README.ja.md");
+      expect(srcAfter).toContain('<a href="README.es.md">Español</a>');
+    } finally {
+      cleanup();
+    }
+  }, 30_000);
 });
