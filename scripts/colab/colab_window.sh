@@ -276,6 +276,50 @@ colab_enter_cleanup_trap() {
   trap 'colab_on_cleanup_signal "'"${out_dir}"'"' TERM INT
 }
 
+# colab_kill_tracked_pids <out_dir> [exclude_pid...]: kill every pid recorded in
+# .watcher_tracked_pids.txt (the same set the wall-watcher kill block uses), children first.
+# On Windows (MSYS) the MSYS pid is also mapped to its winpid via `ps` and killed there.
+colab_kill_tracked_pids() {
+  local out_dir="$1"; shift
+  local tf="${out_dir}/.watcher_tracked_pids.txt"
+  [ -f "${tf}" ] || return 0
+  local tpid ex skip
+  while IFS= read -r tpid; do
+    tpid="${tpid//$'\r'/}"
+    case "${tpid}" in ''|*[!0-9]*) continue ;; esac
+    skip=0
+    for ex in "$$" "${BASHPID:-$$}" "$@"; do
+      [ -n "${ex}" ] && [ "${tpid}" = "${ex}" ] && skip=1
+    done
+    [ "${skip}" = "1" ] && continue
+    pkill -9 -P "${tpid}" 2>/dev/null || true
+    kill -9 "${tpid}" 2>/dev/null || true
+  done < "${tf}"
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      local py_bin="${PY_BIN:-$(colab_resolve_python)}"
+      "${py_bin}" - "${tf}" "$$" "${BASHPID:-$$}" "$@" << 'PYKEOF' 2>/dev/null || true
+import os, signal, subprocess, sys
+from pathlib import Path
+tf = Path(sys.argv[1])
+skip = {int(a) for a in sys.argv[2:] if a.isdigit()}
+want = {int(l.strip()) for l in tf.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip().isdigit()} - skip
+ps_exe = "C:/Program Files/Git/usr/bin/ps.exe" if Path("C:/Program Files/Git/usr/bin/ps.exe").is_file() else "ps"
+r = subprocess.run([ps_exe], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+for line in r.stdout.splitlines()[1:]:
+    parts = line.strip().split()
+    while parts and not parts[0].isdigit():
+        parts = parts[1:]
+    if len(parts) >= 4 and parts[0].isdigit() and parts[3].isdigit() and int(parts[0]) in want:
+        try:
+            os.kill(int(parts[3]), getattr(signal, "SIGKILL", signal.SIGTERM))
+        except OSError:
+            pass
+PYKEOF
+      ;;
+  esac
+}
+
 colab_resolve_python() {
   if [ -n "${SDLAB_PYTHON:-}" ] && [ -x "${SDLAB_PYTHON}" ]; then
     echo "${SDLAB_PYTHON}"
@@ -1757,27 +1801,22 @@ def record_children(flush: bool = False) -> None:
 def launcher_alive() -> bool:
     global consecutive_probe_errors
     fault = os.environ.get("SDLAB_TEST_PROBE_ERROR_MODE", "") if test_mode_active else ""
+    inject_fault = False
     if fault == "always":
-        consecutive_probe_errors += 1
-        log_probe_error("pre_trip", "OSError: simulated_probe_error_always")
-        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
-            return False
-        return True
-    if fault == "once" and not (out_dir / ".probe_fault_once_done").exists():
+        inject_fault = True
+    elif fault == "once" and not (out_dir / ".probe_fault_once_done").exists():
         (out_dir / ".probe_fault_once_done").write_text("1\n", encoding="utf-8")
-        consecutive_probe_errors += 1
-        log_probe_error("pre_trip", "OSError: simulated_probe_error_once")
-        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
-            return False
-        return True
+        inject_fault = True
     if os.name == "nt":
-        winpid_map, _, ps_err = _msys_proc_map()
+        winpid_map, _, ps_err = ({}, {}, None) if inject_fault else _msys_proc_map()
         if main_pid in winpid_map:
             consecutive_probe_errors = 0
             return True
         bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
         last_exc: str | None = ps_err
         try:
+            if inject_fault:
+                raise OSError("simulated_probe_error_" + fault)
             r = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
             if r.returncode == 0:
                 consecutive_probe_errors = 0
@@ -1793,6 +1832,8 @@ def launcher_alive() -> bool:
             return False
         return True
     try:
+        if inject_fault:
+            raise OSError("simulated_probe_error_" + fault)
         os.kill(main_pid, 0)
         consecutive_probe_errors = 0
         return True
@@ -1815,6 +1856,9 @@ def session_was_opened() -> bool:
 def kill_tracked() -> None:
     record_children(flush=True)
     sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+    # On nt the tracked pids are MSYS pids: map each to its winpid (same ps parse as the
+    # escalated kill block) so the native process dies even when MSYS `kill -9` misses it.
+    winpid_map: dict[int, int] = _msys_proc_map()[0] if os.name == "nt" else {}
     for pid in sorted(tracked_pids, reverse=True):
         if pid not in (main_pid, watcher_pid, self_pid):
             if os.name == "nt":
@@ -1822,6 +1866,12 @@ def kill_tracked() -> None:
                     subprocess.run(["bash", "-c", f"kill -9 {pid}"], capture_output=True, timeout=2)
                 except Exception:
                     pass
+                wpid = winpid_map.get(pid)
+                if wpid and wpid not in (main_pid, watcher_pid, self_pid):
+                    try:
+                        os.kill(wpid, sig)
+                    except OSError:
+                        pass
             try:
                 os.kill(pid, sig)
             except OSError:
@@ -1994,27 +2044,22 @@ def record_children() -> None:
 def launcher_alive() -> bool:
     global consecutive_probe_errors
     fault = os.environ.get("SDLAB_TEST_PROBE_ERROR_MODE", "") if test_mode_active else ""
+    inject_fault = False
     if fault == "always":
-        consecutive_probe_errors += 1
-        log_probe_error("post_trip", "OSError: simulated_probe_error_always")
-        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
-            return False
-        return True
-    if fault == "once" and not (out_dir / ".probe_fault_once_done").exists():
+        inject_fault = True
+    elif fault == "once" and not (out_dir / ".probe_fault_once_done").exists():
         (out_dir / ".probe_fault_once_done").write_text("1\n", encoding="utf-8")
-        consecutive_probe_errors += 1
-        log_probe_error("post_trip", "OSError: simulated_probe_error_once")
-        if consecutive_probe_errors >= MAX_CONSECUTIVE_PROBE_ERRORS:
-            return False
-        return True
+        inject_fault = True
     if os.name == "nt":
-        winpid_map, _, ps_err = _msys_proc_map()
+        winpid_map, _, ps_err = ({}, {}, None) if inject_fault else _msys_proc_map()
         if main_pid in winpid_map:
             consecutive_probe_errors = 0
             return True
         bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
         last_exc: str | None = ps_err
         try:
+            if inject_fault:
+                raise OSError("simulated_probe_error_" + fault)
             r = subprocess.run([bash_exe, "-c", f"kill -0 {main_pid}"], capture_output=True, timeout=3)
             if r.returncode == 0:
                 consecutive_probe_errors = 0
@@ -2030,6 +2075,8 @@ def launcher_alive() -> bool:
             return False
         return True
     try:
+        if inject_fault:
+            raise OSError("simulated_probe_error_" + fault)
         os.kill(main_pid, 0)
         consecutive_probe_errors = 0
         return True

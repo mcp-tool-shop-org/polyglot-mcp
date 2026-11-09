@@ -768,6 +768,32 @@ describe("polyglot-mcp Colab translation lane", () => {
     }
   }, 60_000);
 
+  it("(fix2.digest) refuses a short digest prefix (fewer than 12 hex) even when it is a prefix of the pinned digest", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-digest-short-"));
+    try {
+      ollamaState.digest = PINNED_DIGEST.slice(0, 6);
+      ollamaState.processor = "100% GPU";
+      ollamaState.sizeBytes = 17358640928;
+      ollamaState.sizeVramBytes = 17358640928;
+
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { env } = makeFakeColabEnv(tmp);
+
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-digest-short-prefix"],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).toBe("MODEL_DIGEST_MISMATCH");
+    } finally {
+      ollamaState.digest = PINNED_DIGEST;
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("(b.2) refuses MODEL_NOT_FULLY_ON_GPU when fit probe sees a CPU/GPU split in ollama ps", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-split-"));
     try {
@@ -1800,6 +1826,8 @@ esac
         const guardsA = readFileSync(join(outA, "guards.log"), "utf-8");
         const probeErrsA = guardsA.match(/LAUNCHER_LIVENESS_PROBE_ERROR stage=pre_trip .* consecutive=[123]/g) ?? [];
         expect(probeErrsA.length).toBe(3);
+        // The error text comes from the real probe's except handler (fault is raised inside the probe try).
+        expect(guardsA).toContain("OSError: simulated_probe_error_always");
         const winA = JSON.parse(readFileSync(join(outA, "window.json"), "utf-8"));
         expect(winA.stop_path).toBe("watcher");
         expect(winA.watcher_wait).toBe("launcher_gone_pre_trip");
@@ -2085,4 +2113,55 @@ print("\\n".join(names))`,
       rmSync(tmp, { recursive: true, force: true });
     }
   }, 120_000);
+});
+
+describe("fix2: cleanup_on_exit kills tracked pids", () => {
+  it("(fix2.cleanup) colab_kill_tracked_pids kills a pid listed in .watcher_tracked_pids.txt and leaves excluded pids alone", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-fix2-cleanup-"));
+    try {
+      const outDir = join(tmp, "out").replace(/\\/g, "/");
+      mkdirSync(outDir, { recursive: true });
+      const script = join(tmp, "probe.sh");
+      writeFileSync(
+        script,
+        [
+          "set -u",
+          `source "${join(colabDir, "colab_window.sh").replace(/\\/g, "/")}"`,
+          `OUT="${outDir}"`,
+          'sleep 300 & TRACKED=$!',
+          'sleep 300 & KEPT=$!',
+          'printf "%s\n%s\n" "$TRACKED" "$KEPT" > "$OUT/.watcher_tracked_pids.txt"',
+          'colab_kill_tracked_pids "$OUT" "$KEPT"',
+          'sleep 1',
+          'if kill -0 "$TRACKED" 2>/dev/null; then echo TRACKED_ALIVE; else echo TRACKED_DEAD; fi',
+          'if kill -0 "$KEPT" 2>/dev/null; then echo KEPT_ALIVE; else echo KEPT_DEAD; fi',
+          'kill -9 "$KEPT" 2>/dev/null || true',
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      const res = spawnSync(bashBin, [script.replace(/\\/g, "/")], { encoding: "utf-8", timeout: 30_000 });
+      expect(res.stdout).toContain("TRACKED_DEAD");
+      expect(res.stdout).toContain("KEPT_ALIVE");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("(fix2.cleanup.wired) cleanup_on_exit in launch_translate.sh calls colab_kill_tracked_pids before the EXEC_PID kill", () => {
+    const src = readFileSync(join(colabDir, "launch_translate.sh"), "utf-8");
+    const fn = src.slice(src.indexOf("cleanup_on_exit() {"));
+    const iTracked = fn.indexOf("colab_kill_tracked_pids");
+    const iExec = fn.indexOf('kill -9 "${EXEC_PID}"');
+    expect(iTracked).toBeGreaterThan(-1);
+    expect(iExec).toBeGreaterThan(iTracked);
+  });
+
+  it("(fix2.killtracked) watcher kill_tracked maps MSYS pids to winpids on nt", () => {
+    const src = readFileSync(join(colabDir, "colab_window.sh"), "utf-8");
+    const start = src.indexOf("def kill_tracked() -> None:");
+    const body = src.slice(start, src.indexOf("deadline = time.monotonic()", start));
+    expect(body).toContain("_msys_proc_map()[0]");
+    expect(body).toContain("winpid_map.get(pid)");
+  });
 });

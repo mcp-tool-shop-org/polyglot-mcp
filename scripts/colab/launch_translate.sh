@@ -607,6 +607,7 @@ translate_download_bundle_after_failure() {
 cleanup_on_exit() {
   local rc=$?
   colab_enter_cleanup_trap "${OUT_DIR}"
+  colab_kill_tracked_pids "${OUT_DIR}" "${WALL_WATCHER_PID}"
   if [ -n "${EXEC_PID}" ]; then
     pkill -P "${EXEC_PID}" 2>/dev/null || true
     kill -9 "${EXEC_PID}" 2>/dev/null || true
@@ -832,7 +833,17 @@ for m in tags.get("models", []):
         break
 
 Path("/content/polyglot_out/model_digest.txt").write_text(f"sha256:{observed_digest}\n", encoding="utf-8")
-if not observed_digest or not (observed_digest == want_digest or want_digest.startswith(observed_digest) or observed_digest.startswith(want_digest)):
+# Exact match, or one side is a prefix of the other AND the prefix is at least 12 hex chars.
+MIN_DIGEST_PREFIX = 12
+def _digest_ok(obs: str, want: str) -> bool:
+    if not obs or not want:
+        return False
+    if obs == want:
+        return True
+    short, long_ = (obs, want) if len(obs) <= len(want) else (want, obs)
+    return len(short) >= MIN_DIGEST_PREFIX and long_.startswith(short)
+
+if not _digest_ok(observed_digest, want_digest):
     sys.stderr.write(
         f"REFUSED: MODEL_DIGEST_MISMATCH: model {want_model} digest={observed_digest or 'none'} expected={want_digest}\n"
     )
