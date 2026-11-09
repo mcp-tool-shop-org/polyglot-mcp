@@ -595,6 +595,8 @@ describe("doesReceiptMatchDisk and post-write silence constants (polyglot-mcp#59
       expect(doesReceiptMatchDisk(dir, { path: "README.ja.md", sha256: sha.toUpperCase() })).toBe(true);
       expect(doesReceiptMatchDisk(dir, { path: "README.ja.md", sha256: "0".repeat(64) })).toBe(false);
       expect(doesReceiptMatchDisk(dir, { path: "", sha256: sha })).toBe(false);
+      // Passing "." resolves to the directory itself (existsSync === true), so readFileSync throws EISDIR and hits catch.
+      expect(doesReceiptMatchDisk(dir, { path: ".", sha256: sha })).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
