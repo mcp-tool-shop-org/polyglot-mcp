@@ -339,6 +339,10 @@ if subcmd == "download":
             signal.signal(signal.SIGINT, signal.SIG_IGN)
         with (state_dir / "hung_pids.txt").open("a", encoding="utf-8") as fh:
             fh.write(f"{os.getpid()}\\n")
+        try:
+            (Path(out_dir_str) / "early_wall_trip.txt").write_text("1\\n", encoding="utf-8")
+        except OSError:
+            pass
         for _ in range(300):
             if (Path(out_dir_str) / "wall_trip_epoch.txt").is_file():
                 break
@@ -1376,17 +1380,18 @@ describe("polyglot-mcp Colab translation lane", () => {
       FAKE_COLAB_DOWNLOAD_HANG: "ignore_term",
       FAKE_COLAB_WAIT_FOR_WALL_TRIP_ON_DL1: "1",
       GUARD_POLL_INTERVAL_S: "0.3",
-      SDLAB_TEST_WALL_ESCALATE_S: "35",
-      SDLAB_TEST_DOWNLOAD_TIMEOUT_S: "8",
+      SDLAB_TEST_WALL_ESCALATE_S: "25",
+      SDLAB_TEST_DOWNLOAD_TIMEOUT_S: "5",
       SDLAB_TEST_KILL_GRACE_S: "1",
-      SDLAB_TEST_SALVAGE_DEADLINE_S: "25",
+      SDLAB_TEST_SALVAGE_DEADLINE_S: "20",
       SDLAB_TEST_SALVAGE_RESTART_TIMEOUT_S: "3",
       SDLAB_TEST_SALVAGE_EXEC_TIMEOUT_S: "5",
       SDLAB_TEST_STOP_TIMEOUT_S: "3",
     });
     try {
-      // Keep digest valid so remote exec succeeds (~9-11s total from start) and reaches colab_download_checked on the normal path,
-      // then hangs in colab_download_checked (attempt 1, timeout 8+1=9s, spanning ~10-19s) while wall trips at 14s (wall-s 15 - grace-s 1 = 14s),
+      // Keep digest valid so remote exec succeeds and reaches colab_download_checked on the normal path,
+      // then hangs in colab_download_checked (attempt 1, timeout 5+1=6s) while FAKE_COLAB_WAIT_FOR_WALL_TRIP_ON_DL1 writes early_wall_trip.txt
+      // so the wall watcher trips immediately (~0.25s into download attempt 1 on both fast Linux and loaded Windows),
       // gets killed by timeout -k in colab_download_checked / colab_run_bounded, enters cleanup_on_exit,
       // and then hangs in colab_salvage_bundle_after_failure's download step (attempt 2), which is also killed by timeout -k!
       ollamaState.digest = PINNED_DIGEST;
@@ -1402,7 +1407,7 @@ describe("polyglot-mcp Colab translation lane", () => {
           "--card",
           "CPU",
           "--wall-s",
-          "15",
+          "20",
           "--grace-s",
           "1",
           "--out-dir",
@@ -1414,7 +1419,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       );
       const elapsedS = (Date.now() - t0) / 1000;
       expect(res.code).not.toBe(0);
-      expect(elapsedS).toBeLessThan(34);
+      expect(elapsedS).toBeLessThan(28);
 
       expect(existsSync(join(outDir, "wall_trip_epoch.txt"))).toBe(true);
       if (!existsSync(join(outDir, "cleanup_started.txt"))) {
@@ -1435,7 +1440,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(existsSync(join(stateDir, "download_attempts.txt"))).toBe(true);
       expect(parseInt(readFileSync(join(stateDir, "download_attempts.txt"), "utf-8").trim(), 10)).toBe(2);
       const guardsLog = readFileSync(join(outDir, "guards.log"), "utf-8");
-      const dlTimeouts = guardsLog.match(/SALVAGE_STEP_TIMEOUT download timeout_s=8 kill_grace_s=1 rc=(124|137)/g) ?? [];
+      const dlTimeouts = guardsLog.match(/SALVAGE_STEP_TIMEOUT download timeout_s=5 kill_grace_s=1 rc=(124|137)/g) ?? [];
       expect(dlTimeouts.length).toBe(2);
       expect(guardsLog).toContain("REFUSED: DOWNLOAD_FAILED:");
       expect(guardsLog).toContain("BUNDLE_AFTER_FAILURE: none on the VM");
@@ -1449,6 +1454,12 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win.refusal_code).toBe("WALL_GUARD_TRIPPED");
     } finally {
       ollamaState.digest = PINNED_DIGEST;
+      for (let i = 0; i < 40; i++) {
+        if (!existsSync(join(outDir, "watcher_escalated.txt")) || existsSync(join(outDir, "window.json"))) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
       killHungPids(stateDir);
       rmDirRetry(tmp);
     }
