@@ -1445,7 +1445,18 @@ describe("polyglot-mcp Colab translation lane", () => {
       );
       const elapsedS = (Date.now() - t0) / 1000;
       expect(res.code).not.toBe(0);
-      expect(elapsedS).toBeLessThan(28);
+      // Derived bound: the wall watcher trips at wall (20 s), and a launcher that is still alive is only
+      // force-escalated after SDLAB_TEST_WALL_ESCALATE_S more, plus one kill grace. The bounded download
+      // (timeout -k) must finish the cleanup long before that, so exceeding the escalation deadline means the
+      // download bound was lost. MARGIN covers process start-up and polling jitter only.
+      const WALL_S = 20;
+      const ESCALATE_S = 25;
+      const KILL_GRACE_S = 1;
+      const MARGIN_S_WINDOWS = 1.0;
+      const MARGIN_S_POSIX = 1.0;
+      const margin = process.platform === "win32" ? MARGIN_S_WINDOWS : MARGIN_S_POSIX;
+      console.log("ASK33_ELAPSED_S", elapsedS);
+      expect(elapsedS).toBeLessThan(WALL_S + ESCALATE_S + KILL_GRACE_S + margin);
 
       expect(existsSync(join(outDir, "wall_trip_epoch.txt"))).toBe(true);
       if (!existsSync(join(outDir, "cleanup_started.txt"))) {
