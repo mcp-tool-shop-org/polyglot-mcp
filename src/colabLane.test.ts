@@ -1445,18 +1445,6 @@ describe("polyglot-mcp Colab translation lane", () => {
       );
       const elapsedS = (Date.now() - t0) / 1000;
       expect(res.code).not.toBe(0);
-      // Derived bound: the wall watcher trips at wall (20 s), and a launcher that is still alive is only
-      // force-escalated after SDLAB_TEST_WALL_ESCALATE_S more, plus one kill grace. The bounded download
-      // (timeout -k) must finish the cleanup long before that, so exceeding the escalation deadline means the
-      // download bound was lost. MARGIN covers process start-up and polling jitter only.
-      const WALL_S = 20;
-      const ESCALATE_S = 25;
-      const KILL_GRACE_S = 1;
-      const MARGIN_S_WINDOWS = 1.0;
-      const MARGIN_S_POSIX = 1.0;
-      const margin = process.platform === "win32" ? MARGIN_S_WINDOWS : MARGIN_S_POSIX;
-      console.log("ASK33_ELAPSED_S", elapsedS);
-      expect(elapsedS).toBeLessThan(WALL_S + ESCALATE_S + KILL_GRACE_S + margin);
 
       expect(existsSync(join(outDir, "wall_trip_epoch.txt"))).toBe(true);
       if (!existsSync(join(outDir, "cleanup_started.txt"))) {
@@ -1489,6 +1477,19 @@ describe("polyglot-mcp Colab translation lane", () => {
       const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
       expect(win.stop_path).toBe("trap");
       expect(win.refusal_code).toBe("WALL_GUARD_TRIPPED");
+
+      // The decisive checks above are behavioural: both downloads were bounded by timeout -k (two
+      // SALVAGE_STEP_TIMEOUT lines) and the watcher never had to escalate (it only does so when the bound is lost).
+      expect(guardsLog).not.toContain("WALL_WATCHER_ESCALATED");
+      console.log("ASK33_ELAPSED_S=" + elapsedS.toFixed(1));
+      // Loose hang BACKSTOP only, not the check: wall + escalate + kill grace + a named margin.
+      const WALL_S = 20;
+      const ESCALATE_S = 25;
+      const KILL_GRACE_S = 1;
+      const MARGIN_S_WINDOWS = 5.0; // start-up and polling jitter on a loaded Windows rig
+      const MARGIN_S_POSIX = 2.0;
+      const margin = process.platform === "win32" ? MARGIN_S_WINDOWS : MARGIN_S_POSIX;
+      expect(elapsedS).toBeLessThan(WALL_S + ESCALATE_S + KILL_GRACE_S + margin);
     } finally {
       ollamaState.digest = PINNED_DIGEST;
       for (let i = 0; i < 40; i++) {
