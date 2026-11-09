@@ -40,14 +40,14 @@ PINNED_VRAM_HEADROOM_MIB="1024"
 
 PINNED_LAUNCH_GUARDS_SHA="0c8f9cc805bccf5ac32b65386c8072ca40e0127fc2ae235a350be27be0623d3e"
 PINNED_REMOTE_RUNNER_SHA="834e669de7f611c8d3b0e24dcd65c568c0d97a2bafb6080b235ea9a22b4f99d9"
-PINNED_COLAB_WINDOW_SHA="670c34f0bd312cbededf93f660c157c7fab424ef74d6ed970bac4f4df0c3c4a2"
+PINNED_COLAB_WINDOW_SHA="0fc763b68e5607373d32c72808cab940a679efa46f9b2c4cbbab4ccf693fbfaa"
 PINNED_BUNDLE_NOW_SHA="9d550928857550352f80b7d86824a182922065927687d5c707878c0a6be33a43"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
 PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef05829e4194a"
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="97f170164b7e51446f75fffd0e1c735c588354b41ad5136074d32ea0aabbca9d"
+PINNED_SELF_SHA="42afe5df6c6ebc59f753ed43e0de239b0ba5f5e0c06df8dbbce3b4aa32d6c63d"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -1268,7 +1268,14 @@ done < <(find /content/polyglot_out -type f \( -name "*.log" -o -name "*.json" -
 if [ "${#f_scrub_args[@]}" -gt 0 ]; then
   python3 /content/launch_guards.py "${f_scrub_args[@]}" </dev/null || true
 fi
-tar -czf /content/polyglot_translate_bundle.tar.gz -C /content/polyglot_out .
+# FINAL_TAR_BEGIN: the ollama log inside polyglot_out may still be appended to; GNU tar then exits 1
+# ("file changed as we read it") although the archive is complete. Tolerate exit 1 only.
+final_tar_rc=0
+tar -czf /content/polyglot_translate_bundle.tar.gz -C /content/polyglot_out . || final_tar_rc=$?
+if [ "${final_tar_rc}" -gt 1 ]; then
+  exit "${final_tar_rc}"
+fi
+# FINAL_TAR_END
 REMOTEEOF
 
 colab_check_pre_exec_cap "${OUT_DIR}"

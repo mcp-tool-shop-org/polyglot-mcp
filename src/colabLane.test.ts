@@ -2156,12 +2156,85 @@ describe("fix2: cleanup_on_exit kills tracked pids", () => {
     expect(iTracked).toBeGreaterThan(-1);
     expect(iExec).toBeGreaterThan(iTracked);
   });
+});
 
-  it("(fix2.killtracked) watcher kill_tracked maps MSYS pids to winpids on nt", () => {
-    const src = readFileSync(join(colabDir, "colab_window.sh"), "utf-8");
-    const start = src.indexOf("def kill_tracked() -> None:");
-    const body = src.slice(start, src.indexOf("deadline = time.monotonic()", start));
-    expect(body).toContain("_msys_proc_map()[0]");
-    expect(body).toContain("winpid_map.get(pid)");
+describe("fix2: tracked-pid kill behaviour and final tar", () => {
+  const isWin = process.platform === "win32";
+  if (!isWin) {
+    console.log("fix2.killtracked.native SKIPPED: needs real Windows (nt branch of kill_tracked is never entered on this platform; os.name is not faked)");
+  }
+
+  it.skipIf(!isWin)("(fix2.killtracked.native) kill_tracked on real Windows kills a tracked native child (ping.exe) mapped through ps", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-fix2-kt-"));
+    try {
+      const fwd = (p: string) => p.replace(/\\/g, "/");
+      const outDir = fwd(join(tmp, "out"));
+      mkdirSync(outDir, { recursive: true });
+      const driver = join(tmp, "driver.py");
+      writeFileSync(
+        driver,
+        [
+          "import sys",
+          "src = open(sys.argv[1], encoding='utf-8').read()",
+          "start = src.index('import os, signal, sys, time\\n', src.index('colab_run_wall_watcher() {'))",
+          "end = src.index('deadline = time.monotonic()', start)",
+          "main_msys, out_dir = sys.argv[2], sys.argv[3]",
+          "sys.argv = ['watcher', main_msys, main_msys, '30', 'fix2-kt', out_dir]",
+          "exec(compile(src[start:end], 'colab_window.sh:watcher', 'exec'))",
+          "kill_tracked()",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      const script = join(tmp, "probe.sh");
+      writeFileSync(
+        script,
+        [
+          "set -u",
+          `OUT="${outDir}"`,
+          "ping -n 300 127.0.0.1 > /dev/null &",
+          "CHILD=$!",
+          "sleep 1",
+          "WINPID=$(ps -p \"$CHILD\" | awk 'NR==2{print $4}')",
+          "echo WINPID=$WINPID",
+          "printf '%s\\n' \"$CHILD\" > \"$OUT/.watcher_tracked_pids.txt\"",
+          `${pyBin} "${fwd(driver)}" "${fwd(join(colabDir, "colab_window.sh"))}" "$$" "$OUT"`,
+          "sleep 1",
+          "if tasklist //FI \"PID eq $WINPID\" 2>/dev/null | grep -q \" $WINPID \"; then echo NATIVE_ALIVE; taskkill //F //PID \"$WINPID\" > /dev/null 2>&1; else echo NATIVE_DEAD; fi",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      const res = spawnSync(bashBin, [fwd(script)], { encoding: "utf-8", timeout: 60_000 });
+      expect(res.stdout).toMatch(/WINPID=\d+/);
+      expect(res.stdout).toContain("NATIVE_DEAD");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it("(fix2.finaltar) the final bundle tar tolerates GNU tar exit 1 (file changed) but not other codes, under set -euo pipefail", () => {
+    const src = readFileSync(join(colabDir, "launch_translate.sh"), "utf-8");
+    const a = src.indexOf("# FINAL_TAR_BEGIN");
+    const b = src.indexOf("# FINAL_TAR_END");
+    expect(a).toBeGreaterThan(-1);
+    expect(b).toBeGreaterThan(a);
+    const block = src.slice(a, b);
+    const run = (rc: number) => {
+      const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-fix2-tar-"));
+      try {
+        const script = join(tmp, "t.sh").replace(/\\/g, "/");
+        writeFileSync(script, `set -euo pipefail\ntar() { return ${rc}; }\n${block}\necho REACHED_END\n`, "utf-8");
+        return spawnSync(bashBin, [script], { encoding: "utf-8", timeout: 30_000 });
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    };
+    const r1 = run(1);
+    expect(r1.status).toBe(0);
+    expect(r1.stdout).toContain("REACHED_END");
+    const r2 = run(2);
+    expect(r2.status).toBe(2);
+    expect(r2.stdout).not.toContain("REACHED_END");
   });
 });
