@@ -1675,7 +1675,7 @@ case "\${1:-}" in
     fi
     while :; do
       echo "ollama serve heartbeat"
-      sleep 0.2
+      sleep 0.2 || true
     done
     ;;
   --version|-v)

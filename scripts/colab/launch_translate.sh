@@ -47,7 +47,7 @@ PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef0
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="0c58cb98d77812cd3d64f36832f93e46ac805d81616bf979f40e2d19d9d83b67"
+PINNED_SELF_SHA="41049355e405a82487b28609579587f5e9321f5be47dd4855f682d6a38192ee8"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -766,7 +766,7 @@ stop_writers() {
       continue
     fi
     # ollama serve is not a child of this shell (the setup block ran in a subshell), so wait returns at once:
-    # signal it, poll until it is gone or SERVE_STOP_TIMEOUT_S passes, then kill -9 and poll briefly again.
+    # signal it, poll until it is gone or serve_timeout_s passes, then kill -9 and poll briefly again.
     local serve_timeout_s="${POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S:-5}" serve_tick serve_ticks serve_killed9=0 serve_result="gone" serve_msg
     case "${serve_timeout_s}" in
       ''|*[!0-9]*|0) serve_timeout_s=5 ;;
