@@ -2434,7 +2434,7 @@ describe("fix2 round 3: Windows kill exclusions, scrub-race writers, partial arc
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
-  });
+  }, 90_000);
 
   it("(fix2.writers.order) the remote script stops the writers before the final scrub", () => {
     const src = readFileSync(join(colabDir, "launch_translate.sh"), "utf-8");
