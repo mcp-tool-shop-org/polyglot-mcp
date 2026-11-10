@@ -3,6 +3,7 @@
     ".claude/",
     ".github/",
     "assets/",
+    "docs/",
     "root"
   ],
   "breaks": [
@@ -19,30 +20,106 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 0,
-      "changed": 7,
+      "added": 9,
+      "changed": 10,
       "moved": 0,
-      "parts": 3,
+      "parts": 5,
       "removed": 0
     },
     "items": [
       {
+        "kind": "door",
+        "sentence": "CI's push trigger now also names `docs/**` and `scripts/**`.",
+        "subjects": [
+          ".github/workflows/ci.yml"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "CI now also runs src/colabLane.test.ts.",
+        "subjects": [
+          ".github/workflows/ci.yml",
+          "src/colabLane.test.ts"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "Publish to npm now also runs src/colabLane.test.ts.",
+        "subjects": [
+          ".github/workflows/publish.yml",
+          "src/colabLane.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": ".polyglot-pins.json is now read by scripts/colab/launch_translate.sh.",
+        "subjects": [
+          ".polyglot-pins.json",
+          "scripts/colab/launch_translate.sh"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "README.es.md is now also read by scripts/colab/compare_translations.py and scripts/colab/launch_translate.sh.",
+        "subjects": [
+          "README.es.md",
+          "scripts/colab/compare_translations.py",
+          "scripts/colab/launch_translate.sh"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "README.fr.md is now also read by scripts/colab/compare_translations.py and scripts/colab/launch_translate.sh.",
+        "subjects": [
+          "README.fr.md",
+          "scripts/colab/compare_translations.py",
+          "scripts/colab/launch_translate.sh"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "And 13 more new writers and readers of places.",
+        "subjects": []
+      },
+      {
+        "kind": "part",
+        "sentence": "docs is a new part, drawn from `docs/**`.",
+        "subjects": [
+          "docs"
+        ]
+      },
+      {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-11-08; 7 files changed content.",
+        "sentence": "9 files added and 10 changed content, across 5 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "ef26f35f89f6e7c66bb1afa60d6c06ffd413ff4d",
-      "generatedAt": "2026-11-08T01:14:51.897Z"
+      "commit": "9fd9fe1fd15d6f6ff214531315cdbedaf36c53fe",
+      "generatedAt": "2026-11-08T02:00:31.727Z"
     },
-    "unchanged": true
+    "unchanged": false
   },
   "changesTogether": [
     {
+      "a": "scripts/translate-all.mjs",
+      "b": "scripts/translate-readme.mjs",
+      "either": 8,
+      "partLabels": [
+        "scripts",
+        "scripts"
+      ],
+      "parts": [
+        "scripts",
+        "scripts"
+      ],
+      "relation": "inside",
+      "shared": 6
+    },
+    {
       "a": "scripts/translate-readme.mjs",
       "b": "src/translateMarkdown.ts",
-      "either": 8,
+      "either": 10,
       "partLabels": [
         "scripts",
         "src"
@@ -53,21 +130,6 @@
       ],
       "relation": "a-imports-b",
       "shared": 5
-    },
-    {
-      "a": "scripts/translate-all.mjs",
-      "b": "scripts/translate-readme.mjs",
-      "either": 7,
-      "partLabels": [
-        "scripts",
-        "scripts"
-      ],
-      "parts": [
-        "scripts",
-        "scripts"
-      ],
-      "relation": "inside",
-      "shared": 4
     }
   ],
   "changesTogetherNote": [
@@ -75,9 +137,9 @@
     "Window: 180 days; a pair counts from 3 shared commits, since 0 source files reach 10 revisions; the floor rises to 10 when 25 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "9fd9fe1fd15d6f6ff214531315cdbedaf36c53fe",
+  "commit": "d62cc6ad16383cc9312026157eb621284108e4a8",
   "defaultBranch": "main",
-  "derived": "7 parts, mostly Markdown (83 files); code in TypeScript (50), JavaScript (5), CSS (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
+  "derived": "8 parts, mostly TypeScript (51 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
     {
       "builds": [
@@ -95,13 +157,14 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 47
+          "files": 48
         }
       ],
       "runs": [
         "src/cache.concurrency.test.ts",
         "src/cache.test.ts",
         "src/codeSpans.test.ts",
+        "src/colabLane.test.ts",
         "src/errors.test.ts",
         "src/glossary.test.ts",
         "src/index.test.ts",
@@ -128,15 +191,15 @@
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 28,
-      "runsMore": 25,
+      "runsCount": 29,
+      "runsMore": 26,
       "sends": [
         "uploads coverage to Codecov"
       ],
       "stages": [],
       "triggers": [
         "on a pull request to main",
-        "on a push to main touching 10 paths",
+        "on a push to main touching 12 paths",
         "or by hand"
       ]
     },
@@ -188,13 +251,14 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 47
+          "files": 48
         }
       ],
       "runs": [
         "src/cache.concurrency.test.ts",
         "src/cache.test.ts",
         "src/codeSpans.test.ts",
+        "src/colabLane.test.ts",
         "src/errors.test.ts",
         "src/glossary.test.ts",
         "src/index.test.ts",
@@ -221,8 +285,8 @@
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 28,
-      "runsMore": 25,
+      "runsCount": 29,
+      "runsMore": 26,
       "sends": [
         "publishes to npm"
       ],
@@ -306,12 +370,12 @@
   "edges": [],
   "engine": "1.24.0",
   "generated": [],
-  "generatedAt": "2026-11-08T02:00:31.727Z",
+  "generatedAt": "2026-11-09T11:41:22.336Z",
   "limits": [
     "3 writes and 11 reads use paths built at run time and are not named here.",
-    "6 writes and 13 reads go to a path their caller passes, not to this repository.",
+    "12 writes and 24 reads go to a path their caller passes, not to this repository.",
     "1 read goes to the directory the command is run in (LICENSE), not to this repository.",
-    "13 commands are built at run time and not followed, 11 of them in tests.",
+    "18 commands are built at run time and not followed, 16 of them in tests.",
     "Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window."
   ],
   "mainDoor": ".github/workflows/ci.yml",
@@ -319,12 +383,13 @@
     ".claude": ".claude",
     ".github": ".github",
     "assets": "assets",
+    "docs": "docs",
     "root": "the repository root",
     "scripts": "scripts",
     "site": "site",
     "src": "src"
   },
-  "parts": 7,
+  "parts": 8,
   "readers": [],
   "repo": "mcp-tool-shop-org/polyglot-mcp",
   "sequences": [],
@@ -344,7 +409,7 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 28,
+  "testFiles": 29,
   "testedBy": {
     "scripts": 1,
     "site": 0,

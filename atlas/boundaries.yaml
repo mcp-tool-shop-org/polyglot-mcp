@@ -12,6 +12,10 @@ boundaries:
     globs:
       - assets/**
     role: config
+  - name: docs
+    globs:
+      - docs/**
+    role: docs
   - name: root
     globs:
       - "*"
