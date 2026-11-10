@@ -1856,26 +1856,33 @@ def session_was_opened() -> bool:
 def kill_tracked() -> None:
     record_children(flush=True)
     sig = getattr(signal, "SIGKILL", signal.SIGTERM)
-    # On nt the tracked pids are MSYS pids: map each to its winpid (same ps parse as the
-    # escalated kill block) so the native process dies even when MSYS `kill -9` misses it.
-    winpid_map: dict[int, int] = _msys_proc_map()[0] if os.name == "nt" else {}
-    for pid in sorted(tracked_pids, reverse=True):
-        if pid not in (main_pid, watcher_pid, self_pid):
-            if os.name == "nt":
-                try:
-                    subprocess.run(["bash", "-c", f"kill -9 {pid}"], capture_output=True, timeout=2)
-                except Exception:
-                    pass
-                wpid = winpid_map.get(pid)
-                if wpid and wpid not in (main_pid, watcher_pid, self_pid):
-                    try:
-                        os.kill(wpid, sig)
-                    except OSError:
-                        pass
+    if os.name == "nt":
+        # Tracked pids are MSYS pids; main/watcher are MSYS pids too, but self_pid is a Windows pid.
+        # Compare like with like: map the excluded MSYS pids to winpids, and never kill a pid
+        # whose mapping is missing (a raw MSYS pid must never reach TerminateProcess).
+        winpid_map = _msys_proc_map()[0]
+        win_excl = {self_pid} | {winpid_map[p] for p in (main_pid, watcher_pid) if p in winpid_map}
+        for pid in sorted(tracked_pids, reverse=True):
+            if pid in (main_pid, watcher_pid):
+                continue
+            wpid = winpid_map.get(pid)
+            if not wpid or wpid in win_excl:
+                continue
             try:
-                os.kill(pid, sig)
+                subprocess.run(["bash", "-c", f"kill -9 {pid}"], capture_output=True, timeout=2)
+            except Exception:
+                pass
+            try:
+                os.kill(wpid, sig)
             except OSError:
                 pass
+    else:
+        for pid in sorted(tracked_pids, reverse=True):
+            if pid not in (main_pid, watcher_pid, self_pid):
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
 
 deadline = time.monotonic() + max(0.0, wall_limit_s)
 while True:
@@ -2233,6 +2240,9 @@ while stack:
 sig = getattr(signal, "SIGKILL", signal.SIGTERM)
 bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if os.name == "nt" and Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
 if os.name == "nt":
+    # like with like: main/watcher are MSYS pids, self_pid is a Windows pid; skip unmapped pids
+    win_excl = {self_pid} | {winpid_map[p] for p in (main_pid, watcher_pid) if p in winpid_map}
+    out = [p for p in out if p not in (main_pid, watcher_pid) and winpid_map.get(p) and winpid_map[p] not in win_excl]
     mpids_to_kill = [str(p) for p in reversed(out)]
     if mpids_to_kill:
         try:
@@ -2241,7 +2251,7 @@ if os.name == "nt":
             pass
     for pid in reversed(out):
         wpid = winpid_map.get(pid)
-        if wpid and wpid not in (main_pid, watcher_pid, self_pid):
+        if wpid:
             try:
                 os.kill(wpid, sig)
             except OSError:
@@ -2316,6 +2326,9 @@ def subtree(root: int) -> list[int]:
 sig = getattr(signal, "SIGKILL", signal.SIGTERM)
 targets = list(reversed(subtree(main_pid)))
 if os.name == "nt":
+    # like with like: watcher_pid is an MSYS pid, self_pid a Windows pid; skip unmapped pids
+    win_excl = {self_pid} | ({winpid_map[watcher_pid]} if watcher_pid in winpid_map else set())
+    targets = [p for p in targets if p != watcher_pid and winpid_map.get(p) and winpid_map[p] not in win_excl]
     bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
     if targets:
         try:
@@ -2324,7 +2337,7 @@ if os.name == "nt":
             pass
     for pid in targets:
         wpid = winpid_map.get(pid)
-        if wpid and wpid not in (watcher_pid, self_pid):
+        if wpid:
             try:
                 os.kill(wpid, sig)
             except OSError:

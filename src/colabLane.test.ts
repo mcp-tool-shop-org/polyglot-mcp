@@ -1457,6 +1457,16 @@ describe("polyglot-mcp Colab translation lane", () => {
       const cleanupStartedEpoch = parseFloat(readFileSync(join(outDir, "cleanup_started.txt"), "utf-8").trim());
       expect(cleanupStartedEpoch).toBeGreaterThan(1_000_000_000);
 
+      // Post-trip deltas (as test (c) does for the normal path): cleanup began within the in-flight bound of the
+      // trip, and colab stop finished within cleanup_bound_s of the trip. In-flight bound in this test:
+      // max(download 5, upload 10, sessions 10) + kill grace 1 = 11 s (the same configuration as test (c)).
+      const IN_FLIGHT_BOUND_S = 11;
+      const wallTripEpoch = parseFloat(readFileSync(join(outDir, "wall_trip_epoch.txt"), "utf-8").trim());
+      expect(cleanupStartedEpoch - wallTripEpoch).toBeLessThanOrEqual(IN_FLIGHT_BOUND_S);
+      const winPre = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      const stopDoneTs3 = JSON.parse(readFileSync(join(stateDir, "stops.jsonl"), "utf-8").trim().split("\n").pop()!).done_ts;
+      expect(stopDoneTs3 - wallTripEpoch).toBeLessThanOrEqual(winPre.cleanup_bound_s);
+
       // Both normal colab_download_checked (attempt 1) and salvage download (attempt 2) ran and were bounded by timeout -k
       if (!existsSync(join(stateDir, "download_attempts.txt")) || parseInt(readFileSync(join(stateDir, "download_attempts.txt"), "utf-8").trim(), 10) !== 2) {
         if (existsSync(join(outDir, "guards.log"))) console.error("ASK3.3 GUARDS:", readFileSync(join(outDir, "guards.log"), "utf-8"));
@@ -2304,6 +2314,132 @@ describe("fix2 item 7: fractional close epoch for the spend floor", () => {
       const j = src.indexOf("closed_at=\"$(date");
       expect(i).toBeGreaterThan(-1);
       expect(j).toBeGreaterThan(i);
+    }
+  });
+});
+
+describe("fix2 round 3: Windows kill exclusions, scrub-race writers, partial archive", () => {
+  const isWin = process.platform === "win32";
+  const NL = String.fromCharCode(10);
+  const fwd = (p: string) => p.split(String.fromCharCode(92)).join("/");
+  if (!isWin) {
+    console.log("fix2.killtracked.unmapped SKIPPED: needs real Windows (the nt branch of kill_tracked is never entered here; os.name is not faked)");
+  }
+
+  it.skipIf(!isWin)("(fix2.killtracked.unmapped) on real Windows an unmapped MSYS pid kills nothing, and an excluded pid survives", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-fix2-unmapped-"));
+    try {
+      const outDir = fwd(join(tmp, "out"));
+      mkdirSync(outDir, { recursive: true });
+      const driver = join(tmp, "driver.py");
+      writeFileSync(
+        driver,
+        [
+          "import sys",
+          "src = open(sys.argv[1], encoding='utf-8').read()",
+          "start = src.index('import os, signal, sys, time' + chr(10), src.index('colab_run_wall_watcher() {'))",
+          "end = src.index('deadline = time.monotonic()', start)",
+          "main_msys, out_dir = sys.argv[2], sys.argv[3]",
+          "sys.argv = ['watcher', main_msys, main_msys, '30', 'fix2-unmapped', out_dir]",
+          "exec(compile(src[start:end], 'colab_window.sh:watcher', 'exec'))",
+          "kill_tracked()",
+          "",
+        ].join(NL),
+        "utf-8",
+      );
+      const script = join(tmp, "probe.sh");
+      writeFileSync(
+        script,
+        [
+          "set -u",
+          `OUT="${outDir}"`,
+          "ping -n 300 127.0.0.1 > /dev/null &",
+          "BYST=$!",
+          "sleep 1",
+          "BWIN=$(ps -p \"$BYST\" | awk 'NR==2{print $4}')",
+          "echo BWIN=$BWIN",
+          // the bystander's WINDOWS pid, written as if it were an MSYS pid: it has no MSYS mapping.
+          // Before the fix os.kill(<that number>) would have hit the bystander.
+          "echo \"$BWIN\" > \"$OUT/.watcher_tracked_pids.txt\"",
+          "echo \"$$\" >> \"$OUT/.watcher_tracked_pids.txt\"",
+          `${pyBin} "${fwd(driver)}" "${fwd(join(colabDir, "colab_window.sh"))}" "$$" "$OUT"`,
+          "sleep 1",
+          "if tasklist //FI \"PID eq $BWIN\" 2>/dev/null | grep -q \" $BWIN \"; then echo BYSTANDER_ALIVE; else echo BYSTANDER_DEAD; fi",
+          "echo SELF_ALIVE",
+          "taskkill //F //PID \"$BWIN\" > /dev/null 2>&1",
+          "",
+        ].join(NL),
+        "utf-8",
+      );
+      const res = spawnSync(bashBin, [fwd(script)], { encoding: "utf-8", timeout: 60_000 });
+      expect(res.stdout).toContain("BYSTANDER_ALIVE");
+      expect(res.stdout).toContain("SELF_ALIVE");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it("(fix2.writers.stopped) stop_writers halts both log writers so nothing appends after the scrub point", () => {
+    const src = readFileSync(join(colabDir, "launch_translate.sh"), "utf-8");
+    const a = src.indexOf("# STOP_WRITERS_BEGIN");
+    const b = src.indexOf("# STOP_WRITERS_END");
+    expect(a).toBeGreaterThan(-1);
+    expect(b).toBeGreaterThan(a);
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-fix2-writers-"));
+    try {
+      const outRoot = fwd(join(tmp, "polyglot_out"));
+      mkdirSync(outRoot, { recursive: true });
+      const fn = src.slice(a, b).split("/content/polyglot_out").join(outRoot);
+      const script = join(tmp, "w.sh");
+      writeFileSync(
+        script,
+        [
+          "set -u",
+          fn,
+          `V="${outRoot}/vitals.log"; O="${outRoot}/ollama_serve.log"`,
+          "( while :; do echo x >> \"$V\"; sleep 0.05; done ) &",
+          "VITALS_PID=$!",
+          "( while :; do echo x >> \"$O\"; sleep 0.05; done ) &",
+          "OLLAMA_SERVE_PID=$!",
+          "sleep 0.5",
+          "stop_writers",
+          "S1=$(wc -c < \"$V\")+$(wc -c < \"$O\")",
+          "sleep 0.7",
+          "S2=$(wc -c < \"$V\")+$(wc -c < \"$O\")",
+          "if [ \"$S1\" = \"$S2\" ]; then echo WRITERS_STOPPED; else echo WRITERS_STILL_APPENDING; fi",
+          "",
+        ].join(NL),
+        "utf-8",
+      );
+      const res = spawnSync(bashBin, [fwd(script)], { encoding: "utf-8", timeout: 30_000 });
+      expect(res.stdout).toContain("WRITERS_STOPPED");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("(fix2.writers.order) the remote script stops the writers before the final scrub", () => {
+    const src = readFileSync(join(colabDir, "launch_translate.sh"), "utf-8");
+    const call = src.lastIndexOf("stop_writers" + NL + "f_scrub_args=()");
+    expect(call).toBeGreaterThan(-1);
+    expect(src.indexOf("OLLAMA_SERVE_PID=\"$!\"")).toBeGreaterThan(-1);
+  });
+
+  it("(fix2.finaltar.partial) on tar rc > 1 the partial archive is removed so the trap fallback can rebuild it", () => {
+    const src = readFileSync(join(colabDir, "launch_translate.sh"), "utf-8");
+    const a = src.indexOf("# FINAL_TAR_BEGIN");
+    const b = src.indexOf("# FINAL_TAR_END");
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-fix2-partial-"));
+    try {
+      const arch = fwd(join(tmp, "bundle.tar.gz"));
+      const block = src.slice(a, b).split("/content/polyglot_translate_bundle.tar.gz").join(arch).split("/content/polyglot_out").join(fwd(tmp));
+      const script = join(tmp, "t.sh");
+      writeFileSync(script, ["set -euo pipefail", `tar() { : > "${arch}"; return 2; }`, block, "echo REACHED_END", ""].join(NL), "utf-8");
+      const res = spawnSync(bashBin, [fwd(script)], { encoding: "utf-8", timeout: 30_000 });
+      expect(res.status).toBe(2);
+      expect(existsSync(join(tmp, "bundle.tar.gz"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 });

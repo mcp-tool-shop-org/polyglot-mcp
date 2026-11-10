@@ -40,14 +40,14 @@ PINNED_VRAM_HEADROOM_MIB="1024"
 
 PINNED_LAUNCH_GUARDS_SHA="0c8f9cc805bccf5ac32b65386c8072ca40e0127fc2ae235a350be27be0623d3e"
 PINNED_REMOTE_RUNNER_SHA="834e669de7f611c8d3b0e24dcd65c568c0d97a2bafb6080b235ea9a22b4f99d9"
-PINNED_COLAB_WINDOW_SHA="b008dcff4921f8b5a67b537cf04be592f7f48884bd4feee07cd94668628a9d02"
+PINNED_COLAB_WINDOW_SHA="c86e36849e4892e1c0f664db41db8fb907f5db6f8be1eef8d649ad8c8cd7de92"
 PINNED_BUNDLE_NOW_SHA="9d550928857550352f80b7d86824a182922065927687d5c707878c0a6be33a43"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
 PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef05829e4194a"
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="9b906a99007911b3124dd9fe9e8080d1afe13061575050896f9d6293a56c1514"
+PINNED_SELF_SHA="f686115f699c99f72244be4dccb937d8852436cd217a1444d49b383df107ed2d"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -733,19 +733,33 @@ echo "setup" > /content/polyglot_out/phase.txt
 ) &
 VITALS_PID="$!"
 
+OLLAMA_SERVE_PID=""
+# STOP_WRITERS_BEGIN: vitals and ollama serve both append to logs inside the tarred polyglot_out;
+# stop them before the final scrub and tar (and again, harmlessly, from remote_on_exit).
+stop_writers() {
+  printf '1\n' > /content/polyglot_out/.remote_done 2>/dev/null || true
+  local wp
+  for wp in "${VITALS_PID:-}" "${OLLAMA_SERVE_PID:-}"; do
+    [ -n "${wp}" ] || continue
+    if [ "${wp}" = "${VITALS_PID:-}" ]; then
+      for _ in 1 2 3 4 5 6; do
+        kill -0 "${wp}" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+    pkill -P "${wp}" 2>/dev/null || true
+    kill -9 "${wp}" 2>/dev/null || true
+    wait "${wp}" 2>/dev/null || true
+  done
+  VITALS_PID=""
+  OLLAMA_SERVE_PID=""
+}
+# STOP_WRITERS_END
+
 remote_on_exit() {
   local rc=$?
   trap - EXIT
-  printf '1\n' > /content/polyglot_out/.remote_done 2>/dev/null || true
-  if [ -n "${VITALS_PID:-}" ]; then
-    for _ in 1 2 3 4 5 6; do
-      kill -0 "${VITALS_PID}" 2>/dev/null || break
-      sleep 0.1
-    done
-    pkill -P "${VITALS_PID}" 2>/dev/null || true
-    kill -9 "${VITALS_PID}" 2>/dev/null || true
-    wait "${VITALS_PID}" 2>/dev/null || true
-  fi
+  stop_writers
   rm -f /content/polyglot_out/.remote_done 2>/dev/null || true
   if [ ! -f /content/polyglot_translate_bundle.tar.gz ]; then
     local r_scrub_args=()
@@ -790,6 +804,7 @@ trap remote_on_exit EXIT
     export PATH="$(cd /content/ollama/bin && pwd):${PATH}"
 
     ollama serve </dev/null > /content/polyglot_out/ollama_serve.log 2>&1 &
+    OLLAMA_SERVE_PID="$!"
     for _ in $(seq 1 30); do
       if ollama --version >/dev/null 2>&1 && curl -sf "${OLLAMA_HOST:-http://127.0.0.1:11434}/api/tags" >/dev/null 2>&1; then
         break
@@ -1262,6 +1277,7 @@ vm_win = {
 print("WINDOW_JSON " + json.dumps(vm_win), flush=True)
 RUNPYEOF
 
+stop_writers
 f_scrub_args=()
 while IFS= read -r -d '' f; do
   f_scrub_args+=("--scrub-file" "${f}")
@@ -1274,6 +1290,7 @@ fi
 final_tar_rc=0
 tar -czf /content/polyglot_translate_bundle.tar.gz -C /content/polyglot_out . || final_tar_rc=$?
 if [ "${final_tar_rc}" -gt 1 ]; then
+  rm -f /content/polyglot_translate_bundle.tar.gz
   exit "${final_tar_rc}"
 fi
 # FINAL_TAR_END
