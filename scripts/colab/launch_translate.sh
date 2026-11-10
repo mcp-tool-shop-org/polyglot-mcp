@@ -47,7 +47,7 @@ PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef0
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="a57b4c238e58b3db85ea5ef24b3e54234f7cd8a13ab120a8accdbc2a9a44ec5b"
+PINNED_SELF_SHA="0c58cb98d77812cd3d64f36832f93e46ac805d81616bf979f40e2d19d9d83b67"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -791,10 +791,8 @@ stop_writers() {
       serve_result="present"
     fi
     serve_msg="SERVE_STOP: pid=${wp} result=${serve_result} timeout_s=${serve_timeout_s} killed9=${serve_killed9}"
-    printf '%s
-' "${serve_msg}" >> /content/polyglot_out/serve_stop.log 2>/dev/null || true
-    printf '%s
-' "${serve_msg}"
+    printf '%s\n' "${serve_msg}" >> /content/polyglot_out/serve_stop.log 2>/dev/null || true
+    printf '%s\n' "${serve_msg}"
   done
   VITALS_PID=""
   OLLAMA_SERVE_PID=""
@@ -853,8 +851,7 @@ trap remote_on_exit EXIT
 
     ollama serve </dev/null > /content/polyglot_out/ollama_serve.log 2>&1 &
     OLLAMA_SERVE_PID="$!"
-    printf '%s
-' "${OLLAMA_SERVE_PID}" > "${POLYGLOT_STATE_DIR}/ollama_serve.pid"
+    printf '%s\n' "${OLLAMA_SERVE_PID}" > "${POLYGLOT_STATE_DIR}/ollama_serve.pid"
     for _ in $(seq 1 30); do
       if ollama --version >/dev/null 2>&1 && curl -sf "${OLLAMA_HOST:-http://127.0.0.1:11434}/api/tags" >/dev/null 2>&1; then
         break
@@ -865,8 +862,7 @@ trap remote_on_exit EXIT
 
   OLLAMA_URL="${OLLAMA_HOST:-http://127.0.0.1:11434}"
   export OLLAMA_HOST="${OLLAMA_URL}"
-  printf '%s
-' "${OLLAMA_URL}" > "${POLYGLOT_STATE_DIR}/ollama_host"
+  printf '%s\n' "${OLLAMA_URL}" > "${POLYGLOT_STATE_DIR}/ollama_host"
 
   # 3. Pull model and verify digest against PINNED_MODEL_DIGEST
   if [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
