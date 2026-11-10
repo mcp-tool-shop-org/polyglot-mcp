@@ -1862,20 +1862,23 @@ def kill_tracked() -> None:
         # whose mapping is missing (a raw MSYS pid must never reach TerminateProcess).
         winpid_map = _msys_proc_map()[0]
         win_excl = {self_pid} | {winpid_map[p] for p in (main_pid, watcher_pid) if p in winpid_map}
+        bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
         for pid in sorted(tracked_pids, reverse=True):
             if pid in (main_pid, watcher_pid):
                 continue
-            wpid = winpid_map.get(pid)
-            if not wpid or wpid in win_excl:
-                continue
+            # MSYS kill works in the MSYS pid namespace, so it is safe for every tracked pid that is not
+            # main/watcher, mapped or not (ps may fail or lack a row yet).
             try:
-                subprocess.run(["bash", "-c", f"kill -9 {pid}"], capture_output=True, timeout=2)
+                subprocess.run([bash_exe, "-c", f"kill -9 {pid}"], capture_output=True, timeout=2)
             except Exception:
                 pass
-            try:
-                os.kill(wpid, sig)
-            except OSError:
-                pass
+            # The native kill needs a winpid: only when mapped and not excluded.
+            wpid = winpid_map.get(pid)
+            if wpid and wpid not in win_excl:
+                try:
+                    os.kill(wpid, sig)
+                except OSError:
+                    pass
     else:
         for pid in sorted(tracked_pids, reverse=True):
             if pid not in (main_pid, watcher_pid, self_pid):
@@ -2240,9 +2243,10 @@ while stack:
 sig = getattr(signal, "SIGKILL", signal.SIGTERM)
 bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if os.name == "nt" and Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
 if os.name == "nt":
-    # like with like: main/watcher are MSYS pids, self_pid is a Windows pid; skip unmapped pids
+    # like with like: main/watcher are MSYS pids, self_pid is a Windows pid; unmapped pids are still MSYS-killed, never natively killed
     win_excl = {self_pid} | {winpid_map[p] for p in (main_pid, watcher_pid) if p in winpid_map}
-    out = [p for p in out if p not in (main_pid, watcher_pid) and winpid_map.get(p) and winpid_map[p] not in win_excl]
+    # unmapped pids stay in the MSYS kill list (MSYS namespace, safe); only the native kill needs a mapping
+    out = [p for p in out if p not in (main_pid, watcher_pid) and winpid_map.get(p) not in win_excl]
     mpids_to_kill = [str(p) for p in reversed(out)]
     if mpids_to_kill:
         try:
@@ -2326,9 +2330,9 @@ def subtree(root: int) -> list[int]:
 sig = getattr(signal, "SIGKILL", signal.SIGTERM)
 targets = list(reversed(subtree(main_pid)))
 if os.name == "nt":
-    # like with like: watcher_pid is an MSYS pid, self_pid a Windows pid; skip unmapped pids
+    # like with like: watcher_pid is an MSYS pid, self_pid a Windows pid; unmapped pids are still MSYS-killed, never natively killed
     win_excl = {self_pid} | ({winpid_map[watcher_pid]} if watcher_pid in winpid_map else set())
-    targets = [p for p in targets if p != watcher_pid and winpid_map.get(p) and winpid_map[p] not in win_excl]
+    targets = [p for p in targets if p != watcher_pid and winpid_map.get(p) not in win_excl]
     bash_exe = "C:/Program Files/Git/usr/bin/bash.exe" if Path("C:/Program Files/Git/usr/bin/bash.exe").is_file() else "bash"
     if targets:
         try:

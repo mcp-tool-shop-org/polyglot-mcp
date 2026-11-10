@@ -1457,10 +1457,20 @@ describe("polyglot-mcp Colab translation lane", () => {
       const cleanupStartedEpoch = parseFloat(readFileSync(join(outDir, "cleanup_started.txt"), "utf-8").trim());
       expect(cleanupStartedEpoch).toBeGreaterThan(1_000_000_000);
 
-      // Post-trip deltas (as test (c) does for the normal path): cleanup began within the in-flight bound of the
-      // trip, and colab stop finished within cleanup_bound_s of the trip. In-flight bound in this test:
-      // max(download 5, upload 10, sessions 10) + kill grace 1 = 11 s (the same configuration as test (c)).
-      const IN_FLIGHT_BOUND_S = 11;
+      // Post-trip deltas (as test (c) does for the normal path). In-flight bound, named from ask3.3's own values and
+      // the code's formula (colab_window.sh:32): max(download, upload, sessions) + kill grace.
+      //   download = SDLAB_TEST_DOWNLOAD_TIMEOUT_S = 5 (set above);
+      //   upload   = default 120 (colab_window.sh:52), lowered to the download timeout by
+      //              colab_apply_test_cleanup_overrides (:106) when no SDLAB_TEST_UPLOAD_TIMEOUT_S is set -> 5;
+      //   sessions = default 30 (:61), lowered the same way (:109) -> 5;
+      //   kill grace = SDLAB_TEST_KILL_GRACE_S = 1 (set above).
+      // JITTER_S covers process start-up and polling only. The bound is tight (6 s + jitter), not a loose one.
+      const DOWNLOAD_S = 5;
+      const UPLOAD_S = Math.min(120, DOWNLOAD_S);
+      const SESSIONS_S = Math.min(30, DOWNLOAD_S);
+      const KILL_GRACE_S3 = 1;
+      const JITTER_S = 1;
+      const IN_FLIGHT_BOUND_S = Math.max(DOWNLOAD_S, UPLOAD_S, SESSIONS_S) + KILL_GRACE_S3 + JITTER_S;
       const wallTripEpoch = parseFloat(readFileSync(join(outDir, "wall_trip_epoch.txt"), "utf-8").trim());
       expect(cleanupStartedEpoch - wallTripEpoch).toBeLessThanOrEqual(IN_FLIGHT_BOUND_S);
       const winPre = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
@@ -2358,13 +2368,19 @@ describe("fix2 round 3: Windows kill exclusions, scrub-race writers, partial arc
           "sleep 1",
           "BWIN=$(ps -p \"$BYST\" | awk 'NR==2{print $4}')",
           "echo BWIN=$BWIN",
+          "ping -n 300 127.0.0.1 > /dev/null &",
+          "CHILD=$!",
+          "sleep 1",
+          "CWIN=$(ps -p \"$CHILD\" | awk 'NR==2{print $4}')",
           // the bystander's WINDOWS pid, written as if it were an MSYS pid: it has no MSYS mapping.
           // Before the fix os.kill(<that number>) would have hit the bystander.
           "echo \"$BWIN\" > \"$OUT/.watcher_tracked_pids.txt\"",
           "echo \"$$\" >> \"$OUT/.watcher_tracked_pids.txt\"",
+          "echo \"$CHILD\" >> \"$OUT/.watcher_tracked_pids.txt\"",
           `${pyBin} "${fwd(driver)}" "${fwd(join(colabDir, "colab_window.sh"))}" "$$" "$OUT"`,
           "sleep 1",
           "if tasklist //FI \"PID eq $BWIN\" 2>/dev/null | grep -q \" $BWIN \"; then echo BYSTANDER_ALIVE; else echo BYSTANDER_DEAD; fi",
+          "if tasklist //FI \"PID eq $CWIN\" 2>/dev/null | grep -q \" $CWIN \"; then echo CHILD_ALIVE; taskkill //F //PID \"$CWIN\" > /dev/null 2>&1; else echo CHILD_DEAD; fi",
           "echo SELF_ALIVE",
           "taskkill //F //PID \"$BWIN\" > /dev/null 2>&1",
           "",
@@ -2374,6 +2390,8 @@ describe("fix2 round 3: Windows kill exclusions, scrub-race writers, partial arc
       const res = spawnSync(bashBin, [fwd(script)], { encoding: "utf-8", timeout: 60_000 });
       expect(res.stdout).toContain("BYSTANDER_ALIVE");
       expect(res.stdout).toContain("SELF_ALIVE");
+      // a tracked MSYS child that has a mapping still dies (the MSYS kill runs for every tracked pid)
+      expect(res.stdout).toContain("CHILD_DEAD");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
