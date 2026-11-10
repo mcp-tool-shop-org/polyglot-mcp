@@ -2250,3 +2250,60 @@ describe("fix2: tracked-pid kill behaviour and final tar", () => {
     expect(r2.stdout).not.toContain("REACHED_END");
   });
 });
+
+describe("fix2 item 7: fractional close epoch for the spend floor", () => {
+  const fwd = (p: string) => p.split(String.fromCharCode(92)).join("/");
+  const runWindowWrite = (opts: { withCloseEpoch: boolean; closedAt: string; sleepS: string }) => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-item7-"));
+    try {
+      const outDir = fwd(join(tmp, "out"));
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(join(tmp, "out", "session_opened.txt"), "1");
+      writeFileSync(join(tmp, "out", "rate_measured.txt"), "0.26");
+      const script = join(tmp, "w.sh");
+      const lines = [
+        "set -u",
+        `source "${fwd(join(colabDir, "colab_window.sh"))}"`,
+        `OUT="${outDir}"`,
+        `PYB="${pyBin}"`,
+        `export PY_BIN="${pyBin}"`,
+        `"$PYB" -c "import time; open('$OUT/session_open_epoch.txt','w').write('%.6f' % time.time())"`,
+        `sleep ${opts.sleepS}`,
+        opts.withCloseEpoch ? 'colab_stamp_close "$OUT"' : "true",
+        `colab_write_window_and_outcome "$PYB" "$OUT" translate s1 CPU 0.25 60 5 0.01 "2026-01-01T00:00:00Z" "${opts.closedAt}" 0 "{}"`,
+        "",
+      ];
+      writeFileSync(script, lines.join(String.fromCharCode(10)), "utf-8");
+      const res = spawnSync(bashBin, [fwd(script)], { encoding: "utf-8", timeout: 60_000 });
+      const win = JSON.parse(readFileSync(join(tmp, "out", "window.json"), "utf-8"));
+      const guards = existsSync(join(tmp, "out", "guards.log")) ? readFileSync(join(tmp, "out", "guards.log"), "utf-8") : "";
+      return { res, win, guards };
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  };
+
+  it("(fix2.item7.epoch) a same-second window with a fractional close epoch has spend_ccu > 0 and elapsed_basis epoch", () => {
+    const { win, guards } = runWindowWrite({ withCloseEpoch: true, closedAt: "2026-01-01T00:00:00Z", sleepS: "0.3" });
+    expect(win.elapsed_basis).toBe("epoch");
+    expect(win.spend_ccu).toBeGreaterThan(0);
+    expect(guards).toContain("WINDOW_ELAPSED_BASIS basis=epoch");
+  });
+
+  it("(fix2.item7.fallback) without session_close_epoch.txt the whole-second basis is used, recorded and logged", () => {
+    const { win, guards } = runWindowWrite({ withCloseEpoch: false, closedAt: "2026-01-01T00:00:10Z", sleepS: "0.1" });
+    expect(win.elapsed_basis).toBe("whole_seconds");
+    expect(win.spend_ccu).toBeGreaterThan(0);
+    expect(guards).toContain("WINDOW_ELAPSED_BASIS basis=whole_seconds");
+  });
+
+  it("(fix2.item7.wired) both close paths stamp the close epoch before closed_at is formatted", () => {
+    for (const f of ["colab_window.sh", "launch_translate.sh"]) {
+      const src = readFileSync(join(colabDir, f), "utf-8");
+      const i = src.indexOf("colab_stamp_close ");
+      const j = src.indexOf("closed_at=\"$(date");
+      expect(i).toBeGreaterThan(-1);
+      expect(j).toBeGreaterThan(i);
+    }
+  });
+});

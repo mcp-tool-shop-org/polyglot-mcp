@@ -2258,6 +2258,7 @@ PYEOF
     colab_stop_and_log_closing "${py_bin}" "${session}" "${out_dir}"
   fi
   local closed_at
+  colab_stamp_close "${out_dir}"
   closed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   colab_write_window_and_outcome \
     "${py_bin}" "${out_dir}" "${lane}" "${session}" "${card}" \
@@ -2353,6 +2354,16 @@ colab_scrub_all_logs() {
   if [ "${#scrub_args[@]}" -gt 0 ]; then
     "${py_bin}" "${guards_py}" "${scrub_args[@]}" </dev/null || true
   fi
+}
+
+# colab_stamp_close <out_dir>: record the fractional close epoch (time.time(), 6 decimals) in
+# session_close_epoch.txt. Call it on every close path right before closed_at is formatted, so
+# elapsed_window_s is epoch minus epoch and a window that opens and closes inside one second
+# still has a positive duration (closed_at stays a whole-second display string).
+colab_stamp_close() {
+  local out_dir="$1"
+  local py_bin="${PY_BIN:-$(colab_resolve_python)}"
+  "${py_bin}" -c 'import sys, time; open(sys.argv[1], "w", encoding="utf-8", newline="\n").write(f"{time.time():.6f}\n")' "${out_dir}/session_close_epoch.txt" 2>/dev/null || true
 }
 
 colab_write_window_and_outcome() {
@@ -2782,22 +2793,27 @@ drop_ccu = (
 )
 session_was_opened = (out_dir / "session_opened.txt").is_file() or (out_dir / "session_open_started.txt").is_file()
 elapsed_window_s = 0.0
+elapsed_basis = "none"
 if session_was_opened:
     open_ep = read_float_file(out_dir / "session_open_epoch.txt")
-    close_ep: float | None = None
-    try:
-        close_ep = _dt.strptime(closed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc).timestamp()
-    except Exception:
-        pass
+    close_ep: float | None = read_float_file(out_dir / "session_close_epoch.txt")
     if open_ep is not None and close_ep is not None and close_ep >= open_ep:
         elapsed_window_s = max(0.0, close_ep - open_ep)
+        elapsed_basis = "epoch"
     else:
         try:
             t0 = _dt.strptime(cap_clock_started_at or opened_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc).timestamp()
             t1 = _dt.strptime(closed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc).timestamp()
             elapsed_window_s = max(0.0, t1 - t0)
+            elapsed_basis = "whole_seconds"
         except Exception:
             elapsed_window_s = 0.0
+            elapsed_basis = "none"
+try:
+    with (out_dir / "guards.log").open("a", encoding="utf-8", newline="\n") as _gh:
+        _gh.write(f"WINDOW_ELAPSED_BASIS basis={elapsed_basis} elapsed_window_s={elapsed_window_s:.6f}\n")
+except OSError:
+    pass
 rate_for_floor = (
     float(rate_measured if (rate_measured is not None and rate_measured > 0.0) else (priced_rate_for_cap or 0.0))
     if session_was_opened
@@ -2855,6 +2871,7 @@ window_payload = {
     "downloaded_files": downloaded_files,
     "opened_at": opened_at,
     "closed_at": closed_at,
+    "elapsed_basis": elapsed_basis,
     "exit_code": exit_code,
     **train_fields,
 }
