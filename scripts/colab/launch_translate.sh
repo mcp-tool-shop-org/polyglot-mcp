@@ -47,7 +47,7 @@ PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef0
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="41049355e405a82487b28609579587f5e9321f5be47dd4855f682d6a38192ee8"
+PINNED_SELF_SHA="1aad6d799250ace7d807adef6c081b127cdbb25db6363faca20b5212dae6bc73"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -742,6 +742,24 @@ rm -rf "${POLYGLOT_STATE_DIR}"
 mkdir -p "${POLYGLOT_STATE_DIR}"
 # STOP_WRITERS_BEGIN: vitals and ollama serve both append to logs inside the tarred polyglot_out;
 # stop them before the final scrub and tar (and again, harmlessly, from remote_on_exit).
+# A zombie writes nothing and holds no open files, so a pid in state Z counts as gone (nothing reaps it here).
+# Returns 0 if the pid is alive, 1 if it is gone or a zombie (and sets SERVE_PID_ZOMBIE=1 for a zombie).
+SERVE_PID_ZOMBIE=0
+serve_pid_alive() {
+  local p="${1:-}" st="" rest=""
+  kill -0 "${p}" 2>/dev/null || return 1
+  if [ -r "/proc/${p}/stat" ]; then
+    if IFS= read -r st < "/proc/${p}/stat" 2>/dev/null; then
+      rest="${st##*) }"
+      case "${rest}" in
+        Z*) SERVE_PID_ZOMBIE=1; return 1 ;;
+      esac
+      return 0
+    fi
+    kill -0 "${p}" 2>/dev/null || return 1
+  fi
+  return 0
+}
 stop_writers() {
   printf '1\n' > /content/polyglot_out/.remote_done 2>/dev/null || true
   local wp state_dir="${POLYGLOT_STATE_DIR:-/content/polyglot_state}"
@@ -772,25 +790,29 @@ stop_writers() {
       ''|*[!0-9]*|0) serve_timeout_s=5 ;;
     esac
     serve_ticks=$(( serve_timeout_s * 10 ))
+    SERVE_PID_ZOMBIE=0
     pkill -P "${wp}" 2>/dev/null || true
     kill "${wp}" 2>/dev/null || true
     for serve_tick in $(seq 1 "${serve_ticks}"); do
-      kill -0 "${wp}" 2>/dev/null || break
+      serve_pid_alive "${wp}" || break
       sleep 0.1
     done
-    if kill -0 "${wp}" 2>/dev/null; then
+    if serve_pid_alive "${wp}"; then
       serve_killed9=1
       pkill -P "${wp}" 2>/dev/null || true
       kill -9 "${wp}" 2>/dev/null || true
       for serve_tick in 1 2 3 4 5 6 7 8 9 10; do
-        kill -0 "${wp}" 2>/dev/null || break
+        serve_pid_alive "${wp}" || break
         sleep 0.1
       done
     fi
-    if kill -0 "${wp}" 2>/dev/null; then
+    if serve_pid_alive "${wp}"; then
       serve_result="present"
     fi
     serve_msg="SERVE_STOP: pid=${wp} result=${serve_result} timeout_s=${serve_timeout_s} killed9=${serve_killed9}"
+    if [ "${SERVE_PID_ZOMBIE}" = "1" ]; then
+      serve_msg="${serve_msg} zombie=1"
+    fi
     printf '%s\n' "${serve_msg}" >> /content/polyglot_out/serve_stop.log 2>/dev/null || true
     printf '%s\n' "${serve_msg}"
   done
