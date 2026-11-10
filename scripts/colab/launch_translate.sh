@@ -47,7 +47,7 @@ PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef0
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="2e6d3462ae1361e2a9691609d3d3472d01e56744af08fe708deaf810dea63c29"
+PINNED_SELF_SHA="a57b4c238e58b3db85ea5ef24b3e54234f7cd8a13ab120a8accdbc2a9a44ec5b"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -734,11 +734,23 @@ echo "setup" > /content/polyglot_out/phase.txt
 VITALS_PID="$!"
 
 OLLAMA_SERVE_PID=""
+# The setup block below runs in a pipeline subshell, so what it assigns or exports is lost when it ends.
+# It hands the ollama serve pid, the PATH directories and OLLAMA_HOST to this shell through files in this
+# directory, which is deliberately outside the archived polyglot_out.
+POLYGLOT_STATE_DIR="/content/polyglot_state"
+rm -rf "${POLYGLOT_STATE_DIR}"
+mkdir -p "${POLYGLOT_STATE_DIR}"
 # STOP_WRITERS_BEGIN: vitals and ollama serve both append to logs inside the tarred polyglot_out;
 # stop them before the final scrub and tar (and again, harmlessly, from remote_on_exit).
 stop_writers() {
   printf '1\n' > /content/polyglot_out/.remote_done 2>/dev/null || true
-  local wp
+  local wp state_dir="${POLYGLOT_STATE_DIR:-/content/polyglot_state}"
+  if [ -z "${OLLAMA_SERVE_PID:-}" ] && [ -f "${state_dir}/ollama_serve.pid" ]; then
+    IFS= read -r OLLAMA_SERVE_PID < "${state_dir}/ollama_serve.pid" 2>/dev/null || true
+    case "${OLLAMA_SERVE_PID:-}" in
+      ''|*[!0-9]*) OLLAMA_SERVE_PID="" ;;
+    esac
+  fi
   for wp in "${VITALS_PID:-}" "${OLLAMA_SERVE_PID:-}"; do
     [ -n "${wp}" ] || continue
     if [ "${wp}" = "${VITALS_PID:-}" ]; then
@@ -747,12 +759,46 @@ stop_writers() {
         sleep 0.1
       done
     fi
+    if [ "${wp}" = "${VITALS_PID:-}" ]; then
+      pkill -P "${wp}" 2>/dev/null || true
+      kill -9 "${wp}" 2>/dev/null || true
+      wait "${wp}" 2>/dev/null || true
+      continue
+    fi
+    # ollama serve is not a child of this shell (the setup block ran in a subshell), so wait returns at once:
+    # signal it, poll until it is gone or SERVE_STOP_TIMEOUT_S passes, then kill -9 and poll briefly again.
+    local serve_timeout_s="${POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S:-5}" serve_tick serve_ticks serve_killed9=0 serve_result="gone" serve_msg
+    case "${serve_timeout_s}" in
+      ''|*[!0-9]*|0) serve_timeout_s=5 ;;
+    esac
+    serve_ticks=$(( serve_timeout_s * 10 ))
     pkill -P "${wp}" 2>/dev/null || true
-    kill -9 "${wp}" 2>/dev/null || true
-    wait "${wp}" 2>/dev/null || true
+    kill "${wp}" 2>/dev/null || true
+    for serve_tick in $(seq 1 "${serve_ticks}"); do
+      kill -0 "${wp}" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "${wp}" 2>/dev/null; then
+      serve_killed9=1
+      pkill -P "${wp}" 2>/dev/null || true
+      kill -9 "${wp}" 2>/dev/null || true
+      for serve_tick in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "${wp}" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+    if kill -0 "${wp}" 2>/dev/null; then
+      serve_result="present"
+    fi
+    serve_msg="SERVE_STOP: pid=${wp} result=${serve_result} timeout_s=${serve_timeout_s} killed9=${serve_killed9}"
+    printf '%s
+' "${serve_msg}" >> /content/polyglot_out/serve_stop.log 2>/dev/null || true
+    printf '%s
+' "${serve_msg}"
   done
   VITALS_PID=""
   OLLAMA_SERVE_PID=""
+  rm -f "${state_dir}/ollama_serve.pid" 2>/dev/null || true
 }
 # STOP_WRITERS_END
 
@@ -789,6 +835,7 @@ trap remote_on_exit EXIT
     mkdir -p /content/node
     tar -xJf "${NODE_TAR}" -C /content/node --strip-components=1
     export PATH="$(cd /content/node/bin && pwd):${PATH}"
+    (cd /content/node/bin && pwd) >> "${POLYGLOT_STATE_DIR}/path_dirs"
 
     # 2. Install pinned Ollama archive checked by sha256
     OLLAMA_ARCHIVE="/content/ollama-linux-amd64.tar.zst"
@@ -802,9 +849,12 @@ trap remote_on_exit EXIT
     mkdir -p /content/ollama
     tar --zstd -xf "${OLLAMA_ARCHIVE}" -C /content/ollama
     export PATH="$(cd /content/ollama/bin && pwd):${PATH}"
+    (cd /content/ollama/bin && pwd) >> "${POLYGLOT_STATE_DIR}/path_dirs"
 
     ollama serve </dev/null > /content/polyglot_out/ollama_serve.log 2>&1 &
     OLLAMA_SERVE_PID="$!"
+    printf '%s
+' "${OLLAMA_SERVE_PID}" > "${POLYGLOT_STATE_DIR}/ollama_serve.pid"
     for _ in $(seq 1 30); do
       if ollama --version >/dev/null 2>&1 && curl -sf "${OLLAMA_HOST:-http://127.0.0.1:11434}/api/tags" >/dev/null 2>&1; then
         break
@@ -815,6 +865,8 @@ trap remote_on_exit EXIT
 
   OLLAMA_URL="${OLLAMA_HOST:-http://127.0.0.1:11434}"
   export OLLAMA_HOST="${OLLAMA_URL}"
+  printf '%s
+' "${OLLAMA_URL}" > "${POLYGLOT_STATE_DIR}/ollama_host"
 
   # 3. Pull model and verify digest against PINNED_MODEL_DIGEST
   if [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
@@ -1019,6 +1071,22 @@ else:
 ' "${REPO_ROOT_FOR_TEST_MODULES}/node_modules" /content/polyglot_work/node_modules
   fi
 } 2>&1 | tee -a /content/polyglot_out/setup.log
+
+# Re-export what the setup block (a pipeline subshell) set, so the steps below see the installed Node and Ollama.
+if [ -f "${POLYGLOT_STATE_DIR}/path_dirs" ]; then
+  while IFS= read -r state_path_dir || [ -n "${state_path_dir}" ]; do
+    if [ -n "${state_path_dir}" ]; then
+      PATH="${state_path_dir}:${PATH}"
+    fi
+  done < "${POLYGLOT_STATE_DIR}/path_dirs"
+  export PATH
+fi
+if [ -f "${POLYGLOT_STATE_DIR}/ollama_host" ]; then
+  IFS= read -r state_ollama_host < "${POLYGLOT_STATE_DIR}/ollama_host" || true
+  if [ -n "${state_ollama_host:-}" ]; then
+    export OLLAMA_HOST="${state_ollama_host}"
+  fi
+fi
 
 echo "run" > /content/polyglot_out/phase.txt
 tar -xzf /content/readmes_input.tar.gz -C /content/readmes_in

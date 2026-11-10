@@ -18,6 +18,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1603,15 +1604,17 @@ describe("polyglot-mcp Colab translation lane", () => {
     }
   }, 60_000);
 
-  it("(ask4) CPU stub rung end-to-end in real mode (POLYGLOT_TEST_SKIP_VM_INSTALL=0): runs every step including curl download, sha256 check, tar -xJf Node unpack, tar --zstd -xf Ollama unpack, ollama serve, ollama pull, digest check, fit probe, repo unpack, npm ci + npm run build, translate-all.mjs, and #67 receipt & nav-bar check", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-ask4-realmode-"));
-    try {
+  // Builds the real-install fixture of (ask4) (fake Node and Ollama archives served over HTTP) and runs the lane once.
+  // The caller owns `tmp` and removes it, and deletes the two fixtureBuffers entries.
+  async function runRealInstallLane(tmp: string, session: string, extraEnv: Record<string, string>) {
+    {
       ollamaState.digest = PINNED_DIGEST;
       ollamaState.processor = "100% GPU";
       ollamaState.sizeBytes = 17358640928;
       ollamaState.sizeVramBytes = 17358640928;
 
-      const { stateDir, env } = makeFakeColabEnv(tmp);
+      const { stateDir, contentDir, env } = makeFakeColabEnv(tmp, extraEnv);
+      const nodeMarker = join(tmp, "node_marker.txt").replace(/\\/g, "/");
 
       // Build real .tar.xz Node fixture (`node-v22.22.3-linux-x64/bin/{node,npm}`) and .tar.zst Ollama fixture (`bin/ollama`)
       const fixBuildDir = join(tmp, "fixtures_build");
@@ -1625,6 +1628,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       writeFileSync(
         join(nodeStage, "node"),
         `#!/usr/bin/env bash
+printf '%s|%s\\n' "$0" "\${OLLAMA_HOST:-}" >> "${nodeMarker}"
 exec "${hostNodePosix}" "$@"
 `,
         "utf-8",
@@ -1666,7 +1670,13 @@ set -euo pipefail
 case "\${1:-}" in
   serve)
     echo "ollama serve stub started"
-    exit 0
+    if [ "\${FAKE_OLLAMA_SERVE_IGNORE_TERM:-0}" = "1" ]; then
+      trap 'echo "ollama serve ignores TERM"' TERM
+    fi
+    while :; do
+      echo "ollama serve heartbeat"
+      sleep 0.2
+    done
     ;;
   --version|-v)
     echo "ollama version is 0.40.15"
@@ -1719,9 +1729,17 @@ esac
       const outDir = join(tmp, "out");
 
       const res = await runLauncher(
-        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-ask4-real-stub"],
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", session],
         env,
       );
+      return { res, outDir, stateDir, contentDir, nodeMarker };
+    }
+  }
+
+  it("(ask4) CPU stub rung end-to-end in real mode (POLYGLOT_TEST_SKIP_VM_INSTALL=0): runs every step including curl download, sha256 check, tar -xJf Node unpack, tar --zstd -xf Ollama unpack, ollama serve, ollama pull, digest check, fit probe, repo unpack, npm ci + npm run build, translate-all.mjs, and #67 receipt & nav-bar check", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-ask4-realmode-"));
+    try {
+      const { res, outDir, stateDir, contentDir, nodeMarker } = await runRealInstallLane(tmp, "polyglot-ask4-real-stub", {});
       if (res.code !== 0) {
         console.error("ASK4 STDERR:", res.stderr);
       }
@@ -1744,6 +1762,54 @@ esac
       expect(win.status).toBe("ok");
       expect(win.refusal_code).toBeNull();
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-ask4-real-stub");
+
+      // (round4.a) The setup block runs in a pipeline subshell; the generated script must still stop the
+      // fake `ollama serve` (a loop that writes a line every 0.2 s) before the final scrub and tar.
+      const serveLog = join(contentDir, "polyglot_out", "ollama_serve.log");
+      expect(readFileSync(serveLog, "utf-8")).toContain("ollama serve heartbeat");
+      const sizeAtEnd = statSync(serveLog).size;
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(statSync(serveLog).size).toBe(sizeAtEnd);
+      // The wait is bounded and logs one line; a serve that honours the first signal needs no kill -9.
+      const stopLog = readFileSync(join(contentDir, "polyglot_out", "serve_stop.log"), "utf-8");
+      expect(stopLog.trim().split(String.fromCharCode(10))).toHaveLength(1);
+      expect(stopLog).toMatch(/SERVE_STOP: pid=\d+ result=gone timeout_s=\d+ killed9=0/);
+
+      // (round4.b) The step that calls `node` by name must run the Node unpacked under /content/node/bin
+      // (the fake's content dir), not a node already on the test's PATH, and must see OLLAMA_HOST.
+      const markerLines = readFileSync(nodeMarker, "utf-8").split(String.fromCharCode(10)).filter((l) => l.length > 0);
+      expect(markerLines.length).toBeGreaterThan(0);
+      for (const line of markerLines) {
+        const [invokedAs, hostSeen] = line.split("|");
+        expect(invokedAs).toContain("/state/content/node/bin/node");
+        expect(hostSeen).toBe(ollamaUrl);
+      }
+    } finally {
+      delete fixtureBuffers["/fixtures/node.tar.xz"];
+      delete fixtureBuffers["/fixtures/ollama.tar.zst"];
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(round4.timeout) a serve that ignores the first signal is killed with kill -9 after the named timeout, and one SERVE_STOP line says so", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-round4-timeout-"));
+    try {
+      const { res, contentDir } = await runRealInstallLane(tmp, "polyglot-round4-timeout", {
+        FAKE_OLLAMA_SERVE_IGNORE_TERM: "1",
+        POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S: "1",
+      });
+      if (res.code !== 0) {
+        console.error("ROUND4 TIMEOUT STDERR:", res.stderr);
+      }
+      expect(res.code).toBe(0);
+      const serveLog = join(contentDir, "polyglot_out", "ollama_serve.log");
+      expect(readFileSync(serveLog, "utf-8")).toContain("ollama serve ignores TERM");
+      const stopLog = readFileSync(join(contentDir, "polyglot_out", "serve_stop.log"), "utf-8");
+      expect(stopLog.trim().split(String.fromCharCode(10))).toHaveLength(1);
+      expect(stopLog).toMatch(/SERVE_STOP: pid=\d+ result=gone timeout_s=1 killed9=1/);
+      const sizeAtEnd = statSync(serveLog).size;
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(statSync(serveLog).size).toBe(sizeAtEnd);
     } finally {
       delete fixtureBuffers["/fixtures/node.tar.xz"];
       delete fixtureBuffers["/fixtures/ollama.tar.zst"];
