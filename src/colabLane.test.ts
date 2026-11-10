@@ -1466,6 +1466,9 @@ describe("polyglot-mcp Colab translation lane", () => {
       //   sessions = default 30 (:61), lowered the same way (:109) -> 5;
       //   kill grace = SDLAB_TEST_KILL_GRACE_S = 1 (set above).
       // JITTER_S covers process start-up and polling only. The bound is tight (6 s + jitter), not a loose one.
+      // Measured on an idle Windows host (three clean runs of this test alone, 2026-11-10): cleanup started
+      // 1.148 s, 0.255 s and 0.345 s after the wall trip. The derived bound stays 7 s; the largest measured
+      // value is 5.85 s below it.
       const DOWNLOAD_S = 5;
       const UPLOAD_S = Math.min(120, DOWNLOAD_S);
       const SESSIONS_S = Math.min(30, DOWNLOAD_S);
