@@ -1780,12 +1780,18 @@ esac
 
       // (round4.b) The step that calls `node` by name must run the Node unpacked under /content/node/bin
       // (the fake's content dir), not a node already on the test's PATH, and must see OLLAMA_HOST.
-      const markerLines = readFileSync(nodeMarker, "utf-8").split(String.fromCharCode(10)).filter((l) => l.length > 0);
-      expect(markerLines.length).toBeGreaterThan(0);
-      for (const line of markerLines) {
-        const [invokedAs, hostSeen] = line.split("|");
-        expect(invokedAs).toContain("/state/content/node/bin/node");
-        expect(hostSeen).toBe(ollamaUrl);
+      // Skipped on win32: the step runs `node` from Python (subprocess), and on Windows Python resolves node.exe
+      // from the Windows PATH, so the extension-less fake is never run. CI (Linux) runs this check.
+      if (process.platform === "win32") {
+        console.log("(round4.b) node-marker check skipped on win32: Python's subprocess resolves node.exe from the Windows PATH, so the extension-less fake node is never run; CI on Linux runs it.");
+      } else {
+        const markerLines = readFileSync(nodeMarker, "utf-8").split(String.fromCharCode(10)).filter((l) => l.length > 0);
+        expect(markerLines.length).toBeGreaterThan(0);
+        for (const line of markerLines) {
+          const [invokedAs, hostSeen] = line.split("|");
+          expect(invokedAs).toContain("/state/content/node/bin/node");
+          expect(hostSeen).toBe(ollamaUrl);
+        }
       }
     } finally {
       delete fixtureBuffers["/fixtures/node.tar.xz"];
