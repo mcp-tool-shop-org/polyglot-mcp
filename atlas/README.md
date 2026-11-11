@@ -1,22 +1,16 @@
 # polyglot-mcp: how it works
 
-Mapped at 2026-11-09 from commit d62cc6a by Atlas 1.24.0.
+Mapped at 2026-11-11 from commit 4e8216e by Atlas 1.26.0.
 
 ## What this is
 
 8 parts, mostly TypeScript (51 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.
 
-## What changed since 2026-11-08 (9fd9fe1)
+## What changed since 2026-11-09 (d62cc6a)
 
-- CI's push trigger now also names `docs/**` and `scripts/**`.
-- CI now also runs src/colabLane.test.ts.
-- Publish to npm now also runs src/colabLane.test.ts.
-- .polyglot-pins.json is now read by scripts/colab/launch_translate.sh.
-- README.es.md is now also read by scripts/colab/compare_translations.py and scripts/colab/launch_translate.sh.
-- README.fr.md is now also read by scripts/colab/compare_translations.py and scripts/colab/launch_translate.sh.
-- And 13 more new writers and readers of places.
-- docs is a new part, drawn from `docs/**`.
-- 9 files added and 10 changed content, across 5 parts.
+- scripts/colab/colab_window.sh is now read by src/colabLane.test.ts.
+- scripts/colab/launch_guards.py is now read by src/colabLane.test.ts.
+- 1 file added and 10 changed content, across 4 parts.
 
 ## What comes in
 
@@ -78,20 +72,22 @@ Nothing in this repository writes to a tracked place this map can see.
 
 ## Hand-authored
 
-People write .claude/, .github/, assets/, docs/ and the repository root; 3 writes with paths built at run time may land here.
+People write .claude/, .github/, assets/, docs/ and the repository root; 4 writes with paths built at run time may land here.
 
 ## Where to start
 
-.github/workflows/ci.yml → src/index.ts → src/translate.ts → src/languages.ts → src/ollama.ts → src/glossary.ts → src/codeSpans.ts → src/polish.ts
+.github/workflows/ci.yml → src/index.ts → src/translate.ts → src/ollama.ts → src/errors.ts
 
 Read those in order to follow one pull request end to end.
 
+Beside the path, src/translate.ts also calls src/languages.ts, src/glossary.ts, src/codeSpans.ts, src/polish.ts and 1 more file.
+
 ## What this map cannot see
 
-- 3 writes and 11 reads use paths built at run time and are not named here.
-- 12 writes and 24 reads go to a path their caller passes, not to this repository.
+- 4 writes and 12 reads use paths built at run time and are not named here.
+- 11 writes and 23 reads go to a path their caller passes, not to this repository.
 - 1 read goes to the directory the command is run in (LICENSE), not to this repository.
-- 18 commands are built at run time and not followed, 16 of them in tests.
+- 28 commands are built at run time and not followed, 26 of them in tests.
 - Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

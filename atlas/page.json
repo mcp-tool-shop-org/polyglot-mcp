@@ -20,83 +20,38 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 9,
+      "added": 1,
       "changed": 10,
       "moved": 0,
-      "parts": 5,
+      "parts": 4,
       "removed": 0
     },
     "items": [
       {
-        "kind": "door",
-        "sentence": "CI's push trigger now also names `docs/**` and `scripts/**`.",
+        "kind": "landing",
+        "sentence": "scripts/colab/colab_window.sh is now read by src/colabLane.test.ts.",
         "subjects": [
-          ".github/workflows/ci.yml"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "CI now also runs src/colabLane.test.ts.",
-        "subjects": [
-          ".github/workflows/ci.yml",
-          "src/colabLane.test.ts"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "Publish to npm now also runs src/colabLane.test.ts.",
-        "subjects": [
-          ".github/workflows/publish.yml",
+          "scripts/colab/colab_window.sh",
           "src/colabLane.test.ts"
         ]
       },
       {
         "kind": "landing",
-        "sentence": ".polyglot-pins.json is now read by scripts/colab/launch_translate.sh.",
+        "sentence": "scripts/colab/launch_guards.py is now read by src/colabLane.test.ts.",
         "subjects": [
-          ".polyglot-pins.json",
-          "scripts/colab/launch_translate.sh"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "README.es.md is now also read by scripts/colab/compare_translations.py and scripts/colab/launch_translate.sh.",
-        "subjects": [
-          "README.es.md",
-          "scripts/colab/compare_translations.py",
-          "scripts/colab/launch_translate.sh"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "README.fr.md is now also read by scripts/colab/compare_translations.py and scripts/colab/launch_translate.sh.",
-        "subjects": [
-          "README.fr.md",
-          "scripts/colab/compare_translations.py",
-          "scripts/colab/launch_translate.sh"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "And 13 more new writers and readers of places.",
-        "subjects": []
-      },
-      {
-        "kind": "part",
-        "sentence": "docs is a new part, drawn from `docs/**`.",
-        "subjects": [
-          "docs"
+          "scripts/colab/launch_guards.py",
+          "src/colabLane.test.ts"
         ]
       },
       {
         "kind": "counts",
-        "sentence": "9 files added and 10 changed content, across 5 parts.",
+        "sentence": "1 file added and 10 changed content, across 4 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "9fd9fe1fd15d6f6ff214531315cdbedaf36c53fe",
-      "generatedAt": "2026-11-08T02:00:31.727Z"
+      "commit": "d62cc6ad16383cc9312026157eb621284108e4a8",
+      "generatedAt": "2026-11-09T11:41:22.336Z"
     },
     "unchanged": false
   },
@@ -137,7 +92,7 @@
     "Window: 180 days; a pair counts from 3 shared commits, since 0 source files reach 10 revisions; the floor rises to 10 when 25 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "d62cc6ad16383cc9312026157eb621284108e4a8",
+  "commit": "4e8216ecee1a01d82d95fa4f34f8d840ea052ef9",
   "defaultBranch": "main",
   "derived": "8 parts, mostly TypeScript (51 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
@@ -368,14 +323,14 @@
   "duplicatesLead": null,
   "duplicatesNote": [],
   "edges": [],
-  "engine": "1.24.0",
+  "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-09T11:41:22.336Z",
+  "generatedAt": "2026-11-11T22:27:35.909Z",
   "limits": [
-    "3 writes and 11 reads use paths built at run time and are not named here.",
-    "12 writes and 24 reads go to a path their caller passes, not to this repository.",
+    "4 writes and 12 reads use paths built at run time and are not named here.",
+    "11 writes and 23 reads go to a path their caller passes, not to this repository.",
     "1 read goes to the directory the command is run in (LICENSE), not to this repository.",
-    "18 commands are built at run time and not followed, 16 of them in tests.",
+    "28 commands are built at run time and not followed, 26 of them in tests.",
     "Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window."
   ],
   "mainDoor": ".github/workflows/ci.yml",
@@ -396,16 +351,25 @@
   "spawnTested": [
     "scripts"
   ],
+  "startBeside": [
+    {
+      "files": [
+        "src/languages.ts",
+        "src/glossary.ts",
+        "src/codeSpans.ts",
+        "src/polish.ts",
+        "src/validate.ts"
+      ],
+      "from": "src/translate.ts"
+    }
+  ],
   "startDoor": ".github/workflows/ci.yml",
   "startHere": [
     ".github/workflows/ci.yml",
     "src/index.ts",
     "src/translate.ts",
-    "src/languages.ts",
     "src/ollama.ts",
-    "src/glossary.ts",
-    "src/codeSpans.ts",
-    "src/polish.ts"
+    "src/errors.ts"
   ],
   "summary": null,
   "summaryFrom": null,
@@ -415,7 +379,8 @@
     "site": 0,
     "src": 27
   },
-  "unnamedWrites": 3,
+  "testedCodeParts": 3,
+  "unnamedWrites": 4,
   "unread": [],
   "unreadFiles": 0,
   "unreadNote": [],
