@@ -50,6 +50,7 @@ def bundle_now(env: dict[str, str] | None = None) -> int:
 
     root = Path(root_str)
     out_dir = root / "polyglot_out"
+    state_dir = root / "polyglot_state"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Best-effort stop of any lingering translate-all / translate-readme processes under root/polyglot_work
@@ -62,12 +63,45 @@ def bundle_now(env: dict[str, str] | None = None) -> int:
         check=False,
     )
 
+    if (state_dir / "remote_failure.json").is_file() and not (out_dir / "remote_failure.json").is_file():
+        (out_dir / "remote_failure.json").write_text(
+            (state_dir / "remote_failure.json").read_text(encoding="utf-8", errors="replace"),
+            encoding="utf-8",
+            newline="\n",
+        )
+    if (state_dir / "current_step.txt").is_file() and not (out_dir / "remote_step.txt").is_file():
+        (out_dir / "remote_step.txt").write_text(
+            (state_dir / "current_step.txt").read_text(encoding="utf-8", errors="replace"),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+    last_step: str | None = None
+    for sp in (out_dir / "remote_step.txt", state_dir / "current_step.txt"):
+        if sp.is_file():
+            val = sp.read_text(encoding="utf-8", errors="replace").strip()
+            if val:
+                last_step = val.splitlines()[-1].strip()
+                break
+
+    zstd_ver: str | None = None
+    for zp in (out_dir / "zstd_version.txt", state_dir / "zstd_version"):
+        if zp.is_file():
+            val = zp.read_text(encoding="utf-8", errors="replace").strip()
+            if val:
+                zstd_ver = val.splitlines()[0].strip()
+                break
+
     vm_win = out_dir / "vm_window.json"
     if not vm_win.is_file():
-        rec = {
+        rec: dict[str, object] = {
             "salvaged_after_failure": True,
             "failed_rc": int(rc_str),
         }
+        if last_step:
+            rec["remote_step"] = last_step
+        if zstd_ver:
+            rec["zstd_version"] = zstd_ver
         vm_win.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8", newline="\n")
 
     guards_py = root / "launch_guards.py"

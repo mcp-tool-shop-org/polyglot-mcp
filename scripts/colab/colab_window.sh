@@ -2603,6 +2603,14 @@ REFUSAL_CODES = (
     "TOKEN_SHRED_FAILED",
     "INPUT_FILE_MISSING",
     "INPUT_SHA_MISMATCH",
+    "ZSTD_INSTALL_FAILED",
+    "OLLAMA_UNPACK_FAILED",
+    "NODE_INSTALL_FAILED",
+    "OLLAMA_DOWNLOAD_FAILED",
+    "OLLAMA_SERVE_FAILED",
+    "REMOTE_STEP_FAILED",
+    "STUB_CPU_ONLY",
+    "STUB_SKIP_INSTALL_FORBIDDEN",
 )
 # A refusal code comes only from a line the kit itself emits, starting `REFUSED: <CODE>`, in the
 # files those lines are written to: guards.log (rig side), the exec stream in vitals.log, and the
@@ -2610,10 +2618,10 @@ REFUSAL_CODES = (
 # read, and every vitals PROC: section (a `ps` listing, which shows the import gate's own
 # `python -c` source with its refusal words) is skipped up to the block's HARNESS: line.
 REFUSED_LINE_RE = re.compile(r"^REFUSED: ([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?=[:\s]|$)")
+REMOTE_STEP_LINE_RE = re.compile(r"^REMOTE_STEP\s+step=([A-Za-z0-9_.-]+)\s*$")
 
 
-def first_refusal(text: str, skip_proc: bool) -> tuple[str, str | None] | None:
-    """(code, why) of the first kit refusal line; why is the text after `REFUSED: <CODE>: `."""
+def iter_non_proc_lines(text: str, skip_proc: bool):
     in_proc = False
     for raw in text.splitlines():
         line = raw.rstrip("\r")
@@ -2626,6 +2634,12 @@ def first_refusal(text: str, skip_proc: bool) -> tuple[str, str | None] | None:
                     in_proc = False
                 else:
                     continue
+        yield line
+
+
+def first_refusal(text: str, skip_proc: bool) -> tuple[str, str | None] | None:
+    """(code, why) of the first kit refusal line; why is the text after `REFUSED: <CODE>: `."""
+    for line in iter_non_proc_lines(text, skip_proc):
         m = REFUSED_LINE_RE.match(line)
         if m and m.group(1) in REFUSAL_CODES:
             rest = line[m.end():].lstrip(":").strip()
@@ -2633,21 +2647,102 @@ def first_refusal(text: str, skip_proc: bool) -> tuple[str, str | None] | None:
     return None
 
 
-refusal_sources: list[tuple[str | None, bool]] = []
-for log_name, skip_proc in (("guards.log", False), ("vitals.log", True)):
-    lp = out_dir / log_name
-    if lp.exists():
-        refusal_sources.append((lp.read_text(encoding="utf-8", errors="replace"), skip_proc))
-refusal_sources.append((bundle_member_text("setup.log"), False))
+vitals_text = vitals_p.read_text(encoding="utf-8", errors="replace") if vitals_p.exists() else ""
+setup_bundle_text = bundle_member_text("setup.log") or ""
+
+zstd_version: str | None = None
+if isinstance(vm_facts.get("zstd_version"), str) and vm_facts["zstd_version"].strip():
+    zstd_version = vm_facts["zstd_version"].strip()
+if not zstd_version:
+    zstd_version = read_text_file(out_dir / "zstd_version.txt")
+if not zstd_version:
+    bv = bundle_member_text("zstd_version.txt")
+    if bv and bv.strip():
+        zstd_version = bv.strip().splitlines()[0].strip()
+if not zstd_version:
+    for src_txt, sk in ((vitals_text, True), (setup_bundle_text, False)):
+        for ln in iter_non_proc_lines(src_txt, sk):
+            if ln.startswith("ZSTD_VERSION "):
+                cand = ln[len("ZSTD_VERSION ") :].strip()
+                if cand:
+                    zstd_version = cand
+if zstd_version:
+    vm_facts["zstd_version"] = zstd_version
+
+remote_failure: dict | None = None
+rf_file = out_dir / "remote_failure.json"
+if rf_file.is_file():
+    try:
+        parsed_rf = json.loads(rf_file.read_text(encoding="utf-8", errors="replace"))
+        if isinstance(parsed_rf, dict):
+            remote_failure = parsed_rf
+    except Exception:
+        pass
+if remote_failure is None:
+    rf_bundle = bundle_member_text("remote_failure.json")
+    if rf_bundle:
+        try:
+            parsed_rf = json.loads(rf_bundle)
+            if isinstance(parsed_rf, dict):
+                remote_failure = parsed_rf
+        except Exception:
+            pass
+if remote_failure is None:
+    for src_txt, sk in ((vitals_text, True), (setup_bundle_text, False)):
+        for ln in iter_non_proc_lines(src_txt, sk):
+            if ln.startswith("REMOTE_STEP_FAILED_MARKER "):
+                try:
+                    parsed_rf = json.loads(ln[len("REMOTE_STEP_FAILED_MARKER ") :].strip())
+                    if isinstance(parsed_rf, dict):
+                        remote_failure = parsed_rf
+                except Exception:
+                    pass
+
+last_remote_step: str | None = None
+if isinstance(remote_failure, dict) and isinstance(remote_failure.get("step"), str) and remote_failure["step"].strip():
+    last_remote_step = remote_failure["step"].strip()
+if not last_remote_step:
+    last_remote_step = read_text_file(out_dir / "remote_step.txt")
+if not last_remote_step:
+    rs_bundle = bundle_member_text("remote_step.txt")
+    if rs_bundle and rs_bundle.strip():
+        last_remote_step = rs_bundle.strip().splitlines()[-1].strip()
+if not last_remote_step:
+    for src_txt, sk in ((vitals_text, True), (setup_bundle_text, False)):
+        for ln in iter_non_proc_lines(src_txt, sk):
+            ms = REMOTE_STEP_LINE_RE.match(ln)
+            if ms:
+                last_remote_step = ms.group(1)
+if not last_remote_step and isinstance(vm_facts.get("remote_step"), str) and vm_facts["remote_step"].strip():
+    last_remote_step = vm_facts["remote_step"].strip()
 
 refusal_code: str | None = None
 refusal_why: str | None = None
-for src_text, skip_proc in refusal_sources:
-    if src_text:
-        found = first_refusal(src_text, skip_proc)
-        if found:
-            refusal_code, refusal_why = found
-            break
+
+guards_p = out_dir / "guards.log"
+if guards_p.exists():
+    found_guard = first_refusal(guards_p.read_text(encoding="utf-8", errors="replace"), False)
+    if found_guard:
+        refusal_code, refusal_why = found_guard
+
+if refusal_code is None and isinstance(remote_failure, dict):
+    m_code = str(remote_failure.get("refusal_code") or "").strip()
+    m_step = str(remote_failure.get("step") or last_remote_step or "").strip()
+    m_why = str(remote_failure.get("why") or remote_failure.get("reason") or "").strip()
+    if m_code in REFUSAL_CODES:
+        refusal_code = m_code
+        if m_why:
+            refusal_why = m_why if (not m_step or m_step in m_why) else f"[{m_step}] {m_why}"
+        else:
+            refusal_why = f"[{m_step or 'unknown'}] remote step '{m_step or 'unknown'}' failed ({m_code})"
+
+if refusal_code is None:
+    for src_text, skip_proc in ((vitals_text, True), (setup_bundle_text, False)):
+        if src_text:
+            found = first_refusal(src_text, skip_proc)
+            if found:
+                refusal_code, refusal_why = found
+                break
 
 downloaded_files: dict[str, str] = {}
 for artifact in sorted(list(out_dir.glob("*.tar.gz")) + list(out_dir.glob("*.safetensors"))):
@@ -2700,7 +2795,37 @@ rate_source = read_text_file(out_dir / "rate_source.txt") or (
     )
 )
 
-final_status = "ok" if exit_code == 0 else (refusal_code or "failed")
+stop_path_raw = read_text_file(out_dir / "stop_path.txt")
+stop_path = stop_path_raw if stop_path_raw in ("trap", "watcher") else "trap"
+watcher_wait_raw = read_text_file(out_dir / "watcher_wait.txt")
+watcher_wait = (
+    watcher_wait_raw
+    if watcher_wait_raw in (
+        "none",
+        "cleanup_seen",
+        "escalated_no_cleanup",
+        "escalated_cleanup_overran",
+        "escalated_launcher_gone",
+        "launcher_gone_pre_trip",
+    )
+    else "none"
+)
+cap_trip_phase = read_text_file(out_dir / "cap_trip_phase.txt")
+
+if exit_code != 0:
+    fallback_step = (
+        last_remote_step
+        or (f"watcher_{watcher_wait}" if watcher_wait != "none" else ("exec" if (out_dir / "session_opened.txt").is_file() else "pre_open"))
+    )
+    if refusal_code is None:
+        refusal_code = "REMOTE_STEP_FAILED"
+        refusal_why = (
+            f"[{fallback_step}] window failed at step '{fallback_step}' without an explicit refusal code (exit_code={exit_code})"
+        )
+    elif refusal_why is None or not str(refusal_why).strip():
+        refusal_why = f"[{fallback_step}] {refusal_code} (exit_code={exit_code})"
+
+final_status = "ok" if exit_code == 0 else (refusal_code or "REMOTE_STEP_FAILED")
 
 # Lane 3 (train): what the VM says about training, normalised so it cannot be read as a passed
 # training by accident. "skipped_cpu_stub" (the CPU install-path stub stopped at the import gate)
@@ -2739,22 +2864,6 @@ stop_bound_s = stop_attempts * (stop_timeout_s + kill_grace_s)
 salvage_bound_s = min(salvage_steps_sum_s, salvage_deadline_s) if lane in ("train", "translate") else 0
 cleanup_stop_attempted_by_s = in_flight_bound_s + salvage_bound_s
 cleanup_bound_s = cleanup_stop_attempted_by_s + stop_bound_s
-stop_path_raw = read_text_file(out_dir / "stop_path.txt")
-stop_path = stop_path_raw if stop_path_raw in ("trap", "watcher") else "trap"
-watcher_wait_raw = read_text_file(out_dir / "watcher_wait.txt")
-watcher_wait = (
-    watcher_wait_raw
-    if watcher_wait_raw in (
-        "none",
-        "cleanup_seen",
-        "escalated_no_cleanup",
-        "escalated_cleanup_overran",
-        "escalated_launcher_gone",
-        "launcher_gone_pre_trip",
-    )
-    else "none"
-)
-cap_trip_phase = read_text_file(out_dir / "cap_trip_phase.txt")
 
 cap_trip_formula = (
     "effective_trip = cap - margin - cleanup_reserve; cleanup_reserve = (cleanup_bound_s / 3600) * priced_rate"
@@ -2850,6 +2959,7 @@ window_payload = {
     "status": final_status,
     "refusal_code": refusal_code,
     "why": refusal_why,
+    "remote_step": last_remote_step,
     "cap": cap,
     "cap_ccu": cap,
     "wall_s": wall_s,
@@ -2902,6 +3012,7 @@ outcome_payload = {
     "status": final_status,
     "refusal_code": refusal_code,
     "why": refusal_why,
+    "remote_step": last_remote_step,
     "phase": cap_trip_phase if cap_trip_phase else ("live" if (out_dir / "session_opened.txt").is_file() else "pre_open"),
     "cap_trip_phase": cap_trip_phase,
     "watcher_wait": watcher_wait,

@@ -40,14 +40,14 @@ PINNED_VRAM_HEADROOM_MIB="1024"
 
 PINNED_LAUNCH_GUARDS_SHA="0c8f9cc805bccf5ac32b65386c8072ca40e0127fc2ae235a350be27be0623d3e"
 PINNED_REMOTE_RUNNER_SHA="834e669de7f611c8d3b0e24dcd65c568c0d97a2bafb6080b235ea9a22b4f99d9"
-PINNED_COLAB_WINDOW_SHA="ea8bf08b2781ccf5df7a4a739f88f86a53afb3193791d461c748beb974bd108d"
-PINNED_BUNDLE_NOW_SHA="9d550928857550352f80b7d86824a182922065927687d5c707878c0a6be33a43"
+PINNED_COLAB_WINDOW_SHA="4ad36d141e569209b5d1e64b5369559dc4bc02d1f4d603be1aadc074cfd23164"
+PINNED_BUNDLE_NOW_SHA="70b98ec2f6b363d3e94b7bc8283c74cee640c5229308e69c7dbf6a9482f7c536"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
 PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef05829e4194a"
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="1aad6d799250ace7d807adef6c081b127cdbb25db6363faca20b5212dae6bc73"
+PINNED_SELF_SHA="5fb47256d06c5cfb0e4e03895e490f4e5af6f1e2731a59feda92d100854421ba"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -66,6 +66,7 @@ GRACE_S="60"
 OUT_DIR=""
 SESSION="polyglot-translate-$(date -u +%Y%m%dT%H%M%SZ)"
 DRY_RUN=0
+STUB_MODE=0
 README_PATHS=()
 README_TAR=""
 
@@ -119,6 +120,10 @@ while [ "$#" -gt 0 ]; do
       SESSION="${2:-}"
       shift 2
       ;;
+    --stub)
+      STUB_MODE=1
+      shift
+      ;;
     --dry)
       DRY_RUN=1
       shift
@@ -138,7 +143,23 @@ case "${CARD}" in
     ;;
 esac
 
+if [ "${STUB_MODE}" = "1" ]; then
+  if ! colab_card_is_cpu "${CARD}"; then
+    echo "REFUSED: STUB_CPU_ONLY: --stub runs only on a CPU card (got --card ${CARD})" >&2
+    exit 2
+  fi
+  if [ -n "${POLYGLOT_TEST_SKIP_VM_INSTALL:-}" ]; then
+    echo "REFUSED: STUB_SKIP_INSTALL_FORBIDDEN: POLYGLOT_TEST_SKIP_VM_INSTALL cannot be set with --stub" >&2
+    exit 2
+  fi
+fi
+
+HAS_READMES=1
 if [ "${#README_PATHS[@]}" -eq 0 ] && [ -z "${README_TAR}" ]; then
+  HAS_READMES=0
+fi
+
+if [ "${STUB_MODE}" != "1" ] && [ "${HAS_READMES}" = "0" ]; then
   echo "REFUSED: README_REQUIRED: pass at least one --readme <path> or --readme-tar <tarball>" >&2
   exit 2
 fi
@@ -176,6 +197,65 @@ TRANSLATE_ALL_MJS="${REPO_ROOT}/scripts/translate-all.mjs"
 TRANSLATE_README_MJS="${REPO_ROOT}/scripts/translate-readme.mjs"
 PACKAGE_JSON="${REPO_ROOT}/package.json"
 PACKAGE_LOCK="${REPO_ROOT}/package-lock.json"
+
+POLYGLOT_MODE_VAL="translate"
+if [ "${STUB_MODE}" = "1" ]; then
+  POLYGLOT_MODE_VAL="stub"
+fi
+
+REMOTE_ENV=()
+build_remote_env() {
+  local env_test_mode="$1"
+  local env_repo_commit="$2"
+  REMOTE_ENV=(
+    "SDLAB_REMOTE_SCRIPT=/content/remote_translate.sh"
+    "POLYGLOT_MODE=${POLYGLOT_MODE_VAL}"
+    "PINNED_NODE_VERSION=${PINNED_NODE_VERSION}"
+    "PINNED_NODE_TAR_SHA256=${POLYGLOT_TEST_NODE_TAR_SHA256:-${PINNED_NODE_TAR_SHA256}}"
+    "PINNED_OLLAMA_VERSION=${PINNED_OLLAMA_VERSION}"
+    "PINNED_OLLAMA_LINUX_AMD64_SHA256=${POLYGLOT_TEST_OLLAMA_TAR_SHA256:-${PINNED_OLLAMA_LINUX_AMD64_SHA256}}"
+    "PINNED_TRANSLATEGEMMA_MODEL=${PINNED_TRANSLATEGEMMA_MODEL}"
+    "PINNED_MODEL_DIGEST=${POLYGLOT_TEST_MODEL_DIGEST:-${PINNED_MODEL_DIGEST}}"
+    "PINNED_TRANSLATOR_CONTEXT=${PINNED_TRANSLATOR_CONTEXT}"
+    "PINNED_MODEL_PEAK_VRAM_MIB=${PINNED_MODEL_PEAK_VRAM_MIB}"
+    "PINNED_VRAM_HEADROOM_MIB=${PINNED_VRAM_HEADROOM_MIB}"
+    "COLAB_CARD=${CARD}"
+    "REPO_COMMIT=${env_repo_commit}"
+  )
+  if [ "${env_test_mode}" = "1" ]; then
+    REMOTE_ENV+=("REPO_ROOT_FOR_TEST_MODULES=${REPO_ROOT}")
+    if [ -n "${POLYGLOT_TEST_FAKE_OLLAMA_URL:-}" ]; then
+      REMOTE_ENV+=("OLLAMA_HOST=${POLYGLOT_TEST_FAKE_OLLAMA_URL}")
+    fi
+    if [ "${STUB_MODE}" != "1" ] && [ -n "${POLYGLOT_TEST_SKIP_VM_INSTALL:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_SKIP_VM_INSTALL=${POLYGLOT_TEST_SKIP_VM_INSTALL}")
+    fi
+    if [ -n "${POLYGLOT_TEST_DROP_NAV_BAR_LANG:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_DROP_NAV_BAR_LANG=${POLYGLOT_TEST_DROP_NAV_BAR_LANG}")
+    fi
+    if [ -n "${POLYGLOT_TEST_CORRUPT_RECEIPT_LANG:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_CORRUPT_RECEIPT_LANG=${POLYGLOT_TEST_CORRUPT_RECEIPT_LANG}")
+    fi
+    if [ -n "${POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT=${POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT}")
+    fi
+    if [ -n "${POLYGLOT_TEST_NODE_TAR_URL:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_NODE_TAR_URL=${POLYGLOT_TEST_NODE_TAR_URL}")
+    fi
+    if [ -n "${POLYGLOT_TEST_OLLAMA_TAR_URL:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_OLLAMA_TAR_URL=${POLYGLOT_TEST_OLLAMA_TAR_URL}")
+    fi
+    if [ -n "${POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S=${POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S}")
+    fi
+    if [ -n "${POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S=${POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S}")
+    fi
+    if [ -n "${POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S=${POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S}")
+    fi
+  fi
+}
 
 # --dry prints the plan and the price (hours x rate, cap-bound) without any colab call.
 # Still validates GPU --max-rate and --shape first so an invalid request is refused before --dry succeeds.
@@ -217,9 +297,12 @@ if [ "${DRY_RUN}" = "1" ]; then
   fi
   colab_apply_test_cleanup_overrides "${DRY_TEST_MODE}"
   colab_compute_cleanup_bounds "translate"
+  DRY_REPO_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  build_remote_env "${DRY_TEST_MODE}" "${DRY_REPO_COMMIT}"
 
-  "${PY_BIN}" - "${GUARDS_PY}" "${CARD}" "${SHAPE}" "${MAX_RATE:-0.26}" "${CAP}" "${MARGIN}" "${WALL_S}" "${GRACE_S}" "${SESSION}" "${OUT_DIR}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_MODEL_DIGEST}" "${PINNED_OLLAMA_VERSION}" "${PINNED_NODE_VERSION}" "${COLAB_CLEANUP_BOUND_S}" "${MIN_RUNTIME_S}" "${README_TAR}" "${README_PATHS[@]}" << 'DRYPYEOF'
+  "${PY_BIN}" - "${GUARDS_PY}" "${CARD}" "${SHAPE}" "${MAX_RATE:-0.26}" "${CAP}" "${MARGIN}" "${WALL_S}" "${GRACE_S}" "${SESSION}" "${OUT_DIR}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_MODEL_DIGEST}" "${PINNED_OLLAMA_VERSION}" "${PINNED_NODE_VERSION}" "${PINNED_OLLAMA_LINUX_AMD64_SHA256}" "${COLAB_CLEANUP_BOUND_S}" "${MIN_RUNTIME_S}" "${STUB_MODE}" "${README_TAR}" "${#README_PATHS[@]}" "${README_PATHS[@]}" "${REMOTE_ENV[@]}" << 'DRYPYEOF'
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -240,11 +323,15 @@ model = sys.argv[11]
 model_digest = sys.argv[12]
 ollama_ver = sys.argv[13]
 node_ver = sys.argv[14]
-cleanup_bound_s = float(sys.argv[15])
-min_runtime_raw = sys.argv[16]
+ollama_sha = sys.argv[15]
+cleanup_bound_s = float(sys.argv[16])
+min_runtime_raw = sys.argv[17]
 min_runtime_s = float(min_runtime_raw) if min_runtime_raw else None
-readme_tar = sys.argv[17]
-readme_paths = sys.argv[18:]
+stub_mode = sys.argv[18] == "1"
+readme_tar = sys.argv[19]
+readme_count = int(sys.argv[20])
+readme_paths = sys.argv[21 : 21 + readme_count]
+remote_env = sys.argv[21 + readme_count :]
 
 langs = ["ja", "zh", "es", "fr", "hi", "it", "pt"]
 budget = lg.evaluate_cap_budget(
@@ -263,25 +350,85 @@ hours = round(wall_s / 3600.0, 6)
 wall_cost = round(hours * rate, 6)
 effective_cap = round(max(0.0, cap - margin), 6)
 cap_bound_price = round(min(wall_cost, cap), 6)
+exec_timeout = int(wall_s) + int(grace_s) + 60
 
 new_cmd = f"colab new --high-mem -s {session}" if card in ("CPU", "CPU-high-mem") else (
     f"colab new --gpu {card}" + (" --high-mem" if shape == "high-mem" else "") + f" -s {session}"
 )
+remote_command = shlex.join(["env", *remote_env, "bash", "/content/remote_translate.sh"])
+exec_command = shlex.join(
+    [
+        "colab",
+        "exec",
+        "-s",
+        session,
+        "-f",
+        "scripts/colab/remote_runner.py",
+        "--timeout",
+        str(exec_timeout),
+        *[arg for kv in remote_env for arg in ("--env", kv)],
+    ]
+)
+readmes_list = readme_paths if readme_paths else ([readme_tar] if readme_tar else [])
+remote_steps = [
+    "token_shred",
+    "node_install",
+    "ollama_download",
+    "zstd_install",
+    "ollama_unpack",
+    "ollama_serve",
+]
+if not stub_mode:
+    remote_steps.extend(["model_pull", "model_digest", "fit_probe", "repo_build", "translate"])
+
+commands = [
+    "colab usage",
+    new_cmd,
+    "colab sessions",
+    "colab usage",
+    f"colab upload -s {session} <out_dir>/repo_archive.tar.gz /content/repo_archive.tar.gz",
+]
+if readmes_list:
+    commands.append(
+        f"colab upload -s {session} <out_dir>/readmes_input.tar.gz /content/readmes_input.tar.gz"
+    )
+commands.extend(
+    [
+        f"colab upload -s {session} scripts/colab/launch_guards.py /content/launch_guards.py",
+        f"colab upload -s {session} <out_dir>/remote_translate.sh /content/remote_translate.sh",
+        exec_command,
+        f"colab download -s {session} /content/polyglot_translate_bundle.tar.gz {out_dir}/polyglot_translate_bundle.tar.gz",
+        f"colab stop -s {session}",
+        "colab sessions",
+    ]
+)
 
 plan = {
     "dry_run": True,
+    "mode": "stub" if stub_mode else "paid",
+    "stub": stub_mode,
     "session": session,
     "card": card,
     "shape": shape,
-    "langs": langs,
-    "readmes": readme_paths if readme_paths else [readme_tar],
+    "cap": cap,
+    "cap_ccu": cap,
+    "wall_s": int(wall_s),
+    "grace_s": int(grace_s),
+    "margin": margin,
+    "langs": [] if stub_mode else langs,
+    "readmes": readmes_list,
     "out_dir": out_dir,
     "pinned": {
         "node_version": node_ver,
         "ollama_version": ollama_ver,
-        "model": model,
-        "model_digest": f"sha256:{model_digest}",
+        "ollama_archive": "ollama-linux-amd64.tar.zst",
+        "ollama_archive_sha256": f"sha256:{ollama_sha}",
+        "model": None if stub_mode else model,
+        "model_digest": None if stub_mode else f"sha256:{model_digest}",
     },
+    "remote_steps": remote_steps,
+    "remote_command": remote_command,
+    "exec_command": exec_command,
     "pricing": {
         "wall_s": int(wall_s),
         "grace_s": int(grace_s),
@@ -321,20 +468,7 @@ plan = {
             "cap_trip_formula",
         )
     },
-    "commands": [
-        "colab usage",
-        new_cmd,
-        "colab sessions",
-        "colab usage",
-        f"colab upload -s {session} <out_dir>/repo_archive.tar.gz /content/repo_archive.tar.gz",
-        f"colab upload -s {session} <out_dir>/readmes_input.tar.gz /content/readmes_input.tar.gz",
-        f"colab upload -s {session} scripts/colab/launch_guards.py /content/launch_guards.py",
-        f"colab upload -s {session} <out_dir>/remote_translate.sh /content/remote_translate.sh",
-        f"colab exec -s {session} -f scripts/colab/remote_runner.py --timeout {int(wall_s + grace_s + 60)}",
-        f"colab download -s {session} /content/polyglot_translate_bundle.tar.gz {out_dir}/polyglot_translate_bundle.tar.gz",
-        f"colab stop -s {session}",
-        "colab sessions",
-    ],
+    "commands": commands,
 }
 print(json.dumps(plan, indent=2))
 DRYPYEOF
@@ -386,6 +520,9 @@ PIN_OVERRIDE_VARS=(
   POLYGLOT_TEST_OLLAMA_TAR_URL
   POLYGLOT_TEST_NODE_TAR_SHA256
   POLYGLOT_TEST_OLLAMA_TAR_SHA256
+  POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S
+  POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S
+  POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S
   SDLAB_TEST_PROBE_ERROR_MODE
 )
 colab_refuse_live_pin_overrides "${OUT_DIR}" "${TEST_MODE}" "${PIN_OVERRIDE_VARS[@]}"
@@ -454,7 +591,8 @@ colab_cap_budget_gate "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}" "translate" "${CAR
 # Stage input READMEs into ${OUT_DIR}/readmes_input.tar.gz and write input_readmes.json
 INPUT_READMES_JSON="${OUT_DIR}/input_readmes.json"
 READMES_TAR_PATH="${OUT_DIR}/readmes_input.tar.gz"
-if ! "${PY_BIN}" - "${OUT_DIR}" "${READMES_TAR_PATH}" "${INPUT_READMES_JSON}" "${README_TAR}" "${README_PATHS[@]}" << 'STAGEPYEOF'
+if [ "${HAS_READMES}" = "1" ]; then
+  if ! "${PY_BIN}" - "${OUT_DIR}" "${READMES_TAR_PATH}" "${INPUT_READMES_JSON}" "${README_TAR}" "${README_PATHS[@]}" << 'STAGEPYEOF'
 import hashlib
 import json
 import re
@@ -544,9 +682,12 @@ with tarfile.open(tar_out, "w:gz") as tf:
 shutil.rmtree(stage_dir, ignore_errors=True)
 manifest_out.write_text(json.dumps({"items": entries}, indent=2) + "\n", encoding="utf-8", newline="\n")
 STAGEPYEOF
-then
-  colab_refuse_logged "${OUT_DIR}" README_TAR_INVALID "failed to stage input READMEs"
-  exit 1
+  then
+    colab_refuse_logged "${OUT_DIR}" README_TAR_INVALID "failed to stage input READMEs"
+    exit 1
+  fi
+else
+  printf '{\n  "items": []\n}\n' > "${INPUT_READMES_JSON}"
 fi
 
 # Build deterministic tar.gz of the repository source files (and built dist/ in fake-colab test mode)
@@ -686,20 +827,86 @@ cat > "${REMOTE_SCRIPT}" << 'REMOTEEOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+mkdir -p /content/polyglot_out /content/polyglot_work /content/readmes_in
+# The setup block below runs in a pipeline subshell, so what it assigns or exports is lost when it ends.
+# It hands the ollama serve pid, the PATH directories, OLLAMA_HOST, and step markers to this shell through
+# files in this directory, which is deliberately outside the archived polyglot_out.
+POLYGLOT_STATE_DIR="/content/polyglot_state"
+rm -rf "${POLYGLOT_STATE_DIR}"
+mkdir -p "${POLYGLOT_STATE_DIR}"
+echo "setup" > /content/polyglot_out/phase.txt
+: > /content/polyglot_out/setup.log
+
+begin_remote_step() {
+  local step="$1"
+  printf '%s\n' "${step}" > "${POLYGLOT_STATE_DIR}/current_step.txt"
+  printf '%s\n' "${step}" > /content/polyglot_out/remote_step.txt
+  printf 'REMOTE_STEP step=%s\n' "${step}"
+}
+
+write_remote_failure_marker() {
+  local step="$1"
+  local code="$2"
+  local reason="$3"
+  local rc="${4:-1}"
+  python3 - "${step}" "${code}" "${reason}" "${rc}" "${POLYGLOT_STATE_DIR}" << 'MARKPYEOF'
+import json
+import sys
+from pathlib import Path
+
+step, code, reason, rc_s, state_dir_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+rc_val = int(rc_s) if rc_s.lstrip("-").isdigit() and int(rc_s) != 0 else 1
+why_clean = reason.strip()
+if step and f"[{step}]" not in why_clean and not why_clean.startswith(f"{step}:"):
+    why_with_step = f"[{step}] {why_clean}" if why_clean else f"[{step}] remote step failed (rc={rc_val})"
+else:
+    why_with_step = why_clean or f"[{step or 'unknown'}] remote step failed (rc={rc_val})"
+marker = {
+    "step": step or "unknown",
+    "refusal_code": code,
+    "reason": why_clean,
+    "why": why_with_step,
+    "rc": rc_val,
+}
+out_dir = Path("/content/polyglot_out")
+out_dir.mkdir(parents=True, exist_ok=True)
+state_dir = Path(state_dir_s)
+state_dir.mkdir(parents=True, exist_ok=True)
+payload = json.dumps(marker, indent=2) + "\n"
+(out_dir / "remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
+(state_dir / "remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
+print("REMOTE_STEP_FAILED_MARKER " + json.dumps(marker), flush=True)
+sys.stderr.write(f"REFUSED: {code}: {why_with_step}\n")
+sys.stderr.flush()
+MARKPYEOF
+}
+
+fail_remote_step() {
+  local step="$1"
+  local code="$2"
+  local reason="$3"
+  local rc="${4:-1}"
+  case "${rc}" in
+    ''|0|*[!0-9-]*) rc=1 ;;
+  esac
+  write_remote_failure_marker "${step}" "${code}" "${reason}" "${rc}"
+  exit "${rc}"
+}
+
 # If an optional token file was uploaded (/content/polyglot_token), read and shred it immediately.
+begin_remote_step "token_shred"
 POLYGLOT_UPLOADED_TOKEN=""
 if [ -f /content/polyglot_token ]; then
   POLYGLOT_UPLOADED_TOKEN="$(cat /content/polyglot_token)"
-  shred -u /content/polyglot_token 2>/dev/null || rm -f /content/polyglot_token
+  shred -u /content/polyglot_token 2>/dev/null || rm -f /content/polyglot_token || true
   if [ -e /content/polyglot_token ]; then
-    echo "REFUSED: TOKEN_SHRED_FAILED: /content/polyglot_token is still on the VM" >&2
-    exit 1
+    fail_remote_step "token_shred" "TOKEN_SHRED_FAILED" "/content/polyglot_token is still on the VM" 1
   fi
 fi
 
-mkdir -p /content/polyglot_out /content/polyglot_work /content/readmes_in
-echo "setup" > /content/polyglot_out/phase.txt
-: > /content/polyglot_out/setup.log
+if [ "${POLYGLOT_MODE:-translate}" = "stub" ] && [ -n "${POLYGLOT_TEST_SKIP_VM_INSTALL:-}" ]; then
+  fail_remote_step "stub_env_guard" "STUB_SKIP_INSTALL_FORBIDDEN" "POLYGLOT_TEST_SKIP_VM_INSTALL cannot be set with --stub" 2
+fi
 
 (
   while true; do
@@ -734,12 +941,6 @@ echo "setup" > /content/polyglot_out/phase.txt
 VITALS_PID="$!"
 
 OLLAMA_SERVE_PID=""
-# The setup block below runs in a pipeline subshell, so what it assigns or exports is lost when it ends.
-# It hands the ollama serve pid, the PATH directories and OLLAMA_HOST to this shell through files in this
-# directory, which is deliberately outside the archived polyglot_out.
-POLYGLOT_STATE_DIR="/content/polyglot_state"
-rm -rf "${POLYGLOT_STATE_DIR}"
-mkdir -p "${POLYGLOT_STATE_DIR}"
 # STOP_WRITERS_BEGIN: vitals and ollama serve both append to logs inside the tarred polyglot_out;
 # stop them before the final scrub and tar (and again, harmlessly, from remote_on_exit).
 # A zombie writes nothing and holds no open files, so a pid in state Z counts as gone (nothing reaps it here).
@@ -827,6 +1028,83 @@ remote_on_exit() {
   trap - EXIT
   stop_writers
   rm -f /content/polyglot_out/.remote_done 2>/dev/null || true
+  if [ "${rc}" -ne 0 ]; then
+    python3 - "${rc}" "${POLYGLOT_STATE_DIR}" << 'EXITMARKPYEOF' || true
+import json
+import re
+import sys
+from pathlib import Path
+
+rc = int(sys.argv[1]) if sys.argv[1].lstrip("-").isdigit() else 1
+state_dir = Path(sys.argv[2])
+out_dir = Path("/content/polyglot_out")
+out_dir.mkdir(parents=True, exist_ok=True)
+rf_out = out_dir / "remote_failure.json"
+rf_state = state_dir / "remote_failure.json"
+
+if not rf_out.is_file() and rf_state.is_file():
+    rf_out.write_text(rf_state.read_text(encoding="utf-8", errors="replace"), encoding="utf-8", newline="\n")
+
+last_step = "setup"
+for sp in (state_dir / "current_step.txt", out_dir / "remote_step.txt"):
+    if sp.is_file():
+        val = sp.read_text(encoding="utf-8", errors="replace").strip()
+        if val:
+            last_step = val.splitlines()[-1].strip()
+            break
+(out_dir / "remote_step.txt").write_text(f"{last_step}\n", encoding="utf-8", newline="\n")
+
+if not rf_out.is_file():
+    setup_txt = (out_dir / "setup.log").read_text(encoding="utf-8", errors="replace") if (out_dir / "setup.log").is_file() else ""
+    ref_re = re.compile(r"^REFUSED:\s+([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?::\s*(.*))?$")
+    found_code = None
+    found_reason = ""
+    tail_lines = []
+    for raw in setup_txt.splitlines():
+        ln = raw.strip()
+        if not ln:
+            continue
+        m = ref_re.match(ln)
+        if m:
+            found_code = m.group(1)
+            found_reason = (m.group(2) or "").strip()
+        elif not ln.startswith("REMOTE_STEP "):
+            tail_lines.append(ln)
+    code = found_code or "REMOTE_STEP_FAILED"
+    if found_code and found_reason:
+        reason = found_reason
+    else:
+        tail_snip = tail_lines[-1][:240] if tail_lines else ""
+        reason = f"remote step '{last_step}' exited with rc={rc}" + (f": {tail_snip}" if tail_snip else "")
+    why = reason if (f"[{last_step}]" in reason or reason.startswith(f"{last_step}:")) else f"[{last_step}] {reason}"
+    marker = {
+        "step": last_step,
+        "refusal_code": code,
+        "reason": reason,
+        "why": why,
+        "rc": rc,
+    }
+    payload = json.dumps(marker, indent=2) + "\n"
+    rf_out.write_text(payload, encoding="utf-8", newline="\n")
+    print("REMOTE_STEP_FAILED_MARKER " + json.dumps(marker), flush=True)
+    sys.stderr.write(f"REFUSED: {code}: {why}\n")
+    sys.stderr.flush()
+
+vm_win_p = out_dir / "vm_window.json"
+if not vm_win_p.is_file():
+    zstd_ver = None
+    for zp in (out_dir / "zstd_version.txt", state_dir / "zstd_version"):
+        if zp.is_file():
+            zv = zp.read_text(encoding="utf-8", errors="replace").strip()
+            if zv:
+                zstd_ver = zv.splitlines()[0].strip()
+                break
+    rec: dict[str, object] = {"remote_step": last_step, "failed_rc": rc}
+    if zstd_ver:
+        rec["zstd_version"] = zstd_ver
+    vm_win_p.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8", newline="\n")
+EXITMARKPYEOF
+  fi
   if [ ! -f /content/polyglot_translate_bundle.tar.gz ]; then
     local r_scrub_args=()
     while IFS= read -r -d '' f; do
@@ -842,67 +1120,173 @@ remote_on_exit() {
 trap remote_on_exit EXIT
 
 {
-  if [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
+  set -euo pipefail
+  if [ "${POLYGLOT_MODE:-translate}" = "stub" ] || [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
     # 1. Install pinned Node.js checked by sha256
+    begin_remote_step "node_install"
     NODE_TAR="/content/node-${PINNED_NODE_VERSION}-linux-x64.tar.xz"
     NODE_URL="${POLYGLOT_TEST_NODE_TAR_URL:-https://nodejs.org/dist/${PINNED_NODE_VERSION}/node-${PINNED_NODE_VERSION}-linux-x64.tar.xz}"
-    curl -fsSL "${NODE_URL}" -o "${NODE_TAR}"
+    node_dl_rc=0
+    curl -fsSL "${NODE_URL}" -o "${NODE_TAR}" > /content/polyglot_out/node_download.log 2>&1 || node_dl_rc=$?
+    if [ -s /content/polyglot_out/node_download.log ]; then
+      cat /content/polyglot_out/node_download.log
+    fi
+    if [ "${node_dl_rc}" -ne 0 ] || [ ! -s "${NODE_TAR}" ]; then
+      node_dl_err="$(tr '\r\n' '  ' < /content/polyglot_out/node_download.log 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      fail_remote_step "node_install" "NODE_INSTALL_FAILED" "curl download of ${NODE_URL} failed (rc=${node_dl_rc})${node_dl_err:+: ${node_dl_err}}" "${node_dl_rc}"
+    fi
     GOT_NODE_SHA="$(sha256sum "${NODE_TAR}" | awk '{print $1}')"
     if [ "${GOT_NODE_SHA}" != "${PINNED_NODE_TAR_SHA256}" ]; then
-      echo "REFUSED: NODE_INSTALL_SHA_MISMATCH: got ${GOT_NODE_SHA} expected ${PINNED_NODE_TAR_SHA256}" >&2
-      exit 1
+      fail_remote_step "node_install" "NODE_INSTALL_SHA_MISMATCH" "got ${GOT_NODE_SHA} expected ${PINNED_NODE_TAR_SHA256}" 1
     fi
     mkdir -p /content/node
-    tar -xJf "${NODE_TAR}" -C /content/node --strip-components=1
+    node_tar_rc=0
+    tar -xJf "${NODE_TAR}" -C /content/node --strip-components=1 > /content/polyglot_out/node_unpack.log 2>&1 || node_tar_rc=$?
+    if [ -s /content/polyglot_out/node_unpack.log ]; then
+      cat /content/polyglot_out/node_unpack.log
+    fi
+    if [ "${node_tar_rc}" -ne 0 ] || [ ! -f /content/node/bin/node ]; then
+      node_tar_err="$(tr '\r\n' '  ' < /content/polyglot_out/node_unpack.log 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      fail_remote_step "node_install" "NODE_INSTALL_FAILED" "tar -xJf ${NODE_TAR} failed (rc=${node_tar_rc})${node_tar_err:+: ${node_tar_err}}" "${node_tar_rc}"
+    fi
     export PATH="$(cd /content/node/bin && pwd):${PATH}"
     (cd /content/node/bin && pwd) >> "${POLYGLOT_STATE_DIR}/path_dirs"
+    node_ver_rc=0
+    NODE_VER_OUT="$(/content/node/bin/node --version </dev/null 2>&1)" || node_ver_rc=$?
+    NODE_VER_CLEAN="$(printf '%s\n' "${NODE_VER_OUT}" | awk 'NF {sub(/\r$/, ""); print; exit}')"
+    if [ "${node_ver_rc}" -ne 0 ] || [ -z "${NODE_VER_CLEAN}" ]; then
+      fail_remote_step "node_install" "NODE_INSTALL_FAILED" "node --version failed after unpack (rc=${node_ver_rc}): ${NODE_VER_OUT}" "${node_ver_rc}"
+    fi
+    printf '%s\n' "${NODE_VER_CLEAN}" > /content/polyglot_out/node_version.txt
+    printf '%s\n' "${NODE_VER_CLEAN}" > "${POLYGLOT_STATE_DIR}/node_version"
 
-    # 2. Install pinned Ollama archive checked by sha256
+    # 2. Download pinned Ollama archive and verify sha256 BEFORE zstd install and unpack
+    begin_remote_step "ollama_download"
     OLLAMA_ARCHIVE="/content/ollama-linux-amd64.tar.zst"
     OLLAMA_URL_ARCHIVE="${POLYGLOT_TEST_OLLAMA_TAR_URL:-https://github.com/ollama/ollama/releases/download/v${PINNED_OLLAMA_VERSION}/ollama-linux-amd64.tar.zst}"
-    curl -fsSL "${OLLAMA_URL_ARCHIVE}" -o "${OLLAMA_ARCHIVE}"
+    ollama_dl_rc=0
+    curl -fsSL "${OLLAMA_URL_ARCHIVE}" -o "${OLLAMA_ARCHIVE}" > /content/polyglot_out/ollama_download.log 2>&1 || ollama_dl_rc=$?
+    if [ -s /content/polyglot_out/ollama_download.log ]; then
+      cat /content/polyglot_out/ollama_download.log
+    fi
+    if [ "${ollama_dl_rc}" -ne 0 ] || [ ! -s "${OLLAMA_ARCHIVE}" ]; then
+      ollama_dl_err="$(tr '\r\n' '  ' < /content/polyglot_out/ollama_download.log 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      fail_remote_step "ollama_download" "OLLAMA_DOWNLOAD_FAILED" "curl download of ${OLLAMA_URL_ARCHIVE} failed (rc=${ollama_dl_rc})${ollama_dl_err:+: ${ollama_dl_err}}" "${ollama_dl_rc}"
+    fi
     GOT_OLLAMA_SHA="$(sha256sum "${OLLAMA_ARCHIVE}" | awk '{print $1}')"
     if [ "${GOT_OLLAMA_SHA}" != "${PINNED_OLLAMA_LINUX_AMD64_SHA256}" ]; then
-      echo "REFUSED: OLLAMA_INSTALL_SHA_MISMATCH: got ${GOT_OLLAMA_SHA} expected ${PINNED_OLLAMA_LINUX_AMD64_SHA256}" >&2
-      exit 1
+      fail_remote_step "ollama_download" "OLLAMA_INSTALL_SHA_MISMATCH" "got ${GOT_OLLAMA_SHA} expected ${PINNED_OLLAMA_LINUX_AMD64_SHA256}" 1
     fi
+
+    # 3. Install zstd on the stock Colab image BEFORE unpacking .tar.zst (Ollama v0.40.15 publishes only .tar.zst for Linux x86_64)
+    begin_remote_step "zstd_install"
+    ZSTD_INSTALL_TIMEOUT_S="${POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S:-180}"
+    zstd_apt_rc=0
+    DEBIAN_FRONTEND=noninteractive timeout -k 10 "${ZSTD_INSTALL_TIMEOUT_S}" apt-get install -y zstd > /content/polyglot_out/zstd_install.log 2>&1 || zstd_apt_rc=$?
+    if [ "${zstd_apt_rc}" -ne 0 ]; then
+      DEBIAN_FRONTEND=noninteractive timeout -k 10 "${ZSTD_INSTALL_TIMEOUT_S}" apt-get update -y >> /content/polyglot_out/zstd_install.log 2>&1 || true
+      zstd_apt_rc=0
+      DEBIAN_FRONTEND=noninteractive timeout -k 10 "${ZSTD_INSTALL_TIMEOUT_S}" apt-get install -y zstd >> /content/polyglot_out/zstd_install.log 2>&1 || zstd_apt_rc=$?
+    fi
+    if [ -s /content/polyglot_out/zstd_install.log ]; then
+      cat /content/polyglot_out/zstd_install.log
+    fi
+    hash -r 2>/dev/null || true
+    if [ "${zstd_apt_rc}" -ne 0 ]; then
+      zstd_apt_err="$(tail -n 5 /content/polyglot_out/zstd_install.log 2>/dev/null | tr '\r\n' '  ' | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      fail_remote_step "zstd_install" "ZSTD_INSTALL_FAILED" "apt-get install -y zstd exited ${zstd_apt_rc}${zstd_apt_err:+: ${zstd_apt_err}}" "${zstd_apt_rc}"
+    fi
+    if ! command -v zstd >/dev/null 2>&1; then
+      fail_remote_step "zstd_install" "ZSTD_INSTALL_FAILED" "zstd is still missing on PATH after apt-get install -y zstd" 1
+    fi
+    zstd_ver_rc=0
+    ZSTD_VER_RAW="$(zstd --version </dev/null 2>&1)" || zstd_ver_rc=$?
+    ZSTD_VER_LINE="$(printf '%s\n' "${ZSTD_VER_RAW}" | awk 'NF {sub(/\r$/, ""); print; exit}')"
+    if [ "${zstd_ver_rc}" -ne 0 ] || [ -z "${ZSTD_VER_LINE}" ]; then
+      fail_remote_step "zstd_install" "ZSTD_INSTALL_FAILED" "zstd --version failed after install (rc=${zstd_ver_rc}): ${ZSTD_VER_RAW}" "${zstd_ver_rc}"
+    fi
+    printf '%s\n' "${ZSTD_VER_LINE}" > /content/polyglot_out/zstd_version.txt
+    printf '%s\n' "${ZSTD_VER_LINE}" > "${POLYGLOT_STATE_DIR}/zstd_version"
+    printf 'ZSTD_VERSION %s\n' "${ZSTD_VER_LINE}"
+
+    # 4. Unpack Ollama archive with tar --zstd
+    begin_remote_step "ollama_unpack"
     mkdir -p /content/ollama
-    tar --zstd -xf "${OLLAMA_ARCHIVE}" -C /content/ollama
+    ollama_tar_rc=0
+    tar --zstd -xf "${OLLAMA_ARCHIVE}" -C /content/ollama > /content/polyglot_out/ollama_unpack.log 2>&1 || ollama_tar_rc=$?
+    if [ -s /content/polyglot_out/ollama_unpack.log ]; then
+      cat /content/polyglot_out/ollama_unpack.log
+    fi
+    if [ "${ollama_tar_rc}" -ne 0 ] || [ ! -f /content/ollama/bin/ollama ]; then
+      ollama_tar_err="$(tr '\r\n' '  ' < /content/polyglot_out/ollama_unpack.log 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      fail_remote_step "ollama_unpack" "OLLAMA_UNPACK_FAILED" "tar --zstd -xf ${OLLAMA_ARCHIVE} failed (rc=${ollama_tar_rc})${ollama_tar_err:+: ${ollama_tar_err}}" "${ollama_tar_rc}"
+    fi
     export PATH="$(cd /content/ollama/bin && pwd):${PATH}"
     (cd /content/ollama/bin && pwd) >> "${POLYGLOT_STATE_DIR}/path_dirs"
 
+    # 5. Start ollama serve and wait until ready
+    begin_remote_step "ollama_serve"
+    OLLAMA_URL="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+    export OLLAMA_HOST="${OLLAMA_URL}"
+    printf '%s\n' "${OLLAMA_URL}" > "${POLYGLOT_STATE_DIR}/ollama_host"
     ollama serve </dev/null > /content/polyglot_out/ollama_serve.log 2>&1 &
     OLLAMA_SERVE_PID="$!"
     printf '%s\n' "${OLLAMA_SERVE_PID}" > "${POLYGLOT_STATE_DIR}/ollama_serve.pid"
-    for _ in $(seq 1 30); do
-      if ollama --version >/dev/null 2>&1 && curl -sf "${OLLAMA_HOST:-http://127.0.0.1:11434}/api/tags" >/dev/null 2>&1; then
+    OLLAMA_SERVE_WAIT_S="${POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S:-30}"
+    OLLAMA_SERVE_READY=0
+    for _ in $(seq 1 "${OLLAMA_SERVE_WAIT_S}"); do
+      if ! serve_pid_alive "${OLLAMA_SERVE_PID}"; then
+        break
+      fi
+      if ollama --version >/dev/null 2>&1 && curl -sf "${OLLAMA_URL}/api/tags" >/dev/null 2>&1; then
+        OLLAMA_SERVE_READY=1
         break
       fi
       sleep 1
     done
+    if [ "${OLLAMA_SERVE_READY}" != "1" ]; then
+      serve_err="$(tail -n 5 /content/polyglot_out/ollama_serve.log 2>/dev/null | tr '\r\n' '  ' | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      fail_remote_step "ollama_serve" "OLLAMA_SERVE_FAILED" "ollama serve did not become ready at ${OLLAMA_URL}/api/tags within ${OLLAMA_SERVE_WAIT_S}s${serve_err:+: ${serve_err}}" 1
+    fi
+    VERSION_JSON="/content/polyglot_out/ollama_version.json"
+    curl -sf "${OLLAMA_URL}/api/version" > "${VERSION_JSON}" 2>/dev/null || printf '{"version":"%s"}\n' "${PINNED_OLLAMA_VERSION}" > "${VERSION_JSON}"
   fi
 
   OLLAMA_URL="${OLLAMA_HOST:-http://127.0.0.1:11434}"
   export OLLAMA_HOST="${OLLAMA_URL}"
   printf '%s\n' "${OLLAMA_URL}" > "${POLYGLOT_STATE_DIR}/ollama_host"
 
-  # 3. Pull model and verify digest against PINNED_MODEL_DIGEST
-  if [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
-    if ! ollama pull "${PINNED_TRANSLATEGEMMA_MODEL}"; then
-      echo "REFUSED: OLLAMA_PULL_FAILED: ollama pull ${PINNED_TRANSLATEGEMMA_MODEL} failed" >&2
-      exit 1
+  if [ "${POLYGLOT_MODE:-translate}" != "stub" ]; then
+    # 6. Pull model and verify digest against PINNED_MODEL_DIGEST
+    begin_remote_step "model_pull"
+    if [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
+      pull_rc=0
+      ollama pull "${PINNED_TRANSLATEGEMMA_MODEL}" || pull_rc=$?
+      if [ "${pull_rc}" -ne 0 ]; then
+        fail_remote_step "model_pull" "OLLAMA_PULL_FAILED" "ollama pull ${PINNED_TRANSLATEGEMMA_MODEL} failed (rc=${pull_rc})" "${pull_rc}"
+      fi
+    else
+      pull_rc=0
+      curl -sf -X POST "${OLLAMA_URL}/api/pull" -H "Content-Type: application/json" \
+        -d "{\"name\":\"${PINNED_TRANSLATEGEMMA_MODEL}\",\"stream\":false}" >/dev/null || pull_rc=$?
+      if [ "${pull_rc}" -ne 0 ]; then
+        fail_remote_step "model_pull" "OLLAMA_PULL_FAILED" "POST ${OLLAMA_URL}/api/pull for ${PINNED_TRANSLATEGEMMA_MODEL} failed (rc=${pull_rc})" "${pull_rc}"
+      fi
     fi
-  else
-    curl -sf -X POST "${OLLAMA_URL}/api/pull" -H "Content-Type: application/json" \
-      -d "{\"name\":\"${PINNED_TRANSLATEGEMMA_MODEL}\",\"stream\":false}" >/dev/null || true
-  fi
 
-  TAGS_JSON="/content/polyglot_out/ollama_tags.json"
-  curl -sf "${OLLAMA_URL}/api/tags" > "${TAGS_JSON}"
-  VERSION_JSON="/content/polyglot_out/ollama_version.json"
-  curl -sf "${OLLAMA_URL}/api/version" > "${VERSION_JSON}" 2>/dev/null || printf '{"version":"%s"}\n' "${PINNED_OLLAMA_VERSION}" > "${VERSION_JSON}"
+    begin_remote_step "model_digest"
+    TAGS_JSON="/content/polyglot_out/ollama_tags.json"
+    tags_rc=0
+    curl -sf "${OLLAMA_URL}/api/tags" > "${TAGS_JSON}" || tags_rc=$?
+    if [ "${tags_rc}" -ne 0 ] || [ ! -s "${TAGS_JSON}" ]; then
+      fail_remote_step "model_digest" "MODEL_DIGEST_MISMATCH" "failed to read ${OLLAMA_URL}/api/tags (rc=${tags_rc})" "${tags_rc}"
+    fi
+    VERSION_JSON="/content/polyglot_out/ollama_version.json"
+    if [ ! -s "${VERSION_JSON}" ]; then
+      curl -sf "${OLLAMA_URL}/api/version" > "${VERSION_JSON}" 2>/dev/null || printf '{"version":"%s"}\n' "${PINNED_OLLAMA_VERSION}" > "${VERSION_JSON}"
+    fi
 
-  python3 - "${TAGS_JSON}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_MODEL_DIGEST}" << 'DIGPYEOF'
+    python3 - "${TAGS_JSON}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_MODEL_DIGEST}" "${POLYGLOT_STATE_DIR}" << 'DIGPYEOF'
 import json
 import sys
 from pathlib import Path
@@ -910,6 +1294,7 @@ from pathlib import Path
 tags = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 want_model = sys.argv[2]
 want_digest = sys.argv[3].lower().removeprefix("sha256:")
+state_dir = Path(sys.argv[4])
 
 observed_digest = ""
 for m in tags.get("models", []):
@@ -930,36 +1315,46 @@ def _digest_ok(obs: str, want: str) -> bool:
     return len(short) >= MIN_DIGEST_PREFIX and long_.startswith(short)
 
 if not _digest_ok(observed_digest, want_digest):
-    sys.stderr.write(
-        f"REFUSED: MODEL_DIGEST_MISMATCH: model {want_model} digest={observed_digest or 'none'} expected={want_digest}\n"
-    )
+    reason = f"model {want_model} digest={observed_digest or 'none'} expected={want_digest}"
+    why = f"[model_digest] {reason}"
+    marker = {"step": "model_digest", "refusal_code": "MODEL_DIGEST_MISMATCH", "reason": reason, "why": why, "rc": 1}
+    payload = json.dumps(marker, indent=2) + "\n"
+    Path("/content/polyglot_out/remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
+    (state_dir / "remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
+    print("REMOTE_STEP_FAILED_MARKER " + json.dumps(marker), flush=True)
+    sys.stderr.write(f"REFUSED: MODEL_DIGEST_MISMATCH: {why}\n")
     raise SystemExit(1)
 print(f"MODEL_DIGEST_OK model={want_model} digest=sha256:{observed_digest}", flush=True)
 DIGPYEOF
 
-  # 4. VM-side Fit Probe: warm model at translator context, record nvidia-smi memory, KV size, and ollama ps GPU residency
-  curl -sf -X POST "${OLLAMA_URL}/api/generate" -H "Content-Type: application/json" \
-    -d "{\"model\":\"${PINNED_TRANSLATEGEMMA_MODEL}\",\"prompt\":\"Warmup probe.\",\"stream\":false}" > /content/polyglot_out/warmup_response.json
+    # 7. VM-side Fit Probe: warm model at translator context, record nvidia-smi memory, KV size, and ollama ps GPU residency
+    begin_remote_step "fit_probe"
+    warmup_rc=0
+    curl -sf -X POST "${OLLAMA_URL}/api/generate" -H "Content-Type: application/json" \
+      -d "{\"model\":\"${PINNED_TRANSLATEGEMMA_MODEL}\",\"prompt\":\"Warmup probe.\",\"stream\":false}" > /content/polyglot_out/warmup_response.json || warmup_rc=$?
+    if [ "${warmup_rc}" -ne 0 ]; then
+      fail_remote_step "fit_probe" "FIT_PROBE_FAILED" "warmup POST ${OLLAMA_URL}/api/generate failed (rc=${warmup_rc})" "${warmup_rc}"
+    fi
 
-  PS_JSON="/content/polyglot_out/ollama_ps.json"
-  if ! curl -sf "${OLLAMA_URL}/api/ps" > "${PS_JSON}" 2>/dev/null; then
-    printf '{"models":[]}\n' > "${PS_JSON}"
-  fi
-  PS_TEXT="/content/polyglot_out/ollama_ps.txt"
-  if command -v ollama >/dev/null 2>&1; then
-    ollama ps > "${PS_TEXT}" 2>&1 || true
-  else
-    : > "${PS_TEXT}"
-  fi
+    PS_JSON="/content/polyglot_out/ollama_ps.json"
+    if ! curl -sf "${OLLAMA_URL}/api/ps" > "${PS_JSON}" 2>/dev/null; then
+      printf '{"models":[]}\n' > "${PS_JSON}"
+    fi
+    PS_TEXT="/content/polyglot_out/ollama_ps.txt"
+    if command -v ollama >/dev/null 2>&1; then
+      ollama ps > "${PS_TEXT}" 2>&1 || true
+    else
+      : > "${PS_TEXT}"
+    fi
 
-  SMI_CSV="/content/polyglot_out/nvidia_smi.csv"
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi --query-gpu=name,memory.used,memory.total,memory.free --format=csv,noheader,nounits > "${SMI_CSV}" 2>/dev/null || true
-  else
-    : > "${SMI_CSV}"
-  fi
+    SMI_CSV="/content/polyglot_out/nvidia_smi.csv"
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      nvidia-smi --query-gpu=name,memory.used,memory.total,memory.free --format=csv,noheader,nounits > "${SMI_CSV}" 2>/dev/null || true
+    else
+      : > "${SMI_CSV}"
+    fi
 
-  python3 - "${PS_JSON}" "${PS_TEXT}" "${SMI_CSV}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_TRANSLATOR_CONTEXT}" "${COLAB_CARD}" "${PINNED_MODEL_PEAK_VRAM_MIB}" "${PINNED_VRAM_HEADROOM_MIB}" << 'FITPYEOF'
+    python3 - "${PS_JSON}" "${PS_TEXT}" "${SMI_CSV}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_TRANSLATOR_CONTEXT}" "${COLAB_CARD}" "${PINNED_MODEL_PEAK_VRAM_MIB}" "${PINNED_VRAM_HEADROOM_MIB}" "${POLYGLOT_STATE_DIR}" << 'FITPYEOF'
 import json
 import re
 import sys
@@ -973,8 +1368,19 @@ translator_ctx = int(sys.argv[5])
 card = sys.argv[6]
 measured_peak_vram_mib = int(sys.argv[7])
 required_headroom_mib = int(sys.argv[8])
+state_dir = Path(sys.argv[9])
 required_total_vram_mib = measured_peak_vram_mib + required_headroom_mib
 is_cpu_card = card in ("CPU", "CPU-high-mem")
+
+def _fail_probe(code: str, reason: str) -> None:
+    why = f"[fit_probe] {reason}"
+    marker = {"step": "fit_probe", "refusal_code": code, "reason": reason, "why": why, "rc": 1}
+    payload = json.dumps(marker, indent=2) + "\n"
+    Path("/content/polyglot_out/remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
+    (state_dir / "remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
+    print("REMOTE_STEP_FAILED_MARKER " + json.dumps(marker), flush=True)
+    sys.stderr.write(f"REFUSED: {code}: {why}\n")
+    raise SystemExit(1)
 
 ps_data = json.loads(ps_json_p.read_text(encoding="utf-8")) if ps_json_p.is_file() else {}
 ps_text = ps_txt_p.read_text(encoding="utf-8", errors="replace") if ps_txt_p.is_file() else ""
@@ -1058,35 +1464,49 @@ print("FIT_PROBE " + json.dumps(probe), flush=True)
 if not fully_on_gpu:
     # A GPU window refuses any CPU/GPU split immediately; a CPU stub also refuses if a split probe is injected.
     if not is_cpu_card or (processor_str and "CPU" in processor_str and processor_str != "100% CPU"):
-        sys.stderr.write(
-            f"REFUSED: MODEL_NOT_FULLY_ON_GPU: ollama ps reports processor={processor_str!r} gpu_percent={gpu_pct}% (size={size_bytes} size_vram={size_vram_bytes})\n"
+        _fail_probe(
+            "MODEL_NOT_FULLY_ON_GPU",
+            f"ollama ps reports processor={processor_str!r} gpu_percent={gpu_pct}% (size={size_bytes} size_vram={size_vram_bytes})",
         )
-        raise SystemExit(1)
 
 if not is_cpu_card:
     if vram_total_mib is None or vram_total_mib < required_total_vram_mib:
-        sys.stderr.write(
-            f"REFUSED: VRAM_HEADROOM_LOW: card={card} gpu_name={gpu_name!r} vram_total_mib={vram_total_mib} < required_total_vram_mib={required_total_vram_mib} (measured_peak_vram_mib={measured_peak_vram_mib} + required_headroom_mib={required_headroom_mib})\n"
+        _fail_probe(
+            "VRAM_HEADROOM_LOW",
+            f"card={card} gpu_name={gpu_name!r} vram_total_mib={vram_total_mib} < required_total_vram_mib={required_total_vram_mib} (measured_peak_vram_mib={measured_peak_vram_mib} + required_headroom_mib={required_headroom_mib})",
         )
-        raise SystemExit(1)
 FITPYEOF
 
-  # 5. Extract and build the repo at the pinned commit
-  tar -xzf /content/repo_archive.tar.gz -C /content/polyglot_work
-  if [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
-    (
-      cd /content/polyglot_work
-      npm ci
-      npm run build
-    )
-  elif [ ! -d /content/polyglot_work/node_modules ] && [ -d "${REPO_ROOT_FOR_TEST_MODULES:-}" ]; then
-    python3 -c 'import os, subprocess, sys
+    # 8. Extract and build the repo at the pinned commit
+    begin_remote_step "repo_build"
+    repo_tar_rc=0
+    tar -xzf /content/repo_archive.tar.gz -C /content/polyglot_work || repo_tar_rc=$?
+    if [ "${repo_tar_rc}" -ne 0 ]; then
+      fail_remote_step "repo_build" "REPO_BUILD_FAILED" "tar -xzf /content/repo_archive.tar.gz failed (rc=${repo_tar_rc})" "${repo_tar_rc}"
+    fi
+    if [ "${POLYGLOT_TEST_SKIP_VM_INSTALL:-0}" != "1" ]; then
+      build_rc=0
+      (
+        cd /content/polyglot_work
+        npm ci
+        npm run build
+      ) || build_rc=$?
+      if [ "${build_rc}" -ne 0 ]; then
+        fail_remote_step "repo_build" "REPO_BUILD_FAILED" "npm ci && npm run build failed (rc=${build_rc})" "${build_rc}"
+      fi
+    elif [ ! -d /content/polyglot_work/node_modules ] && [ -d "${REPO_ROOT_FOR_TEST_MODULES:-}" ]; then
+      link_rc=0
+      python3 -c 'import os, subprocess, sys
 src, dst = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 if os.name == "nt":
     subprocess.run(["cmd", "/c", "mklink", "/J", dst, src], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 else:
     os.symlink(src, dst)
-' "${REPO_ROOT_FOR_TEST_MODULES}/node_modules" /content/polyglot_work/node_modules
+' "${REPO_ROOT_FOR_TEST_MODULES}/node_modules" /content/polyglot_work/node_modules || link_rc=$?
+      if [ "${link_rc}" -ne 0 ]; then
+        fail_remote_step "repo_build" "REPO_BUILD_FAILED" "failed to link test node_modules (rc=${link_rc})" "${link_rc}"
+      fi
+    fi
   fi
 } 2>&1 | tee -a /content/polyglot_out/setup.log
 
@@ -1106,15 +1526,61 @@ if [ -f "${POLYGLOT_STATE_DIR}/ollama_host" ]; then
   fi
 fi
 
-echo "run" > /content/polyglot_out/phase.txt
-tar -xzf /content/readmes_input.tar.gz -C /content/readmes_in
+if [ "${POLYGLOT_MODE:-translate}" = "stub" ]; then
+  python3 - "/content/polyglot_out" "${REPO_COMMIT}" "${PINNED_OLLAMA_VERSION}" "${PINNED_NODE_VERSION}" << 'STUBPYEOF'
+import json
+import sys
+from pathlib import Path
 
-# 6. Run scripts/translate-all.mjs unchanged for each README (all 7 languages, no --langs),
-#    enforce #67's verified-file receipt & structural check rule, check nav bar, and record timings
-python3 - "/content/polyglot_work" "/content/readmes_in" "/content/polyglot_out" "${PINNED_TRANSLATEGEMMA_MODEL}" "${REPO_COMMIT}" << 'RUNPYEOF'
+out_root = Path(sys.argv[1])
+repo_commit = sys.argv[2]
+pinned_ollama = sys.argv[3]
+pinned_node = sys.argv[4]
+
+ver_data = (
+    json.loads((out_root / "ollama_version.json").read_text(encoding="utf-8"))
+    if (out_root / "ollama_version.json").is_file()
+    else {}
+)
+zstd_ver = (
+    (out_root / "zstd_version.txt").read_text(encoding="utf-8", errors="replace").strip()
+    if (out_root / "zstd_version.txt").is_file()
+    else None
+)
+node_ver = (
+    (out_root / "node_version.txt").read_text(encoding="utf-8", errors="replace").strip()
+    if (out_root / "node_version.txt").is_file()
+    else pinned_node
+)
+vm_win = {
+    "mode": "stub",
+    "stub": True,
+    "repo_commit": repo_commit,
+    "node_version": node_ver,
+    "zstd_version": zstd_ver,
+    "ollama_version": ver_data.get("version") or pinned_ollama,
+    "remote_step": "ollama_serve",
+    "translated_readmes": 0,
+}
+(out_root / "vm_window.json").write_text(json.dumps(vm_win, indent=2) + "\n", encoding="utf-8", newline="\n")
+print("WINDOW_JSON " + json.dumps(vm_win), flush=True)
+STUBPYEOF
+else
+  begin_remote_step "translate"
+  echo "run" > /content/polyglot_out/phase.txt
+  readmes_tar_rc=0
+  tar -xzf /content/readmes_input.tar.gz -C /content/readmes_in || readmes_tar_rc=$?
+  if [ "${readmes_tar_rc}" -ne 0 ]; then
+    fail_remote_step "translate" "TRANSLATION_FAILED" "tar -xzf /content/readmes_input.tar.gz failed (rc=${readmes_tar_rc})" "${readmes_tar_rc}"
+  fi
+
+  # 9. Run scripts/translate-all.mjs unchanged for each README (all 7 languages, no --langs),
+  #    enforce #67's verified-file receipt & structural check rule, check nav bar, and record timings
+  python3 - "/content/polyglot_work" "/content/readmes_in" "/content/polyglot_out" "${PINNED_TRANSLATEGEMMA_MODEL}" "${REPO_COMMIT}" "${POLYGLOT_STATE_DIR}" << 'RUNPYEOF'
 import hashlib
 import json
 import os
+import re as _re
 import shutil
 import subprocess
 import sys
@@ -1126,6 +1592,25 @@ in_root = Path(sys.argv[2])
 out_root = Path(sys.argv[3])
 model_name = sys.argv[4]
 repo_commit = sys.argv[5]
+state_dir = Path(sys.argv[6])
+
+def _fail_translate(code: str, reason: str, raw_stderr: str = "") -> None:
+    shutil.rmtree(out_root / "_staging_translations", ignore_errors=True)
+    shutil.rmtree(out_root / "translations", ignore_errors=True)
+    why = reason if reason.startswith("[translate]") else f"[translate] {reason}"
+    marker = {"step": "translate", "refusal_code": code, "reason": reason, "why": why, "rc": 1}
+    payload = json.dumps(marker, indent=2) + "\n"
+    (out_root / "remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
+    (state_dir / "remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
+    print("REMOTE_STEP_FAILED_MARKER " + json.dumps(marker), flush=True)
+    line = f"REFUSED: {code}: {why}\n"
+    if raw_stderr and "REFUSED:" not in raw_stderr:
+        sys.stderr.write(raw_stderr if raw_stderr.endswith("\n") else raw_stderr + "\n")
+    sys.stderr.write(line)
+    sys.stderr.flush()
+    with (out_root / "setup.log").open("a", encoding="utf-8") as sf:
+        sf.write(line)
+    raise SystemExit(1)
 
 langs = ["ja", "zh", "es", "fr", "hi", "it", "pt"]
 lang_file_map = {
@@ -1170,6 +1655,13 @@ for slot in slots:
     sys.stdout.flush()
     sys.stderr.flush()
 
+    if proc.returncode != 0 and "POLYGLOT_COMPLETE" not in (proc.stdout or ""):
+        err_snip = ((proc.stderr or "").strip().splitlines() or [""])[-1][:200]
+        _fail_translate(
+            "TRANSLATION_FAILED",
+            f"translate-all.mjs exited {proc.returncode} for {slot.name}" + (f": {err_snip}" if err_snip else ""),
+        )
+
     # Parse structured summary from translate-all.mjs stdout
     summary_json = {}
     if "POLYGLOT_COMPLETE" in proc.stdout:
@@ -1203,7 +1695,6 @@ for slot in slots:
     if drop_lang:
         drop_file = lang_file_map.get(drop_lang, f"README.{drop_lang}.md")
         txt = src_readme.read_text(encoding="utf-8")
-        import re as _re
         txt = _re.sub(rf'\s*\|\s*<a href="{_re.escape(drop_file)}">[^<]*</a>', "", txt)
         txt = _re.sub(rf'<a href="{_re.escape(drop_file)}">[^<]*</a>\s*\|\s*', "", txt)
         src_readme.write_text(txt, encoding="utf-8")
@@ -1265,22 +1756,17 @@ for slot in slots:
         check=False,
     )
     if nav_check_proc.returncode != 0:
-        shutil.rmtree(staging_root, ignore_errors=True)
-        shutil.rmtree(outputs_root, ignore_errors=True)
-        sys.stderr.write(nav_check_proc.stderr)
-        sys.stderr.flush()
-        with (out_root / "setup.log").open("a", encoding="utf-8") as sf:
-            sf.write(nav_check_proc.stderr)
-        raise SystemExit(1)
+        ref_m = _re.search(r"^REFUSED:\s+([A-Z0-9_]+):\s*(.*)$", nav_check_proc.stderr or "", _re.M)
+        if ref_m:
+            _fail_translate(ref_m.group(1), ref_m.group(2).strip())
+        _fail_translate(
+            "TRANSLATION_FAILED",
+            f"verification script failed (rc={nav_check_proc.returncode}) for {slot.name}",
+            nav_check_proc.stderr or "",
+        )
 
     if proc.returncode != 0:
-        shutil.rmtree(staging_root, ignore_errors=True)
-        shutil.rmtree(outputs_root, ignore_errors=True)
-        msg = f"REFUSED: TRANSLATION_FAILED: translate-all.mjs exited {proc.returncode} for {slot.name}\n"
-        sys.stderr.write(msg)
-        with (out_root / "setup.log").open("a", encoding="utf-8") as sf:
-            sf.write(msg)
-        raise SystemExit(1)
+        _fail_translate("TRANSLATION_FAILED", f"translate-all.mjs exited {proc.returncode} for {slot.name}")
 
     verify_payload = json.loads(nav_check_proc.stdout.strip())
     dest_dir = staging_root if single_slot else (staging_root / slot.name)
@@ -1291,13 +1777,7 @@ for slot in slots:
     for fname in copied_files:
         fp = slot / fname
         if not fp.is_file():
-            shutil.rmtree(staging_root, ignore_errors=True)
-            shutil.rmtree(outputs_root, ignore_errors=True)
-            msg = f"REFUSED: TRANSLATION_FAILED: expected output file {fname} missing for {slot.name}\n"
-            sys.stderr.write(msg)
-            with (out_root / "setup.log").open("a", encoding="utf-8") as sf:
-                sf.write(msg)
-            raise SystemExit(1)
+            _fail_translate("TRANSLATION_FAILED", f"expected output file {fname} missing for {slot.name}")
         dst_fp = dest_dir / fname
         shutil.copy2(fp, dst_fp)
         f_hex = hashlib.sha256(dst_fp.read_bytes()).hexdigest()
@@ -1337,6 +1817,16 @@ sha_lines = [f"{h}  {rel}\n" for h, rel in sorted(all_sha_entries, key=lambda x:
 model_digest = (out_root / "model_digest.txt").read_text(encoding="utf-8").strip() if (out_root / "model_digest.txt").is_file() else ""
 ver_data = json.loads((out_root / "ollama_version.json").read_text(encoding="utf-8")) if (out_root / "ollama_version.json").is_file() else {}
 fit_probe = json.loads((out_root / "fit_probe.json").read_text(encoding="utf-8")) if (out_root / "fit_probe.json").is_file() else {}
+zstd_ver = (
+    (out_root / "zstd_version.txt").read_text(encoding="utf-8", errors="replace").strip()
+    if (out_root / "zstd_version.txt").is_file()
+    else None
+)
+node_ver = (
+    (out_root / "node_version.txt").read_text(encoding="utf-8", errors="replace").strip()
+    if (out_root / "node_version.txt").is_file()
+    else None
+)
 
 manifest = {
     "schema_version": 1,
@@ -1344,6 +1834,7 @@ manifest = {
     "model": model_name,
     "model_digest": model_digest,
     "ollama_version": ver_data.get("version", ""),
+    "zstd_version": zstd_ver,
     "languages": langs,
     "fit_probe": fit_probe,
     "readmes": readme_manifests,
@@ -1352,16 +1843,24 @@ manifest = {
 (out_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 vm_win = {
+    "mode": "paid",
+    "stub": False,
     "repo_commit": repo_commit,
     "model": model_name,
     "model_digest": model_digest,
     "ollama_version": ver_data.get("version", ""),
     "fit_probe": fit_probe,
+    "remote_step": "translate",
     "translated_readmes": len(readme_manifests),
 }
+if zstd_ver:
+    vm_win["zstd_version"] = zstd_ver
+if node_ver:
+    vm_win["node_version"] = node_ver
 (out_root / "vm_window.json").write_text(json.dumps(vm_win, indent=2) + "\n", encoding="utf-8", newline="\n")
 print("WINDOW_JSON " + json.dumps(vm_win), flush=True)
 RUNPYEOF
+fi
 
 stop_writers
 f_scrub_args=()
@@ -1386,7 +1885,9 @@ colab_check_pre_exec_cap "${OUT_DIR}"
 
 # Upload inputs flat into /content
 colab_upload_checked "${SESSION}" "${REPO_ARCHIVE}" /content/repo_archive.tar.gz "${OUT_DIR}"
-colab_upload_checked "${SESSION}" "${READMES_TAR_PATH}" /content/readmes_input.tar.gz "${OUT_DIR}"
+if [ "${HAS_READMES}" = "1" ]; then
+  colab_upload_checked "${SESSION}" "${READMES_TAR_PATH}" /content/readmes_input.tar.gz "${OUT_DIR}"
+fi
 colab_upload_checked "${SESSION}" "${GUARDS_PY}" /content/launch_guards.py "${OUT_DIR}"
 if [ -n "${TOKEN_DIR}" ] && [ -f "${TOKEN_DIR}/polyglot_token" ]; then
   colab_upload_checked "${SESSION}" "${TOKEN_DIR}/polyglot_token" /content/polyglot_token "${OUT_DIR}"
@@ -1395,44 +1896,7 @@ if [ -n "${TOKEN_DIR}" ] && [ -f "${TOKEN_DIR}/polyglot_token" ]; then
 fi
 colab_upload_checked "${SESSION}" "${REMOTE_SCRIPT}" /content/remote_translate.sh "${OUT_DIR}"
 
-REMOTE_ENV=(
-  "SDLAB_REMOTE_SCRIPT=/content/remote_translate.sh"
-  "PINNED_NODE_VERSION=${PINNED_NODE_VERSION}"
-  "PINNED_NODE_TAR_SHA256=${POLYGLOT_TEST_NODE_TAR_SHA256:-${PINNED_NODE_TAR_SHA256}}"
-  "PINNED_OLLAMA_VERSION=${PINNED_OLLAMA_VERSION}"
-  "PINNED_OLLAMA_LINUX_AMD64_SHA256=${POLYGLOT_TEST_OLLAMA_TAR_SHA256:-${PINNED_OLLAMA_LINUX_AMD64_SHA256}}"
-  "PINNED_TRANSLATEGEMMA_MODEL=${PINNED_TRANSLATEGEMMA_MODEL}"
-  "PINNED_MODEL_DIGEST=${POLYGLOT_TEST_MODEL_DIGEST:-${PINNED_MODEL_DIGEST}}"
-  "PINNED_TRANSLATOR_CONTEXT=${PINNED_TRANSLATOR_CONTEXT}"
-  "PINNED_MODEL_PEAK_VRAM_MIB=${PINNED_MODEL_PEAK_VRAM_MIB}"
-  "PINNED_VRAM_HEADROOM_MIB=${PINNED_VRAM_HEADROOM_MIB}"
-  "COLAB_CARD=${CARD}"
-  "REPO_COMMIT=${REPO_COMMIT}"
-)
-if [ "${TEST_MODE}" = "1" ]; then
-  REMOTE_ENV+=("REPO_ROOT_FOR_TEST_MODULES=${REPO_ROOT}")
-  if [ -n "${POLYGLOT_TEST_FAKE_OLLAMA_URL:-}" ]; then
-    REMOTE_ENV+=("OLLAMA_HOST=${POLYGLOT_TEST_FAKE_OLLAMA_URL}")
-  fi
-  if [ -n "${POLYGLOT_TEST_SKIP_VM_INSTALL:-}" ]; then
-    REMOTE_ENV+=("POLYGLOT_TEST_SKIP_VM_INSTALL=${POLYGLOT_TEST_SKIP_VM_INSTALL}")
-  fi
-  if [ -n "${POLYGLOT_TEST_DROP_NAV_BAR_LANG:-}" ]; then
-    REMOTE_ENV+=("POLYGLOT_TEST_DROP_NAV_BAR_LANG=${POLYGLOT_TEST_DROP_NAV_BAR_LANG}")
-  fi
-  if [ -n "${POLYGLOT_TEST_CORRUPT_RECEIPT_LANG:-}" ]; then
-    REMOTE_ENV+=("POLYGLOT_TEST_CORRUPT_RECEIPT_LANG=${POLYGLOT_TEST_CORRUPT_RECEIPT_LANG}")
-  fi
-  if [ -n "${POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT:-}" ]; then
-    REMOTE_ENV+=("POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT=${POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT}")
-  fi
-  if [ -n "${POLYGLOT_TEST_NODE_TAR_URL:-}" ]; then
-    REMOTE_ENV+=("POLYGLOT_TEST_NODE_TAR_URL=${POLYGLOT_TEST_NODE_TAR_URL}")
-  fi
-  if [ -n "${POLYGLOT_TEST_OLLAMA_TAR_URL:-}" ]; then
-    REMOTE_ENV+=("POLYGLOT_TEST_OLLAMA_TAR_URL=${POLYGLOT_TEST_OLLAMA_TAR_URL}")
-  fi
-fi
+build_remote_env "${TEST_MODE}" "${REPO_COMMIT}"
 
 colab_check_pre_exec_cap "${OUT_DIR}"
 EXEC_IN_FLIGHT=1
@@ -1465,7 +1929,16 @@ with tarfile.open(bundle, "r:gz") as tf:
     except TypeError:
         tf.extractall(extract_dir)
 
-for name in ("manifest.json", "SHA256SUMS", "fit_probe.json", "vm_window.json"):
+for name in (
+    "manifest.json",
+    "SHA256SUMS",
+    "fit_probe.json",
+    "vm_window.json",
+    "remote_failure.json",
+    "remote_step.txt",
+    "zstd_version.txt",
+    "node_version.txt",
+):
     src = extract_dir / name
     if src.is_file():
         shutil.copy2(src, out_dir / name)

@@ -12,13 +12,16 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,6 +67,9 @@ interface FakeOllamaConfig {
   contextLength: number;
   kvCacheMib: number;
   ollamaVersion: string;
+  failTagsHttp?: boolean;
+  failPullHttp?: boolean;
+  failWarmupProbe?: boolean;
 }
 
 const ollamaState: FakeOllamaConfig = {
@@ -74,11 +80,81 @@ const ollamaState: FakeOllamaConfig = {
   contextLength: 4096,
   kvCacheMib: 1536.0,
   ollamaVersion: "0.40.15",
+  failTagsHttp: false,
+  failPullHttp: false,
+  failWarmupProbe: false,
 };
 
 let server: Server;
 let ollamaUrl = "";
 const fixtureBuffers: Record<string, Buffer> = {};
+let zstdShadowRoot: string | null = null;
+const zstdShadowCache = new Map<string, string>();
+let cachedInstallArchives: {
+  nodeBuf: Buffer;
+  ollamaBuf: Buffer;
+  nodeSha: string;
+  ollamaSha: string;
+} | null = null;
+
+function getZstdFreePath(basePath: string): string {
+  const parts = basePath.split(delimiter);
+  const out: string[] = [];
+  for (const dir of parts) {
+    if (!dir || !existsSync(dir)) {
+      if (dir) out.push(dir);
+      continue;
+    }
+    const hasZstd =
+      existsSync(join(dir, "zstd")) ||
+      existsSync(join(dir, "zstd.exe")) ||
+      existsSync(join(dir, "unzstd")) ||
+      existsSync(join(dir, "unzstd.exe"));
+    if (!hasZstd) {
+      out.push(dir);
+      continue;
+    }
+    let shadow = zstdShadowCache.get(dir);
+    if (!shadow) {
+      if (!zstdShadowRoot) {
+        zstdShadowRoot = mkdtempSync(join(tmpdir(), "polyglot-no-zstd-path-"));
+      }
+      shadow = join(zstdShadowRoot, `dir_${zstdShadowCache.size}`);
+      mkdirSync(shadow, { recursive: true });
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const low = ent.name.toLowerCase();
+        if (
+          low === "zstd" ||
+          low.startsWith("zstd.") ||
+          low.startsWith("zstd-") ||
+          low === "zstdcat" ||
+          low.startsWith("zstdcat.") ||
+          low === "zstdgrep" ||
+          low === "zstdless" ||
+          low === "zstdmt" ||
+          low === "unzstd" ||
+          low.startsWith("unzstd.")
+        ) {
+          continue;
+        }
+        const src = join(dir, ent.name);
+        const dst = join(shadow, ent.name);
+        if (process.platform !== "win32") {
+          symlinkSync(src, dst);
+        } else if (ent.isFile()) {
+          try {
+            linkSync(src, dst);
+          } catch {
+            copyFileSync(src, dst);
+          }
+        }
+      }
+      zstdShadowCache.set(dir, shadow);
+    }
+    out.push(shadow);
+  }
+  return out.join(delimiter);
+}
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -92,6 +168,11 @@ beforeAll(async () => {
       }
       res.setHeader("content-type", "application/json");
       if (req.url === "/api/tags") {
+        if (ollamaState.failTagsHttp) {
+          res.statusCode = 503;
+          res.end(JSON.stringify({ error: "tags unavailable" }));
+          return;
+        }
         res.end(
           JSON.stringify({
             models: [
@@ -130,6 +211,11 @@ beforeAll(async () => {
         return;
       }
       if (req.url === "/api/pull") {
+        if (ollamaState.failPullHttp) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: "pull failed" }));
+          return;
+        }
         res.end(JSON.stringify({ status: "success" }) + "\n");
         return;
       }
@@ -137,6 +223,11 @@ beforeAll(async () => {
         const parsed = JSON.parse(body || "{}") as { prompt?: string };
         const prompt = parsed.prompt ?? "";
         if (prompt === "Warmup probe.") {
+          if (ollamaState.failWarmupProbe) {
+            res.statusCode = 500;
+            res.end(JSON.stringify({ error: "warmup probe failed" }));
+            return;
+          }
           res.end(JSON.stringify({ model: "translategemma:27b", response: "OK", done: true }));
           return;
         }
@@ -172,6 +263,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (zstdShadowRoot) {
+    rmDirRetry(zstdShadowRoot);
+    zstdShadowRoot = null;
+  }
 });
 
 /**
@@ -479,6 +574,12 @@ if subcmd == "exec":
         else:
             i += 1
     code = Path(py_file).read_text(encoding="utf-8")
+    crash_step = os.environ.get("FAKE_COLAB_EXEC_DIE_AT_STEP", "").strip()
+    if crash_step and py_file and Path(py_file).name == "remote_runner.py":
+        print(f"REMOTE_STEP step={crash_step}", flush=True)
+        sys.stderr.write("connection reset during remote step\\n")
+        sys.exit(255)
+    env_vars["FAKE_COLAB_IN_VM"] = "1"
     # Rewrite /content paths in the uploaded scripts to point to content_dir
     import re as _re
     c_posix = content_dir.as_posix()
@@ -524,31 +625,156 @@ exec python "$@"
       "utf-8",
     );
     chmodSync(py3Wrapper, 0o755);
+  }
 
-    const tarWrapper = join(binDir, "tar");
-    writeFileSync(
-      tarWrapper,
-      `#!/usr/bin/env bash
-exec /usr/bin/tar --force-local "$@"
-`,
-      "utf-8",
-    );
-    chmodSync(tarWrapper, 0o755);
+  const vmLogSnippet = (printfCmd: string) =>
+    [
+      'if [ "${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "${FAKE_COLAB_STATE_DIR:-}" ]; then',
+      "  for _vml_i in 1 2 3 4 5; do",
+      `    if ( ${printfCmd} >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log" ) 2>/dev/null; then break; fi`,
+      "    sleep 0.02 2>/dev/null || true",
+      "  done",
+      "fi",
+    ].join("\n");
 
-    const zstdWrapper = join(binDir, "zstd");
-    writeFileSync(
-      zstdWrapper,
-      `#!/usr/bin/env bash
-if [[ " $* " == *" -d "* ]]; then
+  // Stock Colab VM has NO pre-installed `zstd`: keep the zstd implementation in `stateDir`
+  // and install it into `binDir/zstd` ONLY when `apt-get install ... zstd` runs.
+  const fakeZstdImpl = join(stateDir, "fake_zstd_impl.sh");
+  writeFileSync(
+    fakeZstdImpl,
+    `#!/usr/bin/env bash
+${vmLogSnippet(`printf 'zstd\\t%s\\n' "$*"`)}
+for arg in "$@"; do
+  if [ "$arg" = "--version" ] || [ "$arg" = "-V" ]; then
+    echo "*** Zstandard CLI (64-bit) v1.5.5, by Yann Collet ***"
+    exit 0
+  fi
+done
+if [ -x /usr/bin/zstd ]; then
+  exec /usr/bin/zstd "$@"
+elif [[ " $* " == *" -d "* ]]; then
   exec gzip -d
 else
   exec gzip -c
 fi
 `,
-      "utf-8",
-    );
-    chmodSync(zstdWrapper, 0o755);
-  }
+    "utf-8",
+  );
+  chmodSync(fakeZstdImpl, 0o755);
+
+  const binDirPosix = binDir.replace(/\\/g, "/");
+  const fakeZstdPosix = fakeZstdImpl.replace(/\\/g, "/");
+  const aptGetWrapper = join(binDir, "apt-get");
+  writeFileSync(
+    aptGetWrapper,
+    `#!/usr/bin/env bash
+${vmLogSnippet(`printf 'apt-get\\tDEBIAN_FRONTEND=%s %s\\n' "\${DEBIAN_FRONTEND:-}" "$*"`)}
+if [ "\${FAKE_APT_FAIL:-0}" = "1" ]; then
+  echo "E: Unable to locate package zstd" >&2
+  exit 100
+fi
+if [ "\${FAKE_APT_NOOP:-0}" = "1" ]; then
+  echo "apt-get noop: package list empty"
+  exit 0
+fi
+has_install=0
+has_zstd=0
+for arg in "$@"; do
+  [ "$arg" = "install" ] && has_install=1
+  [ "$arg" = "zstd" ] && has_zstd=1
+done
+if [ "$has_install" = "1" ] && [ "$has_zstd" = "1" ]; then
+  cp "${fakeZstdPosix}" "${binDirPosix}/zstd"
+  chmod +x "${binDirPosix}/zstd"
+  echo "Setting up zstd (1.5.5+dfsg2-2build1) ..."
+fi
+exit 0
+`,
+    "utf-8",
+  );
+  chmodSync(aptGetWrapper, 0o755);
+
+  const findRealBinBash = [
+    'self_dir="$(cd "$(dirname "$0")" && pwd)"',
+    "find_real_bin() {",
+    '  local name="$1" d dp',
+    '  local IFS=":"',
+    "  for d in $PATH; do",
+    '    [ -n "$d" ] || continue',
+    '    dp="$(cd "$d" 2>/dev/null && pwd)" || continue',
+    '    [ "$dp" = "$self_dir" ] && continue',
+    '    if [ -x "$d/$name" ]; then',
+    "      printf '%s\\n' \"$d/$name\"",
+    "      return 0",
+    "    fi",
+    "  done",
+    "  return 1",
+    "}",
+  ].join("\n");
+
+  const curlWrapper = join(binDir, "curl");
+  writeFileSync(
+    curlWrapper,
+    `#!/usr/bin/env bash
+${vmLogSnippet(`printf 'curl\\t%s\\n' "$*"`)}
+if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
+  if [ -n "\${FAKE_CURL_FAIL_MATCH:-}" ] && [[ "$*" == *"\${FAKE_CURL_FAIL_MATCH}"* ]]; then
+    echo "curl: (22) The requested URL returned error: 503 (\${FAKE_CURL_FAIL_MATCH})" >&2
+    exit 22
+  fi
+fi
+${findRealBinBash}
+real_bin="\$(find_real_bin curl)"
+exec "$real_bin" "$@"
+`,
+    "utf-8",
+  );
+  chmodSync(curlWrapper, 0o755);
+
+  const shaWrapper = join(binDir, "sha256sum");
+  writeFileSync(
+    shaWrapper,
+    `#!/usr/bin/env bash
+${vmLogSnippet(`printf 'sha256sum\\t%s\\n' "$*"`)}
+if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
+  if [ -n "\${FAKE_SHA256SUM_FAIL_MATCH:-}" ] && [[ "$*" == *"\${FAKE_SHA256SUM_FAIL_MATCH}"* ]]; then
+    echo "sha256sum: simulated unexpected I/O error" >&2
+    exit 42
+  fi
+fi
+${findRealBinBash}
+real_bin="\$(find_real_bin sha256sum)"
+exec "$real_bin" "$@"
+`,
+    "utf-8",
+  );
+  chmodSync(shaWrapper, 0o755);
+
+  const tarExecTail =
+    process.platform === "win32"
+      ? 'exec /usr/bin/tar --force-local "$@"'
+      : `${findRealBinBash}\nreal_bin="$(find_real_bin tar)"\nexec "$real_bin" "$@"`;
+  const tarWrapper = join(binDir, "tar");
+  writeFileSync(
+    tarWrapper,
+    `#!/usr/bin/env bash
+${vmLogSnippet(`printf 'tar\\t%s\\n' "$*"`)}
+if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
+  if [ "\${FAKE_TAR_NO_ZSTD:-0}" = "1" ] && [[ " $* " == *" --zstd "* ]]; then
+    echo "tar: unrecognized option '--zstd'" >&2
+    echo "Try 'tar --help' or 'tar --usage' for more information." >&2
+    exit 2
+  fi
+  if [ -n "\${FAKE_TAR_FAIL_MATCH:-}" ] && [[ "$*" == *"\${FAKE_TAR_FAIL_MATCH}"* ]]; then
+    echo "tar: simulated unpack error (\${FAKE_TAR_FAIL_MATCH})" >&2
+    exit 2
+  fi
+fi
+${tarExecTail}
+`,
+    "utf-8",
+  );
+  chmodSync(tarWrapper, 0o755);
 
   const fakeNvidiaSmi = join(binDir, "nvidia-smi");
   writeFileSync(
@@ -564,7 +790,7 @@ echo "\${FAKE_NVIDIA_SMI_LINE:-NVIDIA A100-SXM4-40GB, 22547, 40960, 18413}"
   );
   chmodSync(fakeNvidiaSmi, 0o755);
 
-  const pathParts = [
+  const rawPathParts = [
     binDir,
     dirname(process.execPath),
     ...(process.platform === "win32"
@@ -575,7 +801,7 @@ echo "\${FAKE_NVIDIA_SMI_LINE:-NVIDIA A100-SXM4-40GB, 22547, 40960, 18413}"
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    PATH: pathParts.join(delimiter),
+    PATH: getZstdFreePath(rawPathParts.join(delimiter)),
     MSYS2_ARG_CONV_EXCL: "/content;SDLAB_",
     SDLAB_TEST_FAKE_COLAB: "1",
     COLAB_OPEN_LOCK: join(stateDir, "colab-window-open.lock").replace(/\\/g, "/"),
@@ -649,6 +875,232 @@ function runLauncher(args: string[], env: Record<string, string>): Promise<{ cod
     });
     child.on("close", (code) => finish(code));
   });
+}
+
+function getRealInstallFixtureArchives() {
+  if (cachedInstallArchives) return cachedInstallArchives;
+  const buildTmp = mkdtempSync(join(tmpdir(), "polyglot-install-fixtures-"));
+  try {
+    const fixBinDir = join(buildTmp, "fix_bin");
+    const fixBuildDir = join(buildTmp, "fixtures_build");
+    const nodeStage = join(fixBuildDir, "node-v22.22.3-linux-x64", "bin");
+    const ollamaStage = join(fixBuildDir, "ollama_pkg", "bin");
+    mkdirSync(fixBinDir, { recursive: true });
+    mkdirSync(nodeStage, { recursive: true });
+    mkdirSync(ollamaStage, { recursive: true });
+
+    if (process.platform === "win32") {
+      const fixTar = join(fixBinDir, "tar");
+      writeFileSync(fixTar, "#!/usr/bin/env bash\nexec /usr/bin/tar --force-local \"$@\"\n", "utf-8");
+      chmodSync(fixTar, 0o755);
+    }
+    const fixZstd = join(fixBinDir, "zstd");
+    writeFileSync(
+      fixZstd,
+      `#!/usr/bin/env bash
+if [ -x /usr/bin/zstd ]; then
+  exec /usr/bin/zstd "$@"
+elif [[ " $* " == *" -d "* ]]; then
+  exec gzip -d
+else
+  exec gzip -c
+fi
+`,
+      "utf-8",
+    );
+    chmodSync(fixZstd, 0o755);
+
+    const hostNodePosix = process.execPath.replace(/\\/g, "/");
+    const repoRootPosix = root.replace(/\\/g, "/");
+    const stageLogSnippet = (printfCmd: string, relFile = "vm_commands.log", requireInVm = true) => {
+      const cond = requireInVm
+        ? '[ "${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "${FAKE_COLAB_STATE_DIR:-}" ]'
+        : '[ -n "${FAKE_COLAB_STATE_DIR:-}" ]';
+      return [
+        `if ${cond}; then`,
+        "  for _vml_i in 1 2 3 4 5; do",
+        `    if ( ${printfCmd} >> "\${FAKE_COLAB_STATE_DIR}/${relFile}" ) 2>/dev/null; then break; fi`,
+        "    sleep 0.02 2>/dev/null || true",
+        "  done",
+        "fi",
+      ].join("\n");
+    };
+
+    writeFileSync(
+      join(nodeStage, "node"),
+      `#!/usr/bin/env bash
+${stageLogSnippet(`printf 'node\\t%s\\n' "$*"`)}
+${stageLogSnippet(`printf '%s|%s\\n' "$0" "\${OLLAMA_HOST:-}"`, "node_marker.txt", false)}
+if [ "\${FAKE_TRANSLATE_ALL_FAIL:-0}" = "1" ] && [[ "$*" == *"translate-all.mjs"* ]]; then
+  echo "Fatal error in translate-all.mjs: simulated crash" >&2
+  exit 17
+fi
+exec "${hostNodePosix}" "$@"
+`,
+      "utf-8",
+    );
+    chmodSync(join(nodeStage, "node"), 0o755);
+
+    writeFileSync(
+      join(nodeStage, "npm"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+${stageLogSnippet(`printf 'npm\\t%s\\n' "$*"`)}
+if [ "\${1:-}" = "ci" ]; then
+  if [ "\${FAKE_NPM_CI_FAIL:-0}" = "1" ]; then
+    echo "npm ERR! code EINTEGRITY: simulated npm ci failure" >&2
+    exit 1
+  fi
+  if [ ! -d node_modules ]; then
+    python3 -c 'import os, subprocess, sys
+src, dst = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
+if os.name == "nt":
+    subprocess.run(["cmd", "/c", "mklink", "/J", dst, src], check=True)
+else:
+    os.symlink(src, dst)
+' "${repoRootPosix}/node_modules" "./node_modules"
+  fi
+  echo "npm ci: linked node_modules"
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "build" ]; then
+  if [ "\${FAKE_NPM_BUILD_FAIL:-0}" = "1" ]; then
+    echo "npm ERR! code ELIFECYCLE: simulated npm run build failure" >&2
+    exit 2
+  fi
+  "${hostNodePosix}" ./node_modules/typescript/bin/tsc
+  if [ "\${FAKE_TRANSLATE_ALL_FAIL:-0}" = "1" ] && [ -f ./scripts/translate-all.mjs ]; then
+    printf '%s\n' 'console.error("Fatal error in translate-all.mjs: simulated crash"); process.exit(17);' > ./scripts/translate-all.mjs
+  fi
+  echo "npm run build: tsc completed"
+  exit 0
+fi
+exit 0
+`,
+      "utf-8",
+    );
+    chmodSync(join(nodeStage, "npm"), 0o755);
+
+    writeFileSync(
+      join(ollamaStage, "ollama"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+${stageLogSnippet(`printf 'ollama\\t%s\\n' "$*"`)}
+case "\${1:-}" in
+  serve)
+    if [ "\${FAKE_OLLAMA_SERVE_FAIL:-0}" = "1" ]; then
+      echo "Error: listen tcp 127.0.0.1:11434: bind: address already in use" >&2
+      exit 1
+    fi
+    echo "ollama serve stub started"
+    if [ "\${FAKE_OLLAMA_SERVE_IGNORE_TERM:-0}" = "1" ]; then
+      trap 'echo "ollama serve ignores TERM"' TERM
+    fi
+    while :; do
+      echo "ollama serve heartbeat"
+      sleep 0.2 || true
+    done
+    ;;
+  --version|-v)
+    echo "ollama version is 0.40.15"
+    ;;
+  pull)
+    if [ "\${FAKE_OLLAMA_PULL_FAIL:-0}" = "1" ]; then
+      echo "Error: pull model manifest: 500 Internal Server Error" >&2
+      exit 1
+    fi
+    curl -sf -X POST "\${OLLAMA_HOST:-${ollamaUrl}}/api/pull" -H "Content-Type: application/json" -d "{\\"name\\":\\"\${2:-translategemma:27b}\\",\\"stream\\":false}" >/dev/null
+    echo "pulling manifest... success"
+    ;;
+  ps)
+    echo "NAME                  ID              SIZE     PROCESSOR    UNTIL"
+    echo "translategemma:27b    21b597a243ec    17 GB    100% GPU     4 minutes from now"
+    ;;
+esac
+`,
+      "utf-8",
+    );
+    chmodSync(join(ollamaStage, "ollama"), 0o755);
+
+    const buildPathParts = [
+      fixBinDir,
+      ...(process.platform === "win32"
+        ? ["C:\\Program Files\\Git\\mingw64\\bin", "C:\\Program Files\\Git\\bin", "C:\\Program Files\\Git\\usr\\bin"]
+        : []),
+      ...((process.env.PATH ?? "").split(delimiter).filter(Boolean)),
+    ];
+    const buildEnv = {
+      ...process.env,
+      PATH: buildPathParts.join(delimiter),
+    };
+
+    const nodeTarXz = join(fixBuildDir, "node.tar.xz");
+    const ollamaTarZst = join(fixBuildDir, "ollama.tar.zst");
+    const tarRes1 = spawnSync(
+      bashBin,
+      ["-c", `tar -cJf "${nodeTarXz.replace(/\\/g, "/")}" -C "${fixBuildDir.replace(/\\/g, "/")}" node-v22.22.3-linux-x64`],
+      { env: buildEnv, encoding: "utf-8" },
+    );
+    expect(tarRes1.status).toBe(0);
+
+    const tarRes2 = spawnSync(
+      bashBin,
+      ["-c", `tar --zstd -cf "${ollamaTarZst.replace(/\\/g, "/")}" -C "${join(fixBuildDir, "ollama_pkg").replace(/\\/g, "/")}" bin`],
+      { env: buildEnv, encoding: "utf-8" },
+    );
+    expect(tarRes2.status).toBe(0);
+
+    const nodeBuf = readFileSync(nodeTarXz);
+    const ollamaBuf = readFileSync(ollamaTarZst);
+    cachedInstallArchives = {
+      nodeBuf,
+      ollamaBuf,
+      nodeSha: createHash("sha256").update(nodeBuf).digest("hex"),
+      ollamaSha: createHash("sha256").update(ollamaBuf).digest("hex"),
+    };
+    return cachedInstallArchives;
+  } finally {
+    rmSync(buildTmp, { recursive: true, force: true });
+  }
+}
+
+function setupRealInstallEnv(
+  baseDir: string,
+  extraEnv: Record<string, string> = {},
+  opts: { forStub?: boolean } = {},
+) {
+  const { nodeBuf, ollamaBuf, nodeSha, ollamaSha } = getRealInstallFixtureArchives();
+  fixtureBuffers["/fixtures/node.tar.xz"] = nodeBuf;
+  fixtureBuffers["/fixtures/ollama.tar.zst"] = ollamaBuf;
+
+  const { binDir, stateDir, contentDir, env } = makeFakeColabEnv(baseDir, extraEnv);
+  if (opts.forStub && !("POLYGLOT_TEST_SKIP_VM_INSTALL" in extraEnv)) {
+    delete env.POLYGLOT_TEST_SKIP_VM_INSTALL;
+  } else if (!("POLYGLOT_TEST_SKIP_VM_INSTALL" in extraEnv)) {
+    env.POLYGLOT_TEST_SKIP_VM_INSTALL = "0";
+  }
+  if (!("POLYGLOT_TEST_NODE_TAR_URL" in extraEnv)) {
+    env.POLYGLOT_TEST_NODE_TAR_URL = `${ollamaUrl}/fixtures/node.tar.xz`;
+  }
+  if (!("POLYGLOT_TEST_NODE_TAR_SHA256" in extraEnv)) {
+    env.POLYGLOT_TEST_NODE_TAR_SHA256 = nodeSha;
+  }
+  if (!("POLYGLOT_TEST_OLLAMA_TAR_URL" in extraEnv)) {
+    env.POLYGLOT_TEST_OLLAMA_TAR_URL = `${ollamaUrl}/fixtures/ollama.tar.zst`;
+  }
+  if (!("POLYGLOT_TEST_OLLAMA_TAR_SHA256" in extraEnv)) {
+    env.POLYGLOT_TEST_OLLAMA_TAR_SHA256 = ollamaSha;
+  }
+  return {
+    binDir,
+    stateDir,
+    contentDir,
+    env,
+    nodeMarker: join(stateDir, "node_marker.txt"),
+    vmCommandsLog: join(stateDir, "vm_commands.log"),
+    nodeSha,
+    ollamaSha,
+  };
 }
 
 describe("polyglot-mcp Colab translation lane", () => {
@@ -1610,133 +2062,21 @@ describe("polyglot-mcp Colab translation lane", () => {
   // Builds the real-install fixture of (ask4) (fake Node and Ollama archives served over HTTP) and runs the lane once.
   // The caller owns `tmp` and removes it, and deletes the two fixtureBuffers entries.
   async function runRealInstallLane(tmp: string, session: string, extraEnv: Record<string, string>) {
-    {
-      ollamaState.digest = PINNED_DIGEST;
-      ollamaState.processor = "100% GPU";
-      ollamaState.sizeBytes = 17358640928;
-      ollamaState.sizeVramBytes = 17358640928;
+    ollamaState.digest = PINNED_DIGEST;
+    ollamaState.processor = "100% GPU";
+    ollamaState.sizeBytes = 17358640928;
+    ollamaState.sizeVramBytes = 17358640928;
 
-      const { stateDir, contentDir, env } = makeFakeColabEnv(tmp, extraEnv);
-      const nodeMarker = join(tmp, "node_marker.txt").replace(/\\/g, "/");
+    const { stateDir, contentDir, env, nodeMarker } = setupRealInstallEnv(tmp, extraEnv);
+    const srcReadme = join(tmp, "README.md");
+    writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+    const outDir = join(tmp, "out");
 
-      // Build real .tar.xz Node fixture (`node-v22.22.3-linux-x64/bin/{node,npm}`) and .tar.zst Ollama fixture (`bin/ollama`)
-      const fixBuildDir = join(tmp, "fixtures_build");
-      const nodeStage = join(fixBuildDir, "node-v22.22.3-linux-x64", "bin");
-      const ollamaStage = join(fixBuildDir, "ollama_pkg", "bin");
-      mkdirSync(nodeStage, { recursive: true });
-      mkdirSync(ollamaStage, { recursive: true });
-
-      const hostNodePosix = process.execPath.replace(/\\/g, "/");
-      const repoRootPosix = root.replace(/\\/g, "/");
-      writeFileSync(
-        join(nodeStage, "node"),
-        `#!/usr/bin/env bash
-printf '%s|%s\\n' "$0" "\${OLLAMA_HOST:-}" >> "${nodeMarker}"
-exec "${hostNodePosix}" "$@"
-`,
-        "utf-8",
-      );
-      chmodSync(join(nodeStage, "node"), 0o755);
-
-      writeFileSync(
-        join(nodeStage, "npm"),
-        `#!/usr/bin/env bash
-set -euo pipefail
-if [ "\${1:-}" = "ci" ]; then
-  if [ ! -d node_modules ]; then
-    python3 -c 'import os, subprocess, sys
-src, dst = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
-if os.name == "nt":
-    subprocess.run(["cmd", "/c", "mklink", "/J", dst, src], check=True)
-else:
-    os.symlink(src, dst)
-' "${repoRootPosix}/node_modules" "./node_modules"
-  fi
-  echo "npm ci: linked node_modules"
-  exit 0
-fi
-if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "build" ]; then
-  "${hostNodePosix}" ./node_modules/typescript/bin/tsc
-  echo "npm run build: tsc completed"
-  exit 0
-fi
-exit 0
-`,
-        "utf-8",
-      );
-      chmodSync(join(nodeStage, "npm"), 0o755);
-
-      writeFileSync(
-        join(ollamaStage, "ollama"),
-        `#!/usr/bin/env bash
-set -euo pipefail
-case "\${1:-}" in
-  serve)
-    echo "ollama serve stub started"
-    if [ "\${FAKE_OLLAMA_SERVE_IGNORE_TERM:-0}" = "1" ]; then
-      trap 'echo "ollama serve ignores TERM"' TERM
-    fi
-    while :; do
-      echo "ollama serve heartbeat"
-      sleep 0.2 || true
-    done
-    ;;
-  --version|-v)
-    echo "ollama version is 0.40.15"
-    ;;
-  pull)
-    curl -sf -X POST "\${OLLAMA_HOST:-${ollamaUrl}}/api/pull" -H "Content-Type: application/json" -d "{\\"name\\":\\"\${2:-translategemma:27b}\\",\\"stream\\":false}" >/dev/null
-    echo "pulling manifest... success"
-    ;;
-  ps)
-    echo "NAME                  ID              SIZE     PROCESSOR    UNTIL"
-    echo "translategemma:27b    21b597a243ec    17 GB    100% GPU     4 minutes from now"
-    ;;
-esac
-`,
-        "utf-8",
-      );
-      chmodSync(join(ollamaStage, "ollama"), 0o755);
-
-      const nodeTarXz = join(fixBuildDir, "node.tar.xz");
-      const ollamaTarZst = join(fixBuildDir, "ollama.tar.zst");
-      const tarRes1 = spawnSync(
-        bashBin,
-        ["-c", `tar -cJf "${nodeTarXz.replace(/\\/g, "/")}" -C "${fixBuildDir.replace(/\\/g, "/")}" node-v22.22.3-linux-x64`],
-        { env, encoding: "utf-8" },
-      );
-      expect(tarRes1.status).toBe(0);
-
-      const tarRes2 = spawnSync(
-        bashBin,
-        ["-c", `tar --zstd -cf "${ollamaTarZst.replace(/\\/g, "/")}" -C "${join(fixBuildDir, "ollama_pkg").replace(/\\/g, "/")}" bin`],
-        { env, encoding: "utf-8" },
-      );
-      expect(tarRes2.status).toBe(0);
-
-      const nodeBuf = readFileSync(nodeTarXz);
-      const ollamaBuf = readFileSync(ollamaTarZst);
-      const nodeSha = createHash("sha256").update(nodeBuf).digest("hex");
-      const ollamaSha = createHash("sha256").update(ollamaBuf).digest("hex");
-      fixtureBuffers["/fixtures/node.tar.xz"] = nodeBuf;
-      fixtureBuffers["/fixtures/ollama.tar.zst"] = ollamaBuf;
-
-      env.POLYGLOT_TEST_SKIP_VM_INSTALL = "0";
-      env.POLYGLOT_TEST_NODE_TAR_URL = `${ollamaUrl}/fixtures/node.tar.xz`;
-      env.POLYGLOT_TEST_NODE_TAR_SHA256 = nodeSha;
-      env.POLYGLOT_TEST_OLLAMA_TAR_URL = `${ollamaUrl}/fixtures/ollama.tar.zst`;
-      env.POLYGLOT_TEST_OLLAMA_TAR_SHA256 = ollamaSha;
-
-      const srcReadme = join(tmp, "README.md");
-      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
-      const outDir = join(tmp, "out");
-
-      const res = await runLauncher(
-        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", session],
-        env,
-      );
-      return { res, outDir, stateDir, contentDir, nodeMarker };
-    }
+    const res = await runLauncher(
+      ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", session],
+      env,
+    );
+    return { res, outDir, stateDir, contentDir, nodeMarker };
   }
 
   it("(ask4) CPU stub rung end-to-end in real mode (POLYGLOT_TEST_SKIP_VM_INSTALL=0): runs every step including curl download, sha256 check, tar -xJf Node unpack, tar --zstd -xf Ollama unpack, ollama serve, ollama pull, digest check, fit probe, repo unpack, npm ci + npm run build, translate-all.mjs, and #67 receipt & nav-bar check", async () => {
@@ -2535,4 +2875,791 @@ describe("fix2 round 3: Windows kill exclusions, scrub-race writers, partial arc
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+});
+
+describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", () => {
+  const resetFakeOllama = () => {
+    ollamaState.digest = PINNED_DIGEST;
+    ollamaState.processor = "100% GPU";
+    ollamaState.sizeBytes = 17358640928;
+    ollamaState.sizeVramBytes = 17358640928;
+    ollamaState.failTagsHttp = false;
+    ollamaState.failPullHttp = false;
+    ollamaState.failWarmupProbe = false;
+  };
+
+  it("(part1.zstd) keeps archive sha256 check before zstd install and unpack, installs zstd with DEBIAN_FRONTEND=noninteractive, and records zstd --version in window.json", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-part1-zstd-"));
+    try {
+      resetFakeOllama();
+      // 1. Corrupted Ollama archive sha256 fails at ollama_download BEFORE apt-get or tar --zstd runs
+      const caseBadSha = join(tmp, "bad_sha");
+      const outBadSha = join(caseBadSha, "out");
+      const { stateDir: stateBad, vmCommandsLog: vmCmdsBad, env: envBad } = setupRealInstallEnv(
+        caseBadSha,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          POLYGLOT_TEST_OLLAMA_TAR_SHA256: "f".repeat(64),
+        },
+        { forStub: true },
+      );
+      const resBad = await runLauncher(
+        ["--stub", "--out-dir", outBadSha, "--session", "polyglot-part1-bad-ollama-sha"],
+        envBad,
+      );
+      expect(resBad.code).not.toBe(0);
+      const winBad = JSON.parse(readFileSync(join(outBadSha, "window.json"), "utf-8"));
+      expect(winBad.refusal_code).toBe("OLLAMA_INSTALL_SHA_MISMATCH");
+      expect(winBad.remote_step).toBe("ollama_download");
+      expect(winBad.why).toContain("[ollama_download]");
+      const cmdsBad = readFileSync(vmCmdsBad, "utf-8");
+      expect(cmdsBad).toContain("sha256sum\t");
+      expect(cmdsBad).not.toContain("apt-get\t");
+      expect(cmdsBad).not.toContain("--zstd");
+      expect(readFileSync(join(stateBad, "stops.log"), "utf-8")).toContain("STOP -s polyglot-part1-bad-ollama-sha");
+
+      // 2. Valid archive sha256 installs zstd noninteractively before unpack and records zstd --version in window.json
+      const caseOk = join(tmp, "ok_zstd");
+      const outOk = join(caseOk, "out");
+      const { vmCommandsLog: vmCmdsOk, env: envOk } = setupRealInstallEnv(
+        caseOk,
+        { GUARD_POLL_INTERVAL_S: "0.2" },
+        { forStub: true },
+      );
+      const resOk = await runLauncher(
+        ["--stub", "--out-dir", outOk, "--session", "polyglot-part1-zstd-ok"],
+        envOk,
+      );
+      expect(resOk.code).toBe(0);
+      const winOk = JSON.parse(readFileSync(join(outOk, "window.json"), "utf-8"));
+      expect(winOk.status).toBe("ok");
+      expect(winOk.zstd_version).toContain("Zstandard CLI");
+      const linesOk = readFileSync(vmCmdsOk, "utf-8").trim().split("\n");
+      const idxOllamaSha = linesOk.findIndex((l) => l.startsWith("sha256sum\t") && l.includes("ollama-linux-amd64.tar.zst"));
+      const idxApt = linesOk.findIndex((l) => l.startsWith("apt-get\tDEBIAN_FRONTEND=noninteractive ") && l.includes("install -y zstd"));
+      const idxZstdVer = linesOk.findIndex((l) => l === "zstd\t--version");
+      const idxOllamaUnpack = linesOk.findIndex((l) => l.startsWith("tar\t--zstd -xf") && l.includes("ollama-linux-amd64.tar.zst"));
+      expect(idxOllamaSha).toBeGreaterThan(-1);
+      expect(idxApt).toBeGreaterThan(idxOllamaSha);
+      expect(idxZstdVer).toBeGreaterThan(idxApt);
+      expect(idxOllamaUnpack).toBeGreaterThan(idxZstdVer);
+    } finally {
+      resetFakeOllama();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(part1.zstd.missing) refuses ZSTD_INSTALL_FAILED when apt-get install -y zstd fails or leaves zstd missing on PATH", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-part1-zstd-fail-"));
+    try {
+      resetFakeOllama();
+      // (a) apt-get exits non-zero
+      const caseFail = join(tmp, "apt_fail");
+      const outFail = join(caseFail, "out");
+      const { stateDir: stateFail, vmCommandsLog: cmdsFailLog, env: envFail } = setupRealInstallEnv(
+        caseFail,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_APT_FAIL: "1",
+        },
+        { forStub: true },
+      );
+      const resFail = await runLauncher(
+        ["--stub", "--out-dir", outFail, "--session", "polyglot-zstd-apt-fail"],
+        envFail,
+      );
+      expect(resFail.code).not.toBe(0);
+      const winFail = JSON.parse(readFileSync(join(outFail, "window.json"), "utf-8"));
+      expect(winFail.refusal_code).toBe("ZSTD_INSTALL_FAILED");
+      expect(winFail.remote_step).toBe("zstd_install");
+      expect(winFail.why).toContain("[zstd_install]");
+      expect(winFail.why).toContain("Unable to locate package zstd");
+      expect(readFileSync(cmdsFailLog, "utf-8")).not.toContain("tar\t--zstd");
+      expect(readFileSync(join(stateFail, "stops.log"), "utf-8")).toContain("STOP -s polyglot-zstd-apt-fail");
+
+      // (b) apt-get exits 0 without placing zstd on PATH
+      const caseNoop = join(tmp, "apt_noop");
+      const outNoop = join(caseNoop, "out");
+      const { stateDir: stateNoop, vmCommandsLog: cmdsNoopLog, env: envNoop } = setupRealInstallEnv(
+        caseNoop,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_APT_NOOP: "1",
+        },
+        { forStub: true },
+      );
+      const resNoop = await runLauncher(
+        ["--stub", "--out-dir", outNoop, "--session", "polyglot-zstd-still-missing"],
+        envNoop,
+      );
+      expect(resNoop.code).not.toBe(0);
+      const winNoop = JSON.parse(readFileSync(join(outNoop, "window.json"), "utf-8"));
+      expect(winNoop.refusal_code).toBe("ZSTD_INSTALL_FAILED");
+      expect(winNoop.remote_step).toBe("zstd_install");
+      expect(winNoop.why).toContain("[zstd_install]");
+      expect(winNoop.why).toContain("zstd is still missing on PATH");
+      expect(readFileSync(cmdsNoopLog, "utf-8")).not.toContain("tar\t--zstd");
+      expect(readFileSync(join(stateNoop, "stops.log"), "utf-8")).toContain("STOP -s polyglot-zstd-still-missing");
+    } finally {
+      resetFakeOllama();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(part3.stub.e2e) --stub runs on CPU along the real install path in exact command order, stops before model pull, fetches results, and stops the session", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-part3-stub-"));
+    try {
+      resetFakeOllama();
+      const outDir = join(tmp, "out");
+      const { stateDir, vmCommandsLog, env } = setupRealInstallEnv(
+        tmp,
+        { GUARD_POLL_INTERVAL_S: "0.2" },
+        { forStub: true },
+      );
+
+      const res = await runLauncher(
+        ["--stub", "--out-dir", outDir, "--session", "polyglot-stub-real-path"],
+        env,
+      );
+      if (res.code !== 0) {
+        console.error("STUB E2E STDERR:", res.stderr);
+      }
+      expect(res.code).toBe(0);
+
+      const cmdLines = readFileSync(vmCommandsLog, "utf-8")
+        .trim()
+        .split("\n")
+        .filter((l) => l.trim().length > 0);
+
+      const findStepIdx = (pred: (line: string) => boolean, label: string) => {
+        const idx = cmdLines.findIndex(pred);
+        expect(idx, `missing expected VM command for ${label} in:\n${cmdLines.join("\n")}`).toBeGreaterThan(-1);
+        return idx;
+      };
+
+      const iNodeDl = findStepIdx((l) => l.startsWith("curl\t") && l.includes("/fixtures/node.tar.xz"), "node curl");
+      const iNodeSha = findStepIdx((l) => l.startsWith("sha256sum\t") && l.includes("node-v22.22.3-linux-x64.tar.xz"), "node sha256sum");
+      const iNodeTar = findStepIdx((l) => l.startsWith("tar\t-xJf") && l.includes("node-v22.22.3-linux-x64.tar.xz"), "node tar -xJf");
+      const iNodeVer = findStepIdx((l) => l === "node\t--version", "node --version");
+      const iOllamaDl = findStepIdx((l) => l.startsWith("curl\t") && l.includes("/fixtures/ollama.tar.zst"), "ollama curl");
+      const iOllamaSha = findStepIdx((l) => l.startsWith("sha256sum\t") && l.includes("ollama-linux-amd64.tar.zst"), "ollama sha256sum");
+      const iZstdApt = findStepIdx((l) => l.startsWith("apt-get\tDEBIAN_FRONTEND=noninteractive ") && l.includes("install -y zstd"), "apt-get install -y zstd");
+      const iZstdVer = findStepIdx((l) => l === "zstd\t--version", "zstd --version");
+      const iOllamaTar = findStepIdx((l) => l.startsWith("tar\t--zstd -xf") && l.includes("ollama-linux-amd64.tar.zst"), "ollama tar --zstd -xf");
+      const iOllamaServe = findStepIdx((l) => l === "ollama\tserve", "ollama serve");
+      const iOllamaVer = findStepIdx((l) => l === "ollama\t--version", "ollama --version");
+      const iTagsProbe = findStepIdx((l) => l.startsWith("curl\t") && l.includes("/api/tags"), "ollama /api/tags readiness");
+
+      expect(iNodeSha).toBeGreaterThan(iNodeDl);
+      expect(iNodeTar).toBeGreaterThan(iNodeSha);
+      expect(iNodeVer).toBeGreaterThan(iNodeTar);
+      expect(iOllamaDl).toBeGreaterThan(iNodeVer);
+      expect(iOllamaSha).toBeGreaterThan(iOllamaDl);
+      expect(iZstdApt).toBeGreaterThan(iOllamaSha);
+      expect(iZstdVer).toBeGreaterThan(iZstdApt);
+      expect(iOllamaTar).toBeGreaterThan(iZstdVer);
+      expect(iOllamaServe).toBeGreaterThan(iOllamaTar);
+      expect(iOllamaVer).toBeGreaterThan(iOllamaServe);
+      expect(iTagsProbe).toBeGreaterThan(iOllamaServe);
+
+      // Stub stops BEFORE model pull, fit probe, repo build, and translation
+      for (const line of cmdLines) {
+        expect(line).not.toContain("ollama\tpull");
+        expect(line).not.toContain("/api/pull");
+        expect(line.startsWith("npm\t")).toBe(false);
+        expect(line).not.toContain("translate-all.mjs");
+      }
+
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.status).toBe("ok");
+      expect(win.mode).toBe("stub");
+      expect(win.stub).toBe(true);
+      expect(win.card).toBe("CPU");
+      expect(win.refusal_code).toBeNull();
+      expect(win.why).toBeNull();
+      expect(win.remote_step).toBe("ollama_serve");
+      expect(win.zstd_version).toContain("Zstandard CLI");
+      expect(win.ollama_version).toBe("0.40.15");
+      expect(win.translated_readmes).toBe(0);
+      const bundleDigestHex = createHash("sha256")
+        .update(readFileSync(join(outDir, "polyglot_translate_bundle.tar.gz")))
+        .digest("hex");
+      expect(win.downloaded_files["polyglot_translate_bundle.tar.gz"]).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(win.downloaded_files["polyglot_translate_bundle.tar.gz"]).toBe(`sha256:${bundleDigestHex}`);
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-stub-real-path");
+    } finally {
+      resetFakeOllama();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(part3.stub.guards) --stub refuses when POLYGLOT_TEST_SKIP_VM_INSTALL is set or when a non-CPU card is passed, with zero colab calls", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-part3-guards-"));
+    try {
+      // 1. POLYGLOT_TEST_SKIP_VM_INSTALL=1 + --stub -> STUB_SKIP_INSTALL_FORBIDDEN
+      const { stateDir: state1, env: env1 } = makeFakeColabEnv(join(tmp, "skip1"), {
+        POLYGLOT_TEST_SKIP_VM_INSTALL: "1",
+      });
+      const res1 = await runLauncher(["--stub", "--out-dir", join(tmp, "out1")], env1);
+      expect(res1.code).not.toBe(0);
+      expect(res1.stderr).toContain("REFUSED: STUB_SKIP_INSTALL_FORBIDDEN:");
+      expect(existsSync(join(state1, "calls.log"))).toBe(false);
+
+      // 2. POLYGLOT_TEST_SKIP_VM_INSTALL=0 + --stub -> still refused (any set value is forbidden with --stub)
+      const { stateDir: state0, env: env0 } = makeFakeColabEnv(join(tmp, "skip0"), {
+        POLYGLOT_TEST_SKIP_VM_INSTALL: "0",
+      });
+      const res0 = await runLauncher(["--stub", "--out-dir", join(tmp, "out0")], env0);
+      expect(res0.code).not.toBe(0);
+      expect(res0.stderr).toContain("REFUSED: STUB_SKIP_INSTALL_FORBIDDEN:");
+      expect(existsSync(join(state0, "calls.log"))).toBe(false);
+
+      // 3. --stub --card L4 -> STUB_CPU_ONLY
+      const { stateDir: stateGpu, env: envGpu } = setupRealInstallEnv(join(tmp, "gpu"), {}, { forStub: true });
+      const resGpu = await runLauncher(
+        ["--stub", "--card", "L4", "--shape", "standard", "--max-rate", "2.50", "--out-dir", join(tmp, "outGpu")],
+        envGpu,
+      );
+      expect(resGpu.code).not.toBe(0);
+      expect(resGpu.stderr).toContain("REFUSED: STUB_CPU_ONLY:");
+      expect(existsSync(join(stateGpu, "calls.log"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("(part1.part3.tar_no_zstd) fake tar lacking --zstd support fails in --stub at ollama_unpack (OLLAMA_UNPACK_FAILED) with the tar error in setup.log and window.json", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-tar-nozstd-"));
+    try {
+      resetFakeOllama();
+      const outDir = join(tmp, "out");
+      const { stateDir, contentDir, vmCommandsLog, env } = setupRealInstallEnv(
+        tmp,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_TAR_NO_ZSTD: "1",
+        },
+        { forStub: true },
+      );
+
+      const res = await runLauncher(
+        ["--stub", "--out-dir", outDir, "--session", "polyglot-stub-tar-nozstd"],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+
+      const cmds = readFileSync(vmCommandsLog, "utf-8");
+      expect(cmds).toContain("apt-get\tDEBIAN_FRONTEND=noninteractive install -y zstd");
+      expect(cmds).toContain("zstd\t--version");
+      expect(cmds).toContain("tar\t--zstd -xf");
+      expect(cmds).not.toContain("ollama\tserve");
+
+      const marker = JSON.parse(readFileSync(join(contentDir, "polyglot_out", "remote_failure.json"), "utf-8"));
+      expect(marker.step).toBe("ollama_unpack");
+      expect(marker.refusal_code).toBe("OLLAMA_UNPACK_FAILED");
+      expect(marker.reason).toContain("unrecognized option '--zstd'");
+
+      const setupLog = readFileSync(join(contentDir, "polyglot_out", "setup.log"), "utf-8");
+      expect(setupLog).toContain("tar: unrecognized option '--zstd'");
+      expect(readFileSync(join(outDir, "vitals.log"), "utf-8")).toContain("tar: unrecognized option '--zstd'");
+
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).toBe("OLLAMA_UNPACK_FAILED");
+      expect(win.remote_step).toBe("ollama_unpack");
+      expect(win.why).toContain("[ollama_unpack]");
+      expect(win.why).toContain("unrecognized option '--zstd'");
+      expect(win.zstd_version).toContain("Zstandard CLI");
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-stub-tar-nozstd");
+    } finally {
+      resetFakeOllama();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(part2.steps) writes remote_failure.json marker and non-null window.json refusal_code + why for a failure at every named remote step", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-part2-steps-"));
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+
+      const assertStepRefusal = (opts: {
+        outDir: string;
+        contentDir: string;
+        stateDir: string;
+        session: string;
+        expectedStep: string;
+        expectedCode: string;
+        expectedSnippet: string;
+      }) => {
+        const { outDir, contentDir, stateDir, session, expectedStep, expectedCode, expectedSnippet } = opts;
+        expect(expectedSnippet.length).toBeGreaterThan(0);
+        const markerPath = join(contentDir, "polyglot_out", "remote_failure.json");
+        expect(existsSync(markerPath), `missing remote_failure.json for ${expectedStep}`).toBe(true);
+        const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
+        expect(marker.step).toBe(expectedStep);
+        expect(marker.refusal_code).toBe(expectedCode);
+        expect(marker.why).toContain(`[${expectedStep}]`);
+
+        const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+        expect(win.status).toBe(expectedCode);
+        expect(win.refusal_code).toBe(expectedCode);
+        expect(win.remote_step).toBe(expectedStep);
+        expect(win.why).toBeTypeOf("string");
+        expect(win.why).toContain(`[${expectedStep}]`);
+        expect(win.why).toContain(expectedSnippet);
+        expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain(`STOP -s ${session}`);
+      };
+
+      // 1. token_shred -> TOKEN_SHRED_FAILED
+      {
+        resetFakeOllama();
+        const caseDir = join(tmp, "step_token_shred");
+        const xdgDir = join(caseDir, "xdg");
+        mkdirSync(xdgDir, { recursive: true });
+        const { binDir, stateDir, contentDir, env } = setupRealInstallEnv(
+          caseDir,
+          {
+            GUARD_POLL_INTERVAL_S: "0.2",
+            XDG_RUNTIME_DIR: xdgDir.replace(/\\/g, "/"),
+            POLYGLOT_OPTIONAL_TOKEN: "tok_secret_value_123",
+          },
+          { forStub: true },
+        );
+        writeFileSync(
+          join(binDir, "shred"),
+          `#!/usr/bin/env bash\nif [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [[ "$*" == *"polyglot_token"* ]]; then exit 1; fi\nexit 0\n`,
+          "utf-8",
+        );
+        chmodSync(join(binDir, "shred"), 0o755);
+        const realRm = process.platform === "win32" ? "/usr/bin/rm" : "/bin/rm";
+        writeFileSync(
+          join(binDir, "rm"),
+          `#!/usr/bin/env bash\nif [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [[ "$*" == *"polyglot_token"* ]]; then exit 1; fi\nexec ${realRm} "$@"\n`,
+          "utf-8",
+        );
+        chmodSync(join(binDir, "rm"), 0o755);
+
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-tok-shred"], env);
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-tok-shred",
+          expectedStep: "token_shred",
+          expectedCode: "TOKEN_SHRED_FAILED",
+          expectedSnippet: "polyglot_token",
+        });
+      }
+
+      // 2a. node_install (download failure) -> NODE_INSTALL_FAILED
+      {
+        resetFakeOllama();
+        const caseDir = join(tmp, "step_node_dl");
+        const { stateDir, contentDir, env } = setupRealInstallEnv(
+          caseDir,
+          {
+            GUARD_POLL_INTERVAL_S: "0.2",
+            FAKE_CURL_FAIL_MATCH: "fixtures/node.tar.xz",
+          },
+          { forStub: true },
+        );
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-node-dl"], env);
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-node-dl",
+          expectedStep: "node_install",
+          expectedCode: "NODE_INSTALL_FAILED",
+          expectedSnippet: "curl download",
+        });
+      }
+
+      // 2b. node_install (sha256 mismatch) -> NODE_INSTALL_SHA_MISMATCH
+      {
+        resetFakeOllama();
+        const caseDir = join(tmp, "step_node_sha");
+        const { stateDir, contentDir, env } = setupRealInstallEnv(
+          caseDir,
+          {
+            GUARD_POLL_INTERVAL_S: "0.2",
+            POLYGLOT_TEST_NODE_TAR_SHA256: "0".repeat(64),
+          },
+          { forStub: true },
+        );
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-node-sha"], env);
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-node-sha",
+          expectedStep: "node_install",
+          expectedCode: "NODE_INSTALL_SHA_MISMATCH",
+          expectedSnippet: "expected",
+        });
+      }
+
+      // 3. ollama_download (download failure) -> OLLAMA_DOWNLOAD_FAILED
+      {
+        resetFakeOllama();
+        const caseDir = join(tmp, "step_ollama_dl");
+        const { stateDir, contentDir, env } = setupRealInstallEnv(
+          caseDir,
+          {
+            GUARD_POLL_INTERVAL_S: "0.2",
+            FAKE_CURL_FAIL_MATCH: "fixtures/ollama.tar.zst",
+          },
+          { forStub: true },
+        );
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-ollama-dl"], env);
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-ollama-dl",
+          expectedStep: "ollama_download",
+          expectedCode: "OLLAMA_DOWNLOAD_FAILED",
+          expectedSnippet: "curl download",
+        });
+      }
+
+      // (4. zstd_install -> ZSTD_INSTALL_FAILED and 5. ollama_unpack -> OLLAMA_UNPACK_FAILED are covered above;
+      //  verify ollama_serve -> OLLAMA_SERVE_FAILED next.)
+      // 6. ollama_serve -> OLLAMA_SERVE_FAILED
+      {
+        resetFakeOllama();
+        ollamaState.failTagsHttp = true;
+        const caseDir = join(tmp, "step_ollama_serve");
+        const { stateDir, contentDir, env } = setupRealInstallEnv(
+          caseDir,
+          {
+            GUARD_POLL_INTERVAL_S: "0.2",
+            FAKE_OLLAMA_SERVE_FAIL: "1",
+            POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S: "2",
+          },
+          { forStub: true },
+        );
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-ollama-serve"], env);
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-ollama-serve",
+          expectedStep: "ollama_serve",
+          expectedCode: "OLLAMA_SERVE_FAILED",
+          expectedSnippet: "address already in use",
+        });
+      }
+
+      // 7. model_pull -> OLLAMA_PULL_FAILED
+      {
+        resetFakeOllama();
+        const caseDir = join(tmp, "step_model_pull");
+        const { stateDir, contentDir, env } = setupRealInstallEnv(caseDir, {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_OLLAMA_PULL_FAIL: "1",
+        });
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(
+          ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "step-model-pull"],
+          env,
+        );
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-model-pull",
+          expectedStep: "model_pull",
+          expectedCode: "OLLAMA_PULL_FAILED",
+          expectedSnippet: "ollama pull",
+        });
+      }
+
+      // 8. model_digest -> MODEL_DIGEST_MISMATCH
+      {
+        resetFakeOllama();
+        ollamaState.digest = "deadbeef".repeat(8);
+        const caseDir = join(tmp, "step_model_digest");
+        const { stateDir, contentDir, env } = makeFakeColabEnv(caseDir, {
+          GUARD_POLL_INTERVAL_S: "0.2",
+        });
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(
+          ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "step-model-digest"],
+          env,
+        );
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-model-digest",
+          expectedStep: "model_digest",
+          expectedCode: "MODEL_DIGEST_MISMATCH",
+          expectedSnippet: "translategemma:27b",
+        });
+      }
+
+      // 9. fit_probe -> FIT_PROBE_FAILED
+      {
+        resetFakeOllama();
+        ollamaState.failWarmupProbe = true;
+        const caseDir = join(tmp, "step_fit_probe");
+        const { stateDir, contentDir, env } = makeFakeColabEnv(caseDir, {
+          GUARD_POLL_INTERVAL_S: "0.2",
+        });
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(
+          ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "step-fit-probe"],
+          env,
+        );
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-fit-probe",
+          expectedStep: "fit_probe",
+          expectedCode: "FIT_PROBE_FAILED",
+          expectedSnippet: "warmup POST",
+        });
+      }
+
+      // 10. repo_build -> REPO_BUILD_FAILED
+      {
+        resetFakeOllama();
+        const caseDir = join(tmp, "step_repo_build");
+        const { stateDir, contentDir, env } = setupRealInstallEnv(caseDir, {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_NPM_BUILD_FAIL: "1",
+        });
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(
+          ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "step-repo-build"],
+          env,
+        );
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-repo-build",
+          expectedStep: "repo_build",
+          expectedCode: "REPO_BUILD_FAILED",
+          expectedSnippet: "npm ci && npm run build",
+        });
+      }
+
+      // 11. translate -> TRANSLATION_FAILED
+      {
+        resetFakeOllama();
+        const caseDir = join(tmp, "step_translate");
+        const { stateDir, contentDir, env } = setupRealInstallEnv(caseDir, {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_TRANSLATE_ALL_FAIL: "1",
+        });
+        const outDir = join(caseDir, "out");
+        const res = await runLauncher(
+          ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "step-translate"],
+          env,
+        );
+        expect(res.code).not.toBe(0);
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-translate",
+          expectedStep: "translate",
+          expectedCode: "TRANSLATION_FAILED",
+          expectedSnippet: "translate-all.mjs exited 17",
+        });
+      }
+    } finally {
+      resetFakeOllama();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it("(part2.unknown) unknown failure never leaves refusal_code or why null: assigns REMOTE_STEP_FAILED with the last step name", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-part2-unknown-"));
+    try {
+      resetFakeOllama();
+      // (a) VM-side unhandled non-zero command inside ollama_download (sha256sum exits 42 under set -euo pipefail)
+      const caseVm = join(tmp, "vm_unhandled");
+      const outVm = join(caseVm, "out");
+      const { stateDir: stateVm, contentDir: contentVm, env: envVm } = setupRealInstallEnv(
+        caseVm,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_SHA256SUM_FAIL_MATCH: "ollama-linux-amd64.tar.zst",
+        },
+        { forStub: true },
+      );
+      const resVm = await runLauncher(
+        ["--stub", "--out-dir", outVm, "--session", "unknown-vm-step"],
+        envVm,
+      );
+      expect(resVm.code).not.toBe(0);
+      const markerVm = JSON.parse(readFileSync(join(contentVm, "polyglot_out", "remote_failure.json"), "utf-8"));
+      expect(markerVm.refusal_code).toBe("REMOTE_STEP_FAILED");
+      expect(markerVm.step).toBe("ollama_download");
+      const winVm = JSON.parse(readFileSync(join(outVm, "window.json"), "utf-8"));
+      expect(winVm.refusal_code).toBe("REMOTE_STEP_FAILED");
+      expect(winVm.remote_step).toBe("ollama_download");
+      expect(winVm.why).toContain("[ollama_download]");
+      expect(readFileSync(join(stateVm, "stops.log"), "utf-8")).toContain("STOP -s unknown-vm-step");
+
+      // (b) Rig-side abrupt colab exec disconnect after emitting REMOTE_STEP step=ollama_unpack without a marker
+      const caseRig = join(tmp, "rig_disconnect");
+      const outRig = join(caseRig, "out");
+      const { stateDir: stateRig, env: envRig } = setupRealInstallEnv(
+        caseRig,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_COLAB_EXEC_DIE_AT_STEP: "ollama_unpack",
+        },
+        { forStub: true },
+      );
+      const resRig = await runLauncher(
+        ["--stub", "--out-dir", outRig, "--session", "unknown-rig-step"],
+        envRig,
+      );
+      expect(resRig.code).not.toBe(0);
+      const winRig = JSON.parse(readFileSync(join(outRig, "window.json"), "utf-8"));
+      expect(winRig.refusal_code).toBe("REMOTE_STEP_FAILED");
+      expect(winRig.remote_step).toBe("ollama_unpack");
+      expect(winRig.why).toBeTypeOf("string");
+      expect(winRig.why).toContain("[ollama_unpack]");
+      expect(readFileSync(join(stateRig, "stops.log"), "utf-8")).toContain("STOP -s unknown-rig-step");
+    } finally {
+      resetFakeOllama();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(part4.dry) --dry prints cap, wall, remote_steps, and exact remote_command + exec_command for both --stub and paid mode with zero colab calls", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-part4-dry-"));
+    try {
+      // 1. --stub --dry
+      const stubDir = join(tmp, "stub_dry");
+      const { stateDir: stateStub, env: envStub } = setupRealInstallEnv(stubDir, {}, { forStub: true });
+      const resStub = await runLauncher(
+        [
+          "--stub",
+          "--cap",
+          "0.30",
+          "--wall-s",
+          "600",
+          "--grace-s",
+          "45",
+          "--margin",
+          "0.02",
+          "--out-dir",
+          join(stubDir, "out"),
+          "--session",
+          "polyglot-stub-dry-plan",
+          "--dry",
+        ],
+        envStub,
+      );
+      expect(resStub.code).toBe(0);
+      const stubPlan = JSON.parse(resStub.stdout);
+      expect(stubPlan.dry_run).toBe(true);
+      expect(stubPlan.mode).toBe("stub");
+      expect(stubPlan.stub).toBe(true);
+      expect(stubPlan.card).toBe("CPU");
+      expect(stubPlan.shape).toBe("high-mem");
+      expect(stubPlan.cap).toBe(0.3);
+      expect(stubPlan.cap_ccu).toBe(0.3);
+      expect(stubPlan.wall_s).toBe(600);
+      expect(stubPlan.grace_s).toBe(45);
+      expect(stubPlan.margin).toBe(0.02);
+      expect(stubPlan.remote_steps).toEqual([
+        "token_shred",
+        "node_install",
+        "ollama_download",
+        "zstd_install",
+        "ollama_unpack",
+        "ollama_serve",
+      ]);
+      expect(stubPlan.remote_command).toContain("SDLAB_REMOTE_SCRIPT=/content/remote_translate.sh");
+      expect(stubPlan.remote_command).toContain("POLYGLOT_MODE=stub");
+      expect(stubPlan.remote_command).not.toContain("POLYGLOT_TEST_SKIP_VM_INSTALL");
+      expect(stubPlan.remote_command).toMatch(/bash \/content\/remote_translate\.sh$/);
+      expect(stubPlan.exec_command).toContain("colab exec -s polyglot-stub-dry-plan -f scripts/colab/remote_runner.py --timeout 705");
+      expect(stubPlan.exec_command).toContain("--env POLYGLOT_MODE=stub");
+      expect(existsSync(join(stateStub, "calls.log"))).toBe(false);
+
+      // 2. Paid --dry
+      const paidDir = join(tmp, "paid_dry");
+      mkdirSync(paidDir, { recursive: true });
+      const srcReadme = join(paidDir, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const { stateDir: statePaid, env: envPaid } = makeFakeColabEnv(paidDir);
+      const resPaid = await runLauncher(
+        [
+          "--readme",
+          srcReadme,
+          "--card",
+          "A100",
+          "--shape",
+          "standard",
+          "--max-rate",
+          "7.50",
+          "--cap",
+          "6.25",
+          "--wall-s",
+          "1500",
+          "--grace-s",
+          "60",
+          "--out-dir",
+          join(paidDir, "out"),
+          "--session",
+          "polyglot-paid-dry-plan",
+          "--dry",
+        ],
+        envPaid,
+      );
+      expect(resPaid.code).toBe(0);
+      const paidPlan = JSON.parse(resPaid.stdout);
+      expect(paidPlan.dry_run).toBe(true);
+      expect(paidPlan.mode).toBe("paid");
+      expect(paidPlan.stub).toBe(false);
+      expect(paidPlan.card).toBe("A100");
+      expect(paidPlan.cap).toBe(6.25);
+      expect(paidPlan.wall_s).toBe(1500);
+      expect(paidPlan.remote_steps).toEqual([
+        "token_shred",
+        "node_install",
+        "ollama_download",
+        "zstd_install",
+        "ollama_unpack",
+        "ollama_serve",
+        "model_pull",
+        "model_digest",
+        "fit_probe",
+        "repo_build",
+        "translate",
+      ]);
+      expect(paidPlan.remote_command).toContain("SDLAB_REMOTE_SCRIPT=/content/remote_translate.sh");
+      expect(paidPlan.remote_command).toContain("POLYGLOT_MODE=translate");
+      expect(paidPlan.remote_command).toMatch(/bash \/content\/remote_translate\.sh$/);
+      expect(paidPlan.exec_command).toContain("colab exec -s polyglot-paid-dry-plan -f scripts/colab/remote_runner.py --timeout 1620");
+      expect(paidPlan.exec_command).toContain("--env POLYGLOT_MODE=translate");
+      expect(existsSync(join(statePaid, "calls.log"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

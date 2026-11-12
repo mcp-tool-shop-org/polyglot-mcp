@@ -10,7 +10,7 @@ This kit runs `polyglot-mcp`'s README translation pipeline (`scripts/translate-a
 | [`scripts/colab/launch_guards.py`](../scripts/colab/launch_guards.py) | Pre-open cap budget & dual spend bounds (`evaluate_cap_budget`), live/pre-exec cap & wall checks, SHA256 input verification, vitals/stall/dead-harness detection, private-RAM inspection, and log secret scrubbing. |
 | [`scripts/colab/remote_runner.py`](../scripts/colab/remote_runner.py) | VM-side kernel runner executed via `colab exec -s <session> -f remote_runner.py`: runs `SDLAB_REMOTE_SCRIPT`, streams line-by-line output with `hf_` token scrubbing, and finishes with an `SDLAB_REMOTE_RC=<rc>` exit marker. |
 | [`scripts/colab/translate_bundle_now.py`](../scripts/colab/translate_bundle_now.py) | VM-side emergency salvage bundler invoked when a run fails or times out without producing `/content/polyglot_translate_bundle.tar.gz`. |
-| [`scripts/colab/launch_translate.sh`](../scripts/colab/launch_translate.sh) | End-to-end launcher: validates flags and SHA256 pins, checks cap budget against cleanup reserve, stages READMEs and repo archive, installs pinned Node/Ollama, verifies `translategemma:27b` digest, runs the GPU Fit Probe, executes `scripts/translate-all.mjs` across all 7 languages, enforces #67's verified-receipt & structural verification rule + `NAV_BAR_INCOMPLETE` check, and unpacks outputs + `SHA256SUMS` + `manifest.json` + `window.json`. |
+| [`scripts/colab/launch_translate.sh`](../scripts/colab/launch_translate.sh) | End-to-end launcher: validates flags and SHA256 pins, checks cap budget against cleanup reserve, stages READMEs and repo archive, installs pinned Node.js + `zstd` + Ollama (with per-step `remote_failure.json` markers), supports `--stub` CPU install-path verification before model pull, verifies `translategemma:27b` digest, runs the GPU Fit Probe, executes `scripts/translate-all.mjs` across all 7 languages, enforces #67's verified-receipt & structural verification rule + `NAV_BAR_INCOMPLETE` check, and unpacks outputs + `SHA256SUMS` + `manifest.json` + `window.json`. |
 | [`scripts/colab/compare_translations.py`](../scripts/colab/compare_translations.py) | Structural comparison helper comparing two directories of translated READMEs across headings, paragraphs, fenced code blocks (byte-for-byte), links/URLs, and nav-bar entries. |
 
 ## Usage
@@ -30,9 +30,21 @@ bash scripts/colab/launch_translate.sh \
   --out-dir /persistent/path/polyglot-colab-out
 ```
 
+### Real-Path CPU Stub (`--stub`)
+
+Runs on a `CPU` card (`STUB_CPU_ONLY` if any GPU card is passed) along the **exact real install and unpack path** (`token_shred`, `node_install`, `ollama_download`, `zstd_install`, `ollama_unpack`, `ollama_serve`), stops **before** `model_pull` (no 27B download), downloads `/content/polyglot_translate_bundle.tar.gz`, and stops the session. Setting `POLYGLOT_TEST_SKIP_VM_INSTALL` alongside `--stub` is refused (`STUB_SKIP_INSTALL_FORBIDDEN`).
+
+```bash
+bash scripts/colab/launch_translate.sh \
+  --stub \
+  --cap 0.25 \
+  --wall-s 600 \
+  --out-dir /persistent/path/polyglot-colab-stub
+```
+
 ### Dry Run (`--dry`)
 
-Prints the JSON execution plan, exact `colab` commands, cleanup reserve, and dual spend bounds (`worst_case_cap_path`, `worst_case_launcher_death_path`, `worst_case_total_spend`, `assumptions`) without making any `colab` call:
+Prints the JSON execution plan (`mode`, `stub`, `cap`, `wall_s`, `remote_steps`, `remote_command`, `exec_command`), exact `colab` commands, cleanup reserve, and dual spend bounds (`worst_case_cap_path`, `worst_case_launcher_death_path`, `worst_case_total_spend`, `assumptions`) for both paid mode and `--stub`, without making any `colab` call:
 
 ```bash
 bash scripts/colab/launch_translate.sh \
@@ -44,12 +56,20 @@ bash scripts/colab/launch_translate.sh \
   --wall-s 1500 \
   --out-dir /persistent/path/polyglot-colab-out \
   --dry
+
+bash scripts/colab/launch_translate.sh \
+  --stub \
+  --cap 0.25 \
+  --wall-s 600 \
+  --out-dir /persistent/path/polyglot-colab-stub \
+  --dry
 ```
 
 ### Flags
 
-- `--readme <path>` (repeatable): Path to a source `README.md`. Sibling `.polyglot-terms.json` and `.polyglot-pins.json` files are staged automatically when present. Mutually exclusive with `--readme-tar`.
+- `--readme <path>` (repeatable): Path to a source `README.md`. Sibling `.polyglot-terms.json` and `.polyglot-pins.json` files are staged automatically when present. Mutually exclusive with `--readme-tar`. Optional when `--stub` is passed.
 - `--readme-tar <tarball>`: Tarball containing one or more `README.md` trees to translate in a single window. Mutually exclusive with `--readme`.
+- `--stub`: Run the real-path CPU install/unpack/serve verification window (`CPU` only; stops before `model_pull` and forbids `POLYGLOT_TEST_SKIP_VM_INSTALL`).
 - `--card <A100|L4|G4|CPU>` (default `CPU`): Colab runtime accelerator card.
 - `--shape <standard|high-mem>`: Required on GPU cards (`SHAPE_REQUIRED` if omitted). Under the 2026-11-09 Fleet ruling (`docs/colab-cli-contract.md` section 6), Colab returns `Runtime Shape: Standard` for `L4` regardless of `--high-mem`, so `--card L4 --shape standard` is accepted and `--card L4 --shape high-mem` is refused (`SHAPE_HIGH_MEM_UNAVAILABLE`). Single-shape TPU cards (`V5E1`, `V6E1`) accept only `--shape high-mem` (`SHAPE_STANDARD_UNAVAILABLE` if `--shape standard` is passed). CPU cards always open with `colab new --high-mem` and refuse `--shape` (`SHAPE_NOT_FOR_CPU`).
 - `--max-rate <CCU/h>`: Required on GPU cards (`MAX_RATE_REQUIRED` if omitted or non-positive). Maximum burn rate in CCU/hour allowed when the post-open rate gate polls `colab usage`.
@@ -75,7 +95,7 @@ Every binary, model, and script is pinned by SHA256 at the top of [`scripts/cola
   - GGUF layer size: `17,358,640,928` bytes (~16.17 GiB, `Q4_K_M`, `gemma3` 27.4B)
   - Translator context (`PINNED_TRANSLATOR_CONTEXT`): `4096` tokens (matches `src/ollama.ts` default context; configurable to `16384` via `OLLAMA_CONTEXT_LENGTH=16384`)
   - Measured peak VRAM (`PINNED_MODEL_PEAK_VRAM_MIB`): `22,547` MiB (R&D's GPU ledger, `polyglot` row, 2026-11-09) + `1,024` MiB required headroom (`PINNED_VRAM_HEADROOM_MIB`) = `23,571` MiB minimum total GPU VRAM (`required_total_vram_mib`).
-- **Ollama**: `v0.40.15` (`ollama-linux-amd64.tar.zst` SHA256 `628c018404a4206493efd38e46251c154ede5141b8b8dc85c659b3b027c47379`)
+- **Ollama**: `v0.40.15` (`ollama-linux-amd64.tar.zst` SHA256 `628c018404a4206493efd38e46251c154ede5141b8b8dc85c659b3b027c47379`; upstream `v0.40.15` publishes `.tar.zst` only for Linux `amd64`, so the VM checks the archive SHA256 first, installs `zstd` via `DEBIAN_FRONTEND=noninteractive timeout -k 10 180 apt-get install -y zstd`, records `zstd --version` as `zstd_version` in `window.json`, and then unpacks with `tar --zstd -xf`)
 - **Node.js**: `v22.22.3` (`node-v22.22.3-linux-x64.tar.xz` SHA256 `2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f`)
 - **Scripts & manifests**: `launch_guards.py`, `remote_runner.py`, `colab_window.sh`, `translate_bundle_now.py`, `compare_translations.py`, `scripts/translate-all.mjs`, `scripts/translate-readme.mjs`, `package.json`, `package-lock.json`, and `launch_translate.sh` itself.
 
@@ -100,6 +120,7 @@ On an NVIDIA A100 40 GB (`40,960 MiB` total VRAM):
 | Refusal Code | Stage | Trigger |
 |---|---|---|
 | `MAX_RATE_REQUIRED` | Pre-open | GPU card requested without a positive `--max-rate <CCU/h>`. |
+| `STUB_CPU_ONLY` / `STUB_SKIP_INSTALL_FORBIDDEN` | Pre-open / VM guard | `--stub` requested with a non-CPU card, or `POLYGLOT_TEST_SKIP_VM_INSTALL` set alongside `--stub`. |
 | `SHAPE_REQUIRED` / `SHAPE_INVALID` / `SHAPE_HIGH_MEM_UNAVAILABLE` / `SHAPE_STANDARD_UNAVAILABLE` / `SHAPE_NOT_FOR_CPU` | Pre-open | Invalid `--card` / `--shape` combination (`L4` accepts `--shape standard` and refuses `--shape high-mem` with `SHAPE_HIGH_MEM_UNAVAILABLE`; `CPU` forbids `--shape`). |
 | `CAP_TOO_SMALL_FOR_CLEANUP` | Pre-open | `effective_trip = cap - margin - cleanup_reserve <= 0`, or `runtime_to_trip_s < --min-runtime-s` (refused before any `colab` call). |
 | `OUT_DIR_VOLATILE` / `OUT_DIR_NOT_EMPTY` | Pre-open | `--out-dir` is on volatile storage (`/tmp`, `tmpfs`, etc.) in a live run, or already contains files. |
@@ -107,11 +128,18 @@ On an NVIDIA A100 40 GB (`40,960 MiB` total VRAM):
 | `INPUT_SHA_MISMATCH` | Pre-open | Any pinned script or manifest SHA256 does not match its pin in `launch_translate.sh`. |
 | `RATE_ABOVE_MAX` / `RATE_UNREAD` / `ASSIGNMENTS_UNREADABLE` | Post-open / Mid-run | Measured `colab usage` burn rate exceeds `--max-rate` or fails to stabilize; stops the VM before uploading workload. |
 | `CAP_GUARD_TRIPPED` | Pre-exec / Live | Remaining cap (`cap - margin - cleanup_reserve`) exhausted during post-open rate polling, uploads (`phase=pre_exec`), or live execution (`phase=live`). |
-| `MODEL_DIGEST_MISMATCH` | VM setup | Pulled `translategemma:27b` digest does not match `PINNED_MODEL_DIGEST`. |
-| `VRAM_HEADROOM_LOW` | VM fit probe | GPU total VRAM (`vram_total_mib`) is less than `measured_peak_vram_mib + required_headroom_mib` (`22,547 + 1,024 = 23,571` MiB). |
-| `MODEL_NOT_FULLY_ON_GPU` | VM fit probe | `ollama ps` shows `< 100% GPU` residency (`CPU/GPU` split). |
-| `TRANSLATION_UNVERIFIED` | Post-translate | Any target language lacks a matching `POLYGLOT_WRITTEN` SHA256 receipt or fails #67's structural Markdown verification against the source `README.md`. |
-| `NAV_BAR_INCOMPLETE` | Post-translate | Source `README.md` top language nav bar (`checkSourceNavBar`) is missing a link to one or more verified `README.<lang>.md` files (`polyglot-mcp#65` / `#67`). |
+| `TOKEN_SHRED_FAILED` | VM `token_shred` | Uploaded `/content/polyglot_token` still exists after `shred -u` / `rm -f`. |
+| `NODE_INSTALL_FAILED` / `NODE_INSTALL_SHA_MISMATCH` | VM `node_install` | Node.js `.tar.xz` download, SHA256 check, `tar -xJf` unpack, or `node --version` check failed. |
+| `OLLAMA_DOWNLOAD_FAILED` / `OLLAMA_INSTALL_SHA_MISMATCH` | VM `ollama_download` | Ollama `.tar.zst` download failed or archive SHA256 mismatched (checked before `zstd_install` and `ollama_unpack`). |
+| `ZSTD_INSTALL_FAILED` | VM `zstd_install` | Bounded `apt-get install -y zstd` failed, `zstd` is still missing on `PATH` after install, or `zstd --version` failed. |
+| `OLLAMA_UNPACK_FAILED` | VM `ollama_unpack` | `tar --zstd -xf` failed or `/content/ollama/bin/ollama` is missing after unpack (the `tar` error is captured in `setup.log` and `window.json` `why`). |
+| `OLLAMA_SERVE_FAILED` | VM `ollama_serve` | `ollama serve` exited early or did not answer `/api/tags` within the readiness timeout. |
+| `OLLAMA_PULL_FAILED` | VM `model_pull` | `ollama pull translategemma:27b` failed. |
+| `MODEL_DIGEST_MISMATCH` | VM `model_digest` | Pulled `translategemma:27b` digest does not match `PINNED_MODEL_DIGEST`. |
+| `FIT_PROBE_FAILED` / `VRAM_HEADROOM_LOW` / `MODEL_NOT_FULLY_ON_GPU` | VM `fit_probe` | Warmup `/api/generate` failed, GPU total VRAM (`vram_total_mib`) is less than `23,571` MiB, or `ollama ps` shows `< 100% GPU` residency. |
+| `REPO_BUILD_FAILED` | VM `repo_build` | `repo_archive.tar.gz` extraction or `npm ci && npm run build` failed. |
+| `TRANSLATION_FAILED` / `TRANSLATION_UNVERIFIED` / `NAV_BAR_INCOMPLETE` | VM `translate` | `translate-all.mjs` failed, any target language lacks a verified #67 SHA256 receipt / structural check, or source `README.md` top nav bar is missing a verified language link (#65). |
+| `REMOTE_STEP_FAILED` | VM / Rig fallback | Unclassified non-zero exit during a remote step or window; records `[<last_step>]` in `why` and `remote_step` so neither `refusal_code` nor `why` is ever `null` on a failed window. |
 | `WALL_GUARD_TRIPPED` / `DEAD_HARNESS_TRIPPED` / `STALL_GUARD_TRIPPED` / `SETUP_STALL_TRIPPED` / `HOST_RAM_PROJECTION_EXCEEDED` | Live exec | Runtime budget, stall, harness, or private-RAM guard tripped during execution. |
 
 ### Optional Token Rule (Mode-600 File Upload)
