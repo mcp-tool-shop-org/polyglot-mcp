@@ -44,7 +44,7 @@ bash scripts/colab/launch_translate.sh \
 
 ### Dry Run (`--dry`)
 
-Prints the JSON execution plan (`mode`, `stub`, `cap`, `wall_s`, `remote_steps`, `remote_command`, `exec_command`), exact `colab` commands, cleanup reserve, and dual spend bounds (`worst_case_cap_path`, `worst_case_launcher_death_path`, `worst_case_total_spend`, `assumptions`) for both paid mode and `--stub`, without making any `colab` call:
+Prints the JSON execution plan (`mode`, `stub`, `cap`, `wall_s`, `remote_steps`, `remote_step_budget`, `remote_command`, `exec_command`), exact `colab` commands, cleanup reserve, and dual spend bounds (`worst_case_cap_path`, `worst_case_launcher_death_path`, `worst_case_total_spend`, `assumptions`) for both paid mode and `--stub`, without making any `colab` call:
 
 ```bash
 bash scripts/colab/launch_translate.sh \
@@ -78,6 +78,9 @@ bash scripts/colab/launch_translate.sh \
 - `--min-runtime-s <seconds>`: Optional minimum runtime required after subtracting `margin` and `cleanup_reserve` (`CAP_TOO_SMALL_FOR_CLEANUP` if `runtime_to_trip_s < --min-runtime-s`).
 - `--wall-s <seconds>` (default `900`): Hard wall-clock limit for the window.
 - `--grace-s <seconds>` (default `60`): Grace margin subtracted by the independent wall watcher (`WALL_LIMIT_S = wall_s - grace_s`).
+- `--download-connect-timeout-s <seconds>` (default `30`): `curl --connect-timeout` applied to both the Node.js `.tar.xz` download and the Ollama `.tar.zst` archive download (`DOWNLOAD_TIMEOUT_INVALID` if non-positive).
+- `--node-download-max-time-s <seconds>` (default `180`): `curl --max-time` applied to the Node.js `.tar.xz` download (`NODE_INSTALL_FAILED` with `"timed out after N s"` on timeout; counted in `remote_step_budget`).
+- `--ollama-download-max-time-s <seconds>` (default `300`): `curl --max-time` applied to the Ollama `.tar.zst` archive download (`OLLAMA_DOWNLOAD_FAILED` with `"timed out after N s"` on timeout; counted in `remote_step_budget`).
 - `--out-dir <dir>` (required): Output directory on a persistent filesystem (refuses `/tmp`, `/var/tmp`, `/dev/shm`, `tmpfs`, `ramfs` in live runs with `OUT_DIR_VOLATILE`, and refuses non-empty directories with `OUT_DIR_NOT_EMPTY`).
 - `--session <id>` (default `polyglot-translate-<UTC>`): Explicit Colab session name.
 - `--dry`: Validate flags and print the JSON plan + dual spend bounds without calling `colab`.
@@ -129,9 +132,9 @@ On an NVIDIA A100 40 GB (`40,960 MiB` total VRAM):
 | `RATE_ABOVE_MAX` / `RATE_UNREAD` / `ASSIGNMENTS_UNREADABLE` | Post-open / Mid-run | Measured `colab usage` burn rate exceeds `--max-rate` or fails to stabilize; stops the VM before uploading workload. |
 | `CAP_GUARD_TRIPPED` | Pre-exec / Live | Remaining cap (`cap - margin - cleanup_reserve`) exhausted during post-open rate polling, uploads (`phase=pre_exec`), or live execution (`phase=live`). |
 | `TOKEN_SHRED_FAILED` | VM `token_shred` | Uploaded `/content/polyglot_token` still exists after `shred -u` / `rm -f`. |
-| `NODE_INSTALL_FAILED` / `NODE_INSTALL_SHA_MISMATCH` | VM `node_install` | Node.js `.tar.xz` download, SHA256 check, `tar -xJf` unpack, or `node --version` check failed. |
-| `OLLAMA_DOWNLOAD_FAILED` / `OLLAMA_INSTALL_SHA_MISMATCH` | VM `ollama_download` | Ollama `.tar.zst` download failed or archive SHA256 mismatched (checked before `zstd_install` and `ollama_unpack`). |
-| `ZSTD_INSTALL_FAILED` | VM `zstd_install` | Bounded `apt-get install -y zstd` failed, `zstd` is still missing on `PATH` after install, or `zstd --version` failed. |
+| `NODE_INSTALL_FAILED` / `NODE_INSTALL_SHA_MISMATCH` | VM `node_install` | Node.js `.tar.xz` download (`curl --connect-timeout 30 --max-time 180` default; `"timed out after N s"` on timeout), SHA256 check, `tar -xJf` unpack, or `node --version` check failed. |
+| `OLLAMA_DOWNLOAD_FAILED` / `OLLAMA_INSTALL_SHA_MISMATCH` | VM `ollama_download` | Ollama `.tar.zst` download (`curl --connect-timeout 30 --max-time 300` default; `"timed out after N s"` on timeout) failed or archive SHA256 mismatched (checked before `zstd_install` and `ollama_unpack`). |
+| `ZSTD_INSTALL_FAILED` | VM `zstd_install` | Bounded `apt-get install -y zstd` failed or timed out (`124` / `137` mapped to `"timed out after N s"`), `zstd` is still missing on `PATH` after install, or `zstd --version` failed. |
 | `OLLAMA_UNPACK_FAILED` | VM `ollama_unpack` | `tar --zstd -xf` failed or `/content/ollama/bin/ollama` is missing after unpack (the `tar` error is captured in `setup.log` and `window.json` `why`). |
 | `OLLAMA_SERVE_FAILED` | VM `ollama_serve` | `ollama serve` exited early or did not answer `/api/tags` within the readiness timeout. |
 | `OLLAMA_PULL_FAILED` | VM `model_pull` | `ollama pull translategemma:27b` failed. |
@@ -139,7 +142,7 @@ On an NVIDIA A100 40 GB (`40,960 MiB` total VRAM):
 | `FIT_PROBE_FAILED` / `VRAM_HEADROOM_LOW` / `MODEL_NOT_FULLY_ON_GPU` | VM `fit_probe` | Warmup `/api/generate` failed, GPU total VRAM (`vram_total_mib`) is less than `23,571` MiB, or `ollama ps` shows `< 100% GPU` residency. |
 | `REPO_BUILD_FAILED` | VM `repo_build` | `repo_archive.tar.gz` extraction or `npm ci && npm run build` failed. |
 | `TRANSLATION_FAILED` / `TRANSLATION_UNVERIFIED` / `NAV_BAR_INCOMPLETE` | VM `translate` | `translate-all.mjs` failed, any target language lacks a verified #67 SHA256 receipt / structural check, or source `README.md` top nav bar is missing a verified language link (#65). |
-| `REMOTE_STEP_FAILED` | VM / Rig fallback | Unclassified non-zero exit during a remote step or window; records `[<last_step>]` in `why` and `remote_step` so neither `refusal_code` nor `why` is ever `null` on a failed window. |
+| `REMOTE_STEP_FAILED` | VM / Rig fallback | Unclassified non-zero exit during a remote step or window, or a `remote_failure.json` marker that fails rig-side validation (`MARKER_STEP_MAX_LEN = 64`, `REMOTE_STEP_LINE_RE`, or `MARKER_WHY_MAX_LEN = 1024`), naming the failed check in `why`. |
 | `WALL_GUARD_TRIPPED` / `DEAD_HARNESS_TRIPPED` / `STALL_GUARD_TRIPPED` / `SETUP_STALL_TRIPPED` / `HOST_RAM_PROJECTION_EXCEEDED` | Live exec | Runtime budget, stall, harness, or private-RAM guard tripped during execution. |
 
 ### Optional Token Rule (Mode-600 File Upload)

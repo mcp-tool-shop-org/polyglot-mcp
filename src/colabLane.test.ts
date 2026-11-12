@@ -97,6 +97,40 @@ let cachedInstallArchives: {
   ollamaSha: string;
 } | null = null;
 
+function buildVmLogSnippet(printfCmd: string, relFile = "vm_commands.log", requireInVm = true): string {
+  const cond = requireInVm
+    ? '[ "${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "${FAKE_COLAB_STATE_DIR:-}" ]'
+    : '[ -n "${FAKE_COLAB_STATE_DIR:-}" ]';
+  return [
+    `if ${cond}; then`,
+    "  _vml_ok=0",
+    `  _vml_target="\${FAKE_COLAB_STATE_DIR}/${relFile}"`,
+    '  if [ ! -d "${_vml_target}" ]; then',
+    "    for _vml_i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do",
+    `      if ( ${printfCmd} >> "\${_vml_target}" ) 2>/dev/null; then`,
+    "        _vml_ok=1",
+    "        break",
+    "      fi",
+    "      sleep 0.05 2>/dev/null || true",
+    "    done",
+    "  fi",
+    '  if [ "${_vml_ok}" -ne 1 ]; then',
+    '    printf \'VM_LOG_WRITE_FAILED\\ttarget=%s\\tcmd=%s\\n\' "${_vml_target}" "$0" >> "${FAKE_COLAB_STATE_DIR}/vm_log_failed.txt" 2>/dev/null || true',
+    '    printf \'VM_LOG_WRITE_FAILED: could not append to %s from %s\\n\' "${_vml_target}" "$0" >&2',
+    "    exit 95",
+    "  fi",
+    "fi",
+  ].join("\n");
+}
+
+function assertNoVmLogFailure(stateDir: string): void {
+  const markerPath = join(stateDir, "vm_log_failed.txt");
+  expect(
+    existsSync(markerPath),
+    existsSync(markerPath) ? `unexpected VM log write failure:\n${readFileSync(markerPath, "utf-8")}` : undefined,
+  ).toBe(false);
+}
+
 function getZstdFreePath(basePath: string): string {
   const parts = basePath.split(delimiter);
   const out: string[] = [];
@@ -161,6 +195,24 @@ beforeAll(async () => {
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString("utf8")));
     req.on("end", () => {
+      if (req.url && req.url.startsWith("/stalled/")) {
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/octet-stream");
+        res.setHeader("content-length", "1048576");
+        res.write(Buffer.from("STAL"));
+        const stallTimer = setTimeout(() => {
+          try {
+            res.end();
+          } catch {
+            // socket already closed
+          }
+        }, 15_000);
+        stallTimer.unref();
+        const clearStall = () => clearTimeout(stallTimer);
+        req.on("close", clearStall);
+        res.on("close", clearStall);
+        return;
+      }
       if (req.url && fixtureBuffers[req.url]) {
         res.setHeader("content-type", "application/octet-stream");
         res.end(fixtureBuffers[req.url]);
@@ -277,8 +329,10 @@ function makeFakeColabEnv(baseDir: string, extraEnv: Record<string, string> = {}
   const binDir = join(baseDir, "bin");
   const stateDir = join(baseDir, "state");
   const contentDir = join(stateDir, "content");
+  const emptyHome = join(baseDir, "empty_home");
   mkdirSync(binDir, { recursive: true });
   mkdirSync(contentDir, { recursive: true });
+  mkdirSync(emptyHome, { recursive: true });
 
   const fakeColabPy = join(binDir, "fake_colab_impl.py");
   writeFileSync(
@@ -583,9 +637,17 @@ if subcmd == "exec":
     # Rewrite /content paths in the uploaded scripts to point to content_dir
     import re as _re
     c_posix = content_dir.as_posix()
+    fake_meminfo_posix = None
+    if os.name == "nt":
+        fm_p = state_dir / "fake_meminfo"
+        fm_p.write_text("MemTotal:       52428800 kB\\nMemFree:        40000000 kB\\nMemAvailable:   48000000 kB\\nAnonPages:       2048000 kB\\nShmem:             65536 kB\\n", encoding="utf-8", newline="\\n")
+        fake_meminfo_posix = fm_p.as_posix()
     def _norm_content(s: str) -> str:
         s = _re.sub(r'[A-Za-z]:/[^"\\s]*?/Git/content', "/content", s)
-        return s.replace("/content", c_posix)
+        s = s.replace("/content", c_posix)
+        if fake_meminfo_posix:
+            s = s.replace("/proc/meminfo", fake_meminfo_posix)
+        return s
     for f in content_dir.iterdir():
         if f.is_file() and f.suffix in (".sh", ".py"):
             ftxt = f.read_text(encoding="utf-8", errors="replace")
@@ -598,6 +660,20 @@ if subcmd == "exec":
     runner_copy = state_dir / f"exec_{int(time.time()*1000)}.py"
     runner_copy.write_text(code, encoding="utf-8")
     proc = subprocess.run([sys.executable, str(runner_copy)], cwd=str(content_dir), env=env_vars, check=False)
+    corrupt_marker_src = os.environ.get("FAKE_COLAB_CORRUPT_MARKER_FILE", "").strip()
+    if corrupt_marker_src and Path(corrupt_marker_src).is_file() and Path(py_file).name == "remote_runner.py":
+        import tarfile as _tarfile
+        bad_txt = Path(corrupt_marker_src).read_text(encoding="utf-8")
+        p_out = content_dir / "polyglot_out"
+        p_out.mkdir(parents=True, exist_ok=True)
+        (p_out / "remote_failure.json").write_text(bad_txt, encoding="utf-8", newline="\\n")
+        p_state = content_dir / "polyglot_state"
+        p_state.mkdir(parents=True, exist_ok=True)
+        (p_state / "remote_failure.json").write_text(bad_txt, encoding="utf-8", newline="\\n")
+        bundle_p = content_dir / "polyglot_translate_bundle.tar.gz"
+        with _tarfile.open(bundle_p, "w:gz") as _tf:
+            for _child in sorted(p_out.iterdir()):
+                _tf.add(_child, arcname=_child.name)
     sys.exit(proc.returncode)
 `,
     "utf-8",
@@ -609,7 +685,7 @@ if subcmd == "exec":
     colabWrapper,
     `#!/usr/bin/env bash
 #SDLAB_FAKE_COLAB_CLI=1
-exec python3 "${fakeColabPy.replace(/\\/g, "/")}" "$@"
+exec ${pyBin} "${fakeColabPy.replace(/\\/g, "/")}" "$@"
 `,
     "utf-8",
   );
@@ -627,15 +703,7 @@ exec python "$@"
     chmodSync(py3Wrapper, 0o755);
   }
 
-  const vmLogSnippet = (printfCmd: string) =>
-    [
-      'if [ "${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "${FAKE_COLAB_STATE_DIR:-}" ]; then',
-      "  for _vml_i in 1 2 3 4 5; do",
-      `    if ( ${printfCmd} >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log" ) 2>/dev/null; then break; fi`,
-      "    sleep 0.02 2>/dev/null || true",
-      "  done",
-      "fi",
-    ].join("\n");
+  const vmLogSnippet = (printfCmd: string) => buildVmLogSnippet(printfCmd, "vm_commands.log", true);
 
   // Stock Colab VM has NO pre-installed `zstd`: keep the zstd implementation in `stateDir`
   // and install it into `binDir/zstd` ONLY when `apt-get install ... zstd` runs.
@@ -669,6 +737,18 @@ fi
     aptGetWrapper,
     `#!/usr/bin/env bash
 ${vmLogSnippet(`printf 'apt-get\\tDEBIAN_FRONTEND=%s %s\\n' "\${DEBIAN_FRONTEND:-}" "$*"`)}
+if [ "\${FAKE_APT_HANG:-0}" = "ignore_term" ]; then
+  trap ':' TERM INT
+  echo "apt-get hanging (ignoring SIGTERM)" >&2
+  while :; do
+    sleep 0.1 || true
+  done
+fi
+if [ "\${FAKE_APT_HANG:-0}" = "1" ]; then
+  echo "apt-get hanging on lock" >&2
+  sleep 30
+  exit 0
+fi
 if [ "\${FAKE_APT_FAIL:-0}" = "1" ]; then
   echo "E: Unable to locate package zstd" >&2
   exit 100
@@ -801,6 +881,8 @@ echo "\${FAKE_NVIDIA_SMI_LINE:-NVIDIA A100-SXM4-40GB, 22547, 40960, 18413}"
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
+    HOME: emptyHome.replace(/\\/g, "/"),
+    USERPROFILE: emptyHome,
     PATH: getZstdFreePath(rawPathParts.join(delimiter)),
     MSYS2_ARG_CONV_EXCL: "/content;SDLAB_",
     SDLAB_TEST_FAKE_COLAB: "1",
@@ -912,19 +994,8 @@ fi
 
     const hostNodePosix = process.execPath.replace(/\\/g, "/");
     const repoRootPosix = root.replace(/\\/g, "/");
-    const stageLogSnippet = (printfCmd: string, relFile = "vm_commands.log", requireInVm = true) => {
-      const cond = requireInVm
-        ? '[ "${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "${FAKE_COLAB_STATE_DIR:-}" ]'
-        : '[ -n "${FAKE_COLAB_STATE_DIR:-}" ]';
-      return [
-        `if ${cond}; then`,
-        "  for _vml_i in 1 2 3 4 5; do",
-        `    if ( ${printfCmd} >> "\${FAKE_COLAB_STATE_DIR}/${relFile}" ) 2>/dev/null; then break; fi`,
-        "    sleep 0.02 2>/dev/null || true",
-        "  done",
-        "fi",
-      ].join("\n");
-    };
+    const stageLogSnippet = (printfCmd: string, relFile = "vm_commands.log", requireInVm = true) =>
+      buildVmLogSnippet(printfCmd, relFile, requireInVm);
 
     writeFileSync(
       join(nodeStage, "node"),
@@ -1189,7 +1260,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win.spend_ccu).toBeGreaterThanOrEqual(0);
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-stub-e2e");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -1217,7 +1288,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-digest-mismatch");
     } finally {
       ollamaState.digest = PINNED_DIGEST;
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -1243,7 +1314,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win.refusal_code).toBe("MODEL_DIGEST_MISMATCH");
     } finally {
       ollamaState.digest = PINNED_DIGEST;
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -1289,7 +1360,7 @@ describe("polyglot-mcp Colab translation lane", () => {
     } finally {
       ollamaState.processor = "100% GPU";
       ollamaState.sizeVramBytes = ollamaState.sizeBytes;
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -1327,7 +1398,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win.why).toContain("ja");
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-navbar-inc");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -1347,7 +1418,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(res.stderr).toContain("REFUSED: MAX_RATE_REQUIRED:");
       expect(existsSync(join(stateDir, "calls.log"))).toBe(false);
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   });
 
@@ -1376,7 +1447,7 @@ describe("polyglot-mcp Colab translation lane", () => {
         rmSync(persistentOut, { recursive: true, force: true });
       }
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 30_000);
 
@@ -1428,7 +1499,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(plan.pricing.cap_bound_price_ccu).toBe(1.25);
       expect(existsSync(join(stateDir, "calls.log"))).toBe(false);
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   });
 
@@ -1495,7 +1566,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       }
     } finally {
       killHungPids(stateDir);
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -1584,7 +1655,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(failReport.per_language.ja.mismatches.join(" | ")).toContain("url_set_mismatch");
       expect( failReport.per_language.ja.mismatches.join(" | ")).toContain("nav_bar_entries");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   });
 
@@ -1604,7 +1675,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(res.stderr).toContain("REFUSED: unknown argument: --langs");
       expect(existsSync(join(stateDir, "calls.log"))).toBe(false);
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   });
 
@@ -1633,7 +1704,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win.why).toContain("ja");
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-unverified-receipt");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -1721,7 +1792,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(readFileSync(join(state2, "stops.log"), "utf-8")).toContain("STOP -s polyglot-sdlab72-drop");
     } finally {
       ollamaState.digest = PINNED_DIGEST;
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -1781,7 +1852,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win.watcher_wait).toBe("launcher_gone_pre_trip");
     } finally {
       killHungPids(stateDir);
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -1810,7 +1881,7 @@ describe("polyglot-mcp Colab translation lane", () => {
           "--card",
           "CPU",
           "--wall-s",
-          "8",
+          process.platform === "win32" ? "16" : "8",
           "--grace-s",
           "1",
           "--out-dir",
@@ -1847,7 +1918,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win.watcher_wait).toBe("escalated_launcher_gone");
     } finally {
       killHungPids(stateDir);
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -1886,7 +1957,7 @@ describe("polyglot-mcp Colab translation lane", () => {
           "--card",
           "CPU",
           "--wall-s",
-          "20",
+          process.platform === "win32" ? "35" : "20",
           "--grace-s",
           "1",
           "--out-dir",
@@ -1959,7 +2030,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(guardsLog).not.toContain("WALL_WATCHER_ESCALATED");
       console.log("ASK33_ELAPSED_S=" + elapsedS.toFixed(1));
       // Loose hang BACKSTOP only, not the check: wall + escalate + kill grace + a named margin.
-      const WALL_S = 20;
+      const WALL_S = process.platform === "win32" ? 35 : 20;
       const ESCALATE_S = 25;
       const KILL_GRACE_S = 1;
       const MARGIN_S_WINDOWS = 5.0; // start-up and polling jitter on a loaded Windows rig
@@ -2049,13 +2120,14 @@ describe("polyglot-mcp Colab translation lane", () => {
       );
       expect(resB.code).not.toBe(0);
       const callsB = readFileSync(join(stateB, "calls.log"), "utf-8");
+      expect(callsB).toContain("CALL new");
       expect(callsB).not.toContain("CALL exec");
       expect(readFileSync(join(stateB, "stops.log"), "utf-8")).toContain("STOP -s polyglot-mut4-preexec");
       const winB = JSON.parse(readFileSync(join(outDirB, "window.json"), "utf-8"));
       expect(winB.refusal_code).toBe("CAP_GUARD_TRIPPED");
       expect(winB.phase).toBe("pre_exec");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -2084,7 +2156,8 @@ describe("polyglot-mcp Colab translation lane", () => {
     try {
       const { res, outDir, stateDir, contentDir, nodeMarker } = await runRealInstallLane(tmp, "polyglot-ask4-real-stub", {});
       if (res.code !== 0) {
-        console.error("ASK4 STDERR:", res.stderr);
+        const winDbg = existsSync(join(outDir, "window.json")) ? readFileSync(join(outDir, "window.json"), "utf-8") : "(missing)";
+        console.error("ASK4 FAILED:", { code: res.code, stdout: res.stdout, stderr: res.stderr, winDbg });
       }
       expect(res.code).toBe(0);
 
@@ -2136,9 +2209,9 @@ describe("polyglot-mcp Colab translation lane", () => {
     } finally {
       delete fixtureBuffers["/fixtures/node.tar.xz"];
       delete fixtureBuffers["/fixtures/ollama.tar.zst"];
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
-  }, 120_000);
+  }, 180_000);
 
   it("(round4.timeout) a serve that ignores the first signal is killed with kill -9 after the named timeout, and one SERVE_STOP line says so", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-round4-timeout-"));
@@ -2148,7 +2221,8 @@ describe("polyglot-mcp Colab translation lane", () => {
         POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S: "1",
       });
       if (res.code !== 0) {
-        console.error("ROUND4 TIMEOUT STDERR:", res.stderr);
+        const winDbg = existsSync(join(tmp, "out", "window.json")) ? readFileSync(join(tmp, "out", "window.json"), "utf-8") : "(missing)";
+        console.error("ROUND4 TIMEOUT FAILED:", { code: res.code, stdout: res.stdout, stderr: res.stderr, winDbg });
       }
       expect(res.code).toBe(0);
       const serveLog = join(contentDir, "polyglot_out", "ollama_serve.log");
@@ -2162,9 +2236,9 @@ describe("polyglot-mcp Colab translation lane", () => {
     } finally {
       delete fixtureBuffers["/fixtures/node.tar.xz"];
       delete fixtureBuffers["/fixtures/ollama.tar.zst"];
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
-  }, 120_000);
+  }, 180_000);
 
   it("(fix1.ask1) wall watcher kills tracked child PIDs before colab stop and window.json: an in-flight child that keeps running after launcher death is dead before fake stop runs", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-fix1-ask1-"));
@@ -2219,7 +2293,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(stopRow.alive_hung_pids).toEqual([]);
     } finally {
       killHungPids(stateDir);
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -2320,7 +2394,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(winB.stop_path).toBe("trap");
       expect(winB.watcher_wait).toBe("none");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -2364,7 +2438,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(existsSync(join(stateDir, "stops.log"))).toBe(false);
       expect(elapsedS).toBeLessThan(5);
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 30_000);
 
@@ -2411,7 +2485,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(existsSync(join(outDir, "README.ja.md"))).toBe(false);
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-fix1-ask6-vram");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -2483,7 +2557,7 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(guardsStd).not.toContain("SHAPE_MISMATCH");
       expect(guardsStd).toContain("REFUSED: UPLOAD_FAILED:");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -2557,7 +2631,7 @@ print("\\n".join(names))`,
         expect(listRes.stdout.trim()).toBe("");
       }
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 });
@@ -2591,7 +2665,7 @@ describe("fix2: cleanup_on_exit kills tracked pids", () => {
       expect(res.stdout).toContain("TRACKED_DEAD");
       expect(res.stdout).toContain("KEPT_ALIVE");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -2656,7 +2730,7 @@ describe("fix2: tracked-pid kill behaviour and final tar", () => {
       expect(res.stdout).toMatch(/WINPID=\d+/);
       expect(res.stdout).toContain("NATIVE_DEAD");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 90_000);
 
@@ -2674,7 +2748,7 @@ describe("fix2: tracked-pid kill behaviour and final tar", () => {
         writeFileSync(script, `set -euo pipefail\ntar() { return ${rc}; }\n${block}\necho REACHED_END\n`, "utf-8");
         return spawnSync(bashBin, [script], { encoding: "utf-8", timeout: 30_000 });
       } finally {
-        rmSync(tmp, { recursive: true, force: true });
+        rmDirRetry(tmp);
       }
     };
     const r1 = run(1);
@@ -2714,7 +2788,7 @@ describe("fix2 item 7: fractional close epoch for the spend floor", () => {
       const guards = existsSync(join(tmp, "out", "guards.log")) ? readFileSync(join(tmp, "out", "guards.log"), "utf-8") : "";
       return { res, win, guards };
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   };
 
@@ -2808,7 +2882,7 @@ describe("fix2 round 3: Windows kill exclusions, scrub-race writers, partial arc
       // a tracked MSYS child that has a mapping still dies (the MSYS kill runs for every tracked pid)
       expect(res.stdout).toContain("CHILD_DEAD");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 90_000);
 
@@ -2847,7 +2921,7 @@ describe("fix2 round 3: Windows kill exclusions, scrub-race writers, partial arc
       const res = spawnSync(bashBin, [fwd(script)], { encoding: "utf-8", timeout: 30_000 });
       expect(res.stdout).toContain("WRITERS_STOPPED");
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 90_000);
 
@@ -2872,7 +2946,7 @@ describe("fix2 round 3: Windows kill exclusions, scrub-race writers, partial arc
       expect(res.status).toBe(2);
       expect(existsSync(join(tmp, "bundle.tar.gz"))).toBe(false);
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   });
 });
@@ -2912,7 +2986,9 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(winBad.refusal_code).toBe("OLLAMA_INSTALL_SHA_MISMATCH");
       expect(winBad.remote_step).toBe("ollama_download");
       expect(winBad.why).toContain("[ollama_download]");
+      assertNoVmLogFailure(stateBad);
       const cmdsBad = readFileSync(vmCmdsBad, "utf-8");
+      expect(cmdsBad).toContain("curl\t");
       expect(cmdsBad).toContain("sha256sum\t");
       expect(cmdsBad).not.toContain("apt-get\t");
       expect(cmdsBad).not.toContain("--zstd");
@@ -2921,7 +2997,7 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       // 2. Valid archive sha256 installs zstd noninteractively before unpack and records zstd --version in window.json
       const caseOk = join(tmp, "ok_zstd");
       const outOk = join(caseOk, "out");
-      const { vmCommandsLog: vmCmdsOk, env: envOk } = setupRealInstallEnv(
+      const { stateDir: stateOk, vmCommandsLog: vmCmdsOk, env: envOk } = setupRealInstallEnv(
         caseOk,
         { GUARD_POLL_INTERVAL_S: "0.2" },
         { forStub: true },
@@ -2931,6 +3007,7 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
         envOk,
       );
       expect(resOk.code).toBe(0);
+      assertNoVmLogFailure(stateOk);
       const winOk = JSON.parse(readFileSync(join(outOk, "window.json"), "utf-8"));
       expect(winOk.status).toBe("ok");
       expect(winOk.zstd_version).toContain("Zstandard CLI");
@@ -2945,7 +3022,7 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(idxOllamaUnpack).toBeGreaterThan(idxZstdVer);
     } finally {
       resetFakeOllama();
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -2974,7 +3051,11 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(winFail.remote_step).toBe("zstd_install");
       expect(winFail.why).toContain("[zstd_install]");
       expect(winFail.why).toContain("Unable to locate package zstd");
-      expect(readFileSync(cmdsFailLog, "utf-8")).not.toContain("tar\t--zstd");
+      assertNoVmLogFailure(stateFail);
+      const cmdsFail = readFileSync(cmdsFailLog, "utf-8");
+      expect(cmdsFail).toContain("sha256sum\t");
+      expect(cmdsFail).toContain("apt-get\tDEBIAN_FRONTEND=noninteractive install -y zstd");
+      expect(cmdsFail).not.toContain("tar\t--zstd");
       expect(readFileSync(join(stateFail, "stops.log"), "utf-8")).toContain("STOP -s polyglot-zstd-apt-fail");
 
       // (b) apt-get exits 0 without placing zstd on PATH
@@ -2998,11 +3079,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(winNoop.remote_step).toBe("zstd_install");
       expect(winNoop.why).toContain("[zstd_install]");
       expect(winNoop.why).toContain("zstd is still missing on PATH");
-      expect(readFileSync(cmdsNoopLog, "utf-8")).not.toContain("tar\t--zstd");
+      assertNoVmLogFailure(stateNoop);
+      const cmdsNoop = readFileSync(cmdsNoopLog, "utf-8");
+      expect(cmdsNoop).toContain("sha256sum\t");
+      expect(cmdsNoop).toContain("apt-get\tDEBIAN_FRONTEND=noninteractive install -y zstd");
+      expect(cmdsNoop).not.toContain("tar\t--zstd");
       expect(readFileSync(join(stateNoop, "stops.log"), "utf-8")).toContain("STOP -s polyglot-zstd-still-missing");
     } finally {
       resetFakeOllama();
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -3022,14 +3107,17 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
         env,
       );
       if (res.code !== 0) {
-        console.error("STUB E2E STDERR:", res.stderr);
+        const winDbg = existsSync(join(outDir, "window.json")) ? readFileSync(join(outDir, "window.json"), "utf-8") : "(missing)";
+        console.error("STUB E2E FAILED:", { code: res.code, stdout: res.stdout, stderr: res.stderr, winDbg });
       }
       expect(res.code).toBe(0);
+      assertNoVmLogFailure(stateDir);
 
       const cmdLines = readFileSync(vmCommandsLog, "utf-8")
         .trim()
         .split("\n")
         .filter((l) => l.trim().length > 0);
+      expect(cmdLines.length).toBeGreaterThan(0);
 
       const findStepIdx = (pred: (line: string) => boolean, label: string) => {
         const idx = cmdLines.findIndex(pred);
@@ -3089,7 +3177,7 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-stub-real-path");
     } finally {
       resetFakeOllama();
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -3124,7 +3212,7 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(resGpu.stderr).toContain("REFUSED: STUB_CPU_ONLY:");
       expect(existsSync(join(stateGpu, "calls.log"))).toBe(false);
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
 
@@ -3147,6 +3235,7 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
         env,
       );
       expect(res.code).not.toBe(0);
+      assertNoVmLogFailure(stateDir);
 
       const cmds = readFileSync(vmCommandsLog, "utf-8");
       expect(cmds).toContain("apt-get\tDEBIAN_FRONTEND=noninteractive install -y zstd");
@@ -3172,7 +3261,7 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-stub-tar-nozstd");
     } finally {
       resetFakeOllama();
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -3196,8 +3285,8 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
         const markerPath = join(contentDir, "polyglot_out", "remote_failure.json");
         expect(existsSync(markerPath), `missing remote_failure.json for ${expectedStep}`).toBe(true);
         const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
-        expect(marker.step).toBe(expectedStep);
-        expect(marker.refusal_code).toBe(expectedCode);
+        expect(marker.step, `marker=${JSON.stringify(marker)}`).toBe(expectedStep);
+        expect(marker.refusal_code, `marker=${JSON.stringify(marker)}`).toBe(expectedCode);
         expect(marker.why).toContain(`[${expectedStep}]`);
 
         const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
@@ -3487,9 +3576,9 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       }
     } finally {
       resetFakeOllama();
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
-  }, 180_000);
+  }, 360_000);
 
   it("(part2.unknown) unknown failure never leaves refusal_code or why null: assigns REMOTE_STEP_FAILED with the last step name", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-part2-unknown-"));
@@ -3544,7 +3633,7 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(readFileSync(join(stateRig, "stops.log"), "utf-8")).toContain("STOP -s unknown-rig-step");
     } finally {
       resetFakeOllama();
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 120_000);
 
@@ -3659,7 +3748,361 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(paidPlan.exec_command).toContain("--env POLYGLOT_MODE=translate");
       expect(existsSync(join(statePaid, "calls.log"))).toBe(false);
     } finally {
-      rmSync(tmp, { recursive: true, force: true });
+      rmDirRetry(tmp);
     }
   }, 60_000);
+});
+
+describe("follow-ups from #79 review (N5, N1, N2, N3)", () => {
+  const resetFakeOllama = () => {
+    ollamaState.digest = PINNED_DIGEST;
+    ollamaState.processor = "100% GPU";
+    ollamaState.sizeBytes = 17358640928;
+    ollamaState.sizeVramBytes = 17358640928;
+    ollamaState.failTagsHttp = false;
+    ollamaState.failPullHttp = false;
+    ollamaState.failWarmupProbe = false;
+  };
+
+  it("(followup.n5.log_helper) broken VM command log write fails loudly with non-zero exit and VM_LOG_WRITE_FAILED marker", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-followup-n5-"));
+    try {
+      resetFakeOllama();
+      // 1. Direct wrapper call when vm_commands.log is a directory (append fails all 5 retries)
+      const directDir = join(tmp, "direct");
+      const { binDir: directBin, stateDir: directState, vmCommandsLog: directLog, env: directEnv } =
+        setupRealInstallEnv(directDir, {}, { forStub: true });
+      mkdirSync(directLog, { recursive: true });
+      const directRes = spawnSync(
+        bashBin,
+        [join(directBin, "apt-get").replace(/\\/g, "/"), "install", "-y", "zstd"],
+        {
+          env: {
+            ...directEnv,
+            FAKE_COLAB_IN_VM: "1",
+          },
+          encoding: "utf-8",
+        },
+      );
+      expect(directRes.status).toBe(95);
+      expect(directRes.stderr).toContain("VM_LOG_WRITE_FAILED");
+      expect(existsSync(join(directState, "vm_log_failed.txt"))).toBe(true);
+      expect(readFileSync(join(directState, "vm_log_failed.txt"), "utf-8")).toContain("VM_LOG_WRITE_FAILED");
+      expect(existsSync(join(directBin, "zstd"))).toBe(false);
+
+      // 2. Full --stub run when vm_commands.log is broken: fails loudly instead of silently passing with an empty log
+      const stubDir = join(tmp, "stub_broken_log");
+      const outDir = join(stubDir, "out");
+      const { stateDir, vmCommandsLog, env } = setupRealInstallEnv(
+        stubDir,
+        { GUARD_POLL_INTERVAL_S: "0.2" },
+        { forStub: true },
+      );
+      mkdirSync(vmCommandsLog, { recursive: true });
+      const res = await runLauncher(
+        ["--stub", "--out-dir", outDir, "--session", "polyglot-followup-n5-broken-log"],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+      expect(existsSync(join(stateDir, "vm_log_failed.txt"))).toBe(true);
+      expect(readFileSync(join(stateDir, "vm_log_failed.txt"), "utf-8")).toContain("VM_LOG_WRITE_FAILED");
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).toBe("NODE_INSTALL_FAILED");
+      expect(win.remote_step).toBe("node_install");
+      expect(win.why).toContain("VM_LOG_WRITE_FAILED");
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-followup-n5-broken-log");
+    } finally {
+      resetFakeOllama();
+      rmDirRetry(tmp);
+    }
+  }, 120_000);
+
+  it("(followup.n1.marker_hardening) over-long or badly shaped marker step (and over-long why) falls back to REMOTE_STEP_FAILED naming the check", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-followup-n1-"));
+    try {
+      const runWithMarker = async (label: string, markerObj: Record<string, unknown>) => {
+        resetFakeOllama();
+        const caseDir = join(tmp, label);
+        mkdirSync(caseDir, { recursive: true });
+        const badMarkerFile = join(caseDir, "bad_marker.json");
+        writeFileSync(badMarkerFile, JSON.stringify(markerObj, null, 2) + "\n", "utf-8");
+        const outDir = join(caseDir, "out");
+        const { stateDir, vmCommandsLog, env } = setupRealInstallEnv(
+          caseDir,
+          {
+            GUARD_POLL_INTERVAL_S: "0.2",
+            FAKE_APT_FAIL: "1",
+            FAKE_COLAB_CORRUPT_MARKER_FILE: badMarkerFile.replace(/\\/g, "/"),
+          },
+          { forStub: true },
+        );
+        const session = `polyglot-n1-${label}`;
+        const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", session], env);
+        expect(res.code).not.toBe(0);
+        assertNoVmLogFailure(stateDir);
+        const cmds = readFileSync(vmCommandsLog, "utf-8");
+        expect(cmds).toContain("apt-get\tDEBIAN_FRONTEND=noninteractive install -y zstd");
+        expect(cmds).not.toContain("tar\t--zstd");
+        expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain(`STOP -s ${session}`);
+        return JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      };
+
+      // (a) Over-long marker step (> MARKER_STEP_MAX_LEN = 64)
+      const overLongStep = "s".repeat(65);
+      const winOverStep = await runWithMarker("overlong_step", {
+        step: overLongStep,
+        refusal_code: "ZSTD_INSTALL_FAILED",
+        reason: "simulated zstd failure",
+        why: "simulated zstd failure",
+        rc: 100,
+      });
+      expect(winOverStep.refusal_code).toBe("REMOTE_STEP_FAILED");
+      expect(winOverStep.remote_step).toBe("zstd_install");
+      expect(winOverStep.why).toBeTypeOf("string");
+      expect(winOverStep.why.length).toBeGreaterThan(0);
+      expect(winOverStep.why).toContain("MARKER_STEP_MAX_LEN=64");
+      expect(winOverStep.why).not.toContain(overLongStep);
+
+      // (b) Badly shaped marker step (rejected by REMOTE_STEP_LINE_RE)
+      const badShapeStep = "zstd install; rm -rf /";
+      const winBadShape = await runWithMarker("bad_shape_step", {
+        step: badShapeStep,
+        refusal_code: "ZSTD_INSTALL_FAILED",
+        reason: "simulated zstd failure",
+        why: "simulated zstd failure",
+        rc: 100,
+      });
+      expect(winBadShape.refusal_code).toBe("REMOTE_STEP_FAILED");
+      expect(winBadShape.remote_step).toBe("zstd_install");
+      expect(winBadShape.why).toBeTypeOf("string");
+      expect(winBadShape.why.length).toBeGreaterThan(0);
+      expect(winBadShape.why).toContain("REMOTE_STEP_LINE_RE");
+      expect(winBadShape.why).not.toContain("rm -rf");
+
+      // (c) Over-long marker why (> MARKER_WHY_MAX_LEN = 1024)
+      const overLongWhy = "w".repeat(1025);
+      const winOverWhy = await runWithMarker("overlong_why", {
+        step: "zstd_install",
+        refusal_code: "ZSTD_INSTALL_FAILED",
+        reason: "short",
+        why: overLongWhy,
+        rc: 100,
+      });
+      expect(winOverWhy.refusal_code).toBe("REMOTE_STEP_FAILED");
+      expect(winOverWhy.remote_step).toBe("zstd_install");
+      expect(winOverWhy.why).toBeTypeOf("string");
+      expect(winOverWhy.why.length).toBeGreaterThan(0);
+      expect(winOverWhy.why.length).toBeLessThanOrEqual(1024);
+      expect(winOverWhy.why).toContain("MARKER_WHY_MAX_LEN=1024");
+    } finally {
+      resetFakeOllama();
+      rmDirRetry(tmp);
+    }
+  }, 180_000);
+
+  it("(followup.n2.download_bounds) stalled fake Node and Ollama downloads time out with existing codes + 'timed out after N s' and count in remote_step_budget", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-followup-n2-"));
+    try {
+      resetFakeOllama();
+      // 1. Stalled Node download -> NODE_INSTALL_FAILED with "timed out after 1 s"
+      const caseNode = join(tmp, "stalled_node");
+      const outNode = join(caseNode, "out");
+      const { stateDir: stateNode, vmCommandsLog: logNode, env: envNode } = setupRealInstallEnv(
+        caseNode,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          POLYGLOT_TEST_NODE_TAR_URL: `${ollamaUrl}/stalled/node.tar.xz`,
+        },
+        { forStub: true },
+      );
+      const resNode = await runLauncher(
+        [
+          "--stub",
+          "--download-connect-timeout-s",
+          "1",
+          "--node-download-max-time-s",
+          "1",
+          "--out-dir",
+          outNode,
+          "--session",
+          "polyglot-n2-stalled-node",
+        ],
+        envNode,
+      );
+      expect(resNode.code).not.toBe(0);
+      assertNoVmLogFailure(stateNode);
+      const cmdsNode = readFileSync(logNode, "utf-8");
+      expect(cmdsNode).toContain("curl\t-fsSL --connect-timeout 1 --max-time 1");
+      expect(cmdsNode).not.toContain("ollama.tar.zst");
+      expect(cmdsNode).not.toContain("apt-get\t");
+      const winNode = JSON.parse(readFileSync(join(outNode, "window.json"), "utf-8"));
+      expect(winNode.refusal_code).toBe("NODE_INSTALL_FAILED");
+      expect(winNode.remote_step).toBe("node_install");
+      expect(winNode.why).toContain("[node_install]");
+      expect(winNode.why).toContain("timed out after 1 s");
+      expect(winNode.remote_step_budget.node_install_download_max_time_s).toBe(1);
+      expect(winNode.remote_step_budget.download_connect_timeout_s).toBe(1);
+      expect(readFileSync(join(stateNode, "stops.log"), "utf-8")).toContain("STOP -s polyglot-n2-stalled-node");
+
+      // 2. Stalled Ollama download -> OLLAMA_DOWNLOAD_FAILED with "timed out after 1 s"
+      const caseOllama = join(tmp, "stalled_ollama");
+      const outOllama = join(caseOllama, "out");
+      const { stateDir: stateOllama, vmCommandsLog: logOllama, env: envOllama } = setupRealInstallEnv(
+        caseOllama,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          POLYGLOT_TEST_OLLAMA_TAR_URL: `${ollamaUrl}/stalled/ollama.tar.zst`,
+        },
+        { forStub: true },
+      );
+      const resOllama = await runLauncher(
+        [
+          "--stub",
+          "--download-connect-timeout-s",
+          "1",
+          "--ollama-download-max-time-s",
+          "1",
+          "--out-dir",
+          outOllama,
+          "--session",
+          "polyglot-n2-stalled-ollama",
+        ],
+        envOllama,
+      );
+      expect(resOllama.code).not.toBe(0);
+      assertNoVmLogFailure(stateOllama);
+      const cmdsOllama = readFileSync(logOllama, "utf-8");
+      expect(cmdsOllama).toContain("node\t--version");
+      expect(cmdsOllama).toContain("curl\t-fsSL --connect-timeout 1 --max-time 1");
+      expect(cmdsOllama).not.toContain("apt-get\t");
+      const winOllama = JSON.parse(readFileSync(join(outOllama, "window.json"), "utf-8"));
+      expect(winOllama.refusal_code).toBe("OLLAMA_DOWNLOAD_FAILED");
+      expect(winOllama.remote_step).toBe("ollama_download");
+      expect(winOllama.why).toContain("[ollama_download]");
+      expect(winOllama.why).toContain("timed out after 1 s");
+      expect(winOllama.remote_step_budget.ollama_download_max_time_s).toBe(1);
+      expect(readFileSync(join(stateOllama, "stops.log"), "utf-8")).toContain("STOP -s polyglot-n2-stalled-ollama");
+
+      // 3. --dry counts stated defaults (30 s connect, 180 s Node, 300 s Ollama -> 1080 s total) and custom overrides
+      const dryDir = join(tmp, "dry_budget");
+      const { env: envDry } = setupRealInstallEnv(dryDir, {}, { forStub: true });
+      const resDef = await runLauncher(["--stub", "--out-dir", join(dryDir, "outDef"), "--dry"], envDry);
+      expect(resDef.code).toBe(0);
+      const defPlan = JSON.parse(resDef.stdout);
+      expect(defPlan.remote_step_budget).toEqual({
+        download_connect_timeout_s: 30,
+        node_install_download_max_time_s: 180,
+        ollama_download_max_time_s: 300,
+        zstd_install_attempt_timeout_s: 180,
+        zstd_install_kill_grace_s: 10,
+        zstd_install_max_attempts: 3,
+        zstd_install_bound_s: 570,
+        ollama_serve_wait_s: 30,
+        bounded_setup_total_s: 1080,
+      });
+
+      const resCust = await runLauncher(
+        [
+          "--stub",
+          "--download-connect-timeout-s",
+          "10",
+          "--node-download-max-time-s",
+          "45",
+          "--ollama-download-max-time-s",
+          "90",
+          "--out-dir",
+          join(dryDir, "outCust"),
+          "--dry",
+        ],
+        envDry,
+      );
+      expect(resCust.code).toBe(0);
+      const custPlan = JSON.parse(resCust.stdout);
+      expect(custPlan.remote_step_budget.download_connect_timeout_s).toBe(10);
+      expect(custPlan.remote_step_budget.node_install_download_max_time_s).toBe(45);
+      expect(custPlan.remote_step_budget.ollama_download_max_time_s).toBe(90);
+      expect(custPlan.remote_step_budget.bounded_setup_total_s).toBe(45 + 90 + 570 + 30);
+
+      const resBadOpt = await runLauncher(
+        ["--stub", "--node-download-max-time-s", "0", "--out-dir", join(dryDir, "outBad"), "--dry"],
+        envDry,
+      );
+      expect(resBadOpt.code).toBe(2);
+      expect(resBadOpt.stderr).toContain("REFUSED: DOWNLOAD_TIMEOUT_INVALID:");
+    } finally {
+      resetFakeOllama();
+      rmDirRetry(tmp);
+    }
+  }, 120_000);
+
+  it("(followup.n3.apt_timeout_reason) timed-out apt-get (both 124 on SIGTERM and 137 after -k SIGKILL) refuses ZSTD_INSTALL_FAILED saying 'timed out after N s'", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-followup-n3-"));
+    try {
+      resetFakeOllama();
+      // (a) apt-get terminates on SIGTERM -> timeout exits 124 -> "timed out after 1 s" (not "exited 124")
+      const case124 = join(tmp, "apt_124");
+      const out124 = join(case124, "out");
+      const { stateDir: state124, vmCommandsLog: log124, env: env124 } = setupRealInstallEnv(
+        case124,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_APT_HANG: "1",
+          POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S: "1",
+          POLYGLOT_TEST_ZSTD_KILL_GRACE_S: "1",
+        },
+        { forStub: true },
+      );
+      const res124 = await runLauncher(
+        ["--stub", "--out-dir", out124, "--session", "polyglot-n3-apt-124"],
+        env124,
+      );
+      expect(res124.code).not.toBe(0);
+      assertNoVmLogFailure(state124);
+      const cmds124 = readFileSync(log124, "utf-8");
+      expect(cmds124).toContain("apt-get\tDEBIAN_FRONTEND=noninteractive install -y zstd");
+      expect(cmds124).not.toContain("tar\t--zstd");
+      const win124 = JSON.parse(readFileSync(join(out124, "window.json"), "utf-8"));
+      expect(win124.refusal_code).toBe("ZSTD_INSTALL_FAILED");
+      expect(win124.remote_step).toBe("zstd_install");
+      expect(win124.why).toContain("[zstd_install]");
+      expect(win124.why).toContain("timed out after 1 s");
+      expect(win124.why).toContain("rc=124");
+      expect(win124.why).not.toContain("exited 124");
+      expect(readFileSync(join(state124, "stops.log"), "utf-8")).toContain("STOP -s polyglot-n3-apt-124");
+
+      // (b) apt-get ignores SIGTERM -> timeout -k sends SIGKILL and exits 137 -> "timed out after 1 s" (not "exited 137")
+      const case137 = join(tmp, "apt_137");
+      const out137 = join(case137, "out");
+      const { stateDir: state137, vmCommandsLog: log137, env: env137 } = setupRealInstallEnv(
+        case137,
+        {
+          GUARD_POLL_INTERVAL_S: "0.2",
+          FAKE_APT_HANG: "ignore_term",
+          POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S: "1",
+          POLYGLOT_TEST_ZSTD_KILL_GRACE_S: "1",
+        },
+        { forStub: true },
+      );
+      const res137 = await runLauncher(
+        ["--stub", "--out-dir", out137, "--session", "polyglot-n3-apt-137"],
+        env137,
+      );
+      expect(res137.code).not.toBe(0);
+      assertNoVmLogFailure(state137);
+      const cmds137 = readFileSync(log137, "utf-8");
+      expect(cmds137).toContain("apt-get\tDEBIAN_FRONTEND=noninteractive install -y zstd");
+      expect(cmds137).not.toContain("tar\t--zstd");
+      const win137 = JSON.parse(readFileSync(join(out137, "window.json"), "utf-8"));
+      expect(win137.refusal_code).toBe("ZSTD_INSTALL_FAILED");
+      expect(win137.remote_step).toBe("zstd_install");
+      expect(win137.why).toContain("[zstd_install]");
+      expect(win137.why).toContain("timed out after 1 s");
+      expect(win137.why).toContain("rc=137");
+      expect(win137.why).not.toContain("exited 137");
+      expect(readFileSync(join(state137, "stops.log"), "utf-8")).toContain("STOP -s polyglot-n3-apt-137");
+    } finally {
+      resetFakeOllama();
+      rmDirRetry(tmp);
+    }
+  }, 120_000);
 });

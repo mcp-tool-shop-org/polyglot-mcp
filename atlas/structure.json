@@ -306,7 +306,7 @@
           "path": "docs/colab-rung1-request.md"
         },
         {
-          "hash": "1a89533037629770097c6c35da2d0028c234278727048edc1ff406bb92abdc09",
+          "hash": "374e7498c60953ec97609678a10bdba9adf2db8cbdd8d2bbb45da9287cf7caaf",
           "path": "docs/colab-translations.md"
         }
       ],
@@ -429,7 +429,7 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 10,
+      "dynamicReads": 12,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
       "dynamicWrites": 4,
@@ -437,7 +437,7 @@
       "externals": 0,
       "files": [
         {
-          "hash": "ea8bf08b2781ccf5df7a4a739f88f86a53afb3193791d461c748beb974bd108d",
+          "hash": "f8da7638ed809fe8bdd84bb1c3a1a27c287ee2e7d9233894722e92be2680f0d2",
           "path": "scripts/colab/colab_window.sh"
         },
         {
@@ -547,7 +547,7 @@
           "path": "scripts/colab/launch_guards.py"
         },
         {
-          "hash": "cdf6f42be6ac6fe5529882dd119e2f3b1ace908bfe1f2a946f735bbb33eb3173",
+          "hash": "8807cd02ea449d9c8dde1128c96c3b90d7870c481cf588657ed4665db131fa4a",
           "path": "scripts/colab/launch_translate.sh"
         },
         {
@@ -570,10 +570,10 @@
             },
             {
               "kind": "raise",
-              "line": 97
+              "line": 131
             }
           ],
-          "hash": "9d550928857550352f80b7d86824a182922065927687d5c707878c0a6be33a43",
+          "hash": "70b98ec2f6b363d3e94b7bc8283c74cee640c5229308e69c7dbf6a9482f7c536",
           "path": "scripts/colab/translate_bundle_now.py"
         },
         {
@@ -760,8 +760,8 @@
     },
     {
       "dynamicReads": 2,
-      "dynamicSpawns": 28,
-      "dynamicSpawnsInTests": 26,
+      "dynamicSpawns": 29,
+      "dynamicSpawnsInTests": 27,
       "dynamicWrites": 0,
       "entryPoints": [
         "src/index.ts"
@@ -915,10 +915,11 @@
           ]
         },
         {
-          "hash": "1fbb78966b7b4106e9ab4cf420928eb32c61cb945e6966436f9df3390f2e4848",
+          "hash": "c1c1b0f230857b68ebcaf0cf267d840a0fd639ebacfa7e12c37c47370b7c931e",
           "names": [
             "scripts/colab/compare_translations.py",
             "scripts/colab/launch_guards.py",
+            "scripts/colab/remote_runner.py",
             "scripts/translate-all.mjs"
           ],
           "path": "src/colabLane.test.ts",
@@ -4963,7 +4964,7 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "4e8216ecee1a01d82d95fa4f34f8d840ea052ef9",
+    "commit": "66eddd9d96a89970f75036d2692ba5ffdc072b30",
     "tracked": 172
   },
   "landings": [
@@ -5304,6 +5305,17 @@
         }
       ],
       "target": "scripts/colab/launch_translate.sh",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/colab/launch_translate.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "scripts/colab/remote_runner.py",
       "writers": []
     },
     {

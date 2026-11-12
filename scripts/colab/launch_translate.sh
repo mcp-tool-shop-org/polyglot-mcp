@@ -22,6 +22,14 @@
 #   colab stop: timeout -k 10 60 with 1 retry (2 * 70 = 140 s)
 #   in_flight_bound_s = 310 s (max(download 300, upload 120, sessions 30) + 10 s -k)
 #   cleanup_stop_attempted_by_s = 310 + 840 = 1150 s, cleanup_bound_s = 1150 + 140 = 1290 s
+#
+# Bounded VM setup step budget (remote_step_budget):
+#   download_connect_timeout_s = 30 s default (--download-connect-timeout-s)
+#   node_install_download_max_time_s = 180 s default (--node-download-max-time-s)
+#   ollama_download_max_time_s = 300 s default (--ollama-download-max-time-s)
+#   zstd_install = 3 attempts * (180 s + 10 s -k) = 570 s
+#   ollama_serve = 30 s readiness wait
+#   bounded_setup_total_s = 180 + 300 + 570 + 30 = 1080 s default
 set -euo pipefail
 
 PINNED_NODE_VERSION="v22.22.3"
@@ -40,14 +48,14 @@ PINNED_VRAM_HEADROOM_MIB="1024"
 
 PINNED_LAUNCH_GUARDS_SHA="0c8f9cc805bccf5ac32b65386c8072ca40e0127fc2ae235a350be27be0623d3e"
 PINNED_REMOTE_RUNNER_SHA="834e669de7f611c8d3b0e24dcd65c568c0d97a2bafb6080b235ea9a22b4f99d9"
-PINNED_COLAB_WINDOW_SHA="4ad36d141e569209b5d1e64b5369559dc4bc02d1f4d603be1aadc074cfd23164"
+PINNED_COLAB_WINDOW_SHA="f8da7638ed809fe8bdd84bb1c3a1a27c287ee2e7d9233894722e92be2680f0d2"
 PINNED_BUNDLE_NOW_SHA="70b98ec2f6b363d3e94b7bc8283c74cee640c5229308e69c7dbf6a9482f7c536"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
 PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef05829e4194a"
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="5fb47256d06c5cfb0e4e03895e490f4e5af6f1e2731a59feda92d100854421ba"
+PINNED_SELF_SHA="f948df2f24272e269ccd8a8c5fc23bd4b1aa59256ca8bdbc9a3e32db3455d6e9"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -63,6 +71,16 @@ MARGIN="0.01"
 MIN_RUNTIME_S=""
 WALL_S="900"
 GRACE_S="60"
+DOWNLOAD_CONNECT_TIMEOUT_S_DEFAULT="30"
+NODE_DOWNLOAD_MAX_TIME_S_DEFAULT="180"
+OLLAMA_DOWNLOAD_MAX_TIME_S_DEFAULT="300"
+ZSTD_INSTALL_TIMEOUT_S_DEFAULT="180"
+ZSTD_INSTALL_KILL_GRACE_S_DEFAULT="10"
+ZSTD_INSTALL_MAX_ATTEMPTS="3"
+OLLAMA_SERVE_WAIT_S_DEFAULT="30"
+DOWNLOAD_CONNECT_TIMEOUT_S="${DOWNLOAD_CONNECT_TIMEOUT_S_DEFAULT}"
+NODE_DOWNLOAD_MAX_TIME_S="${NODE_DOWNLOAD_MAX_TIME_S_DEFAULT}"
+OLLAMA_DOWNLOAD_MAX_TIME_S="${OLLAMA_DOWNLOAD_MAX_TIME_S_DEFAULT}"
 OUT_DIR=""
 SESSION="polyglot-translate-$(date -u +%Y%m%dT%H%M%SZ)"
 DRY_RUN=0
@@ -112,6 +130,18 @@ while [ "$#" -gt 0 ]; do
       GRACE_S="${2:-}"
       shift 2
       ;;
+    --download-connect-timeout-s)
+      DOWNLOAD_CONNECT_TIMEOUT_S="${2:-}"
+      shift 2
+      ;;
+    --node-download-max-time-s)
+      NODE_DOWNLOAD_MAX_TIME_S="${2:-}"
+      shift 2
+      ;;
+    --ollama-download-max-time-s)
+      OLLAMA_DOWNLOAD_MAX_TIME_S="${2:-}"
+      shift 2
+      ;;
     --out-dir)
       OUT_DIR="${2:-}"
       shift 2
@@ -134,6 +164,29 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+for _dl_opt_pair in \
+  "--download-connect-timeout-s=${DOWNLOAD_CONNECT_TIMEOUT_S}" \
+  "--node-download-max-time-s=${NODE_DOWNLOAD_MAX_TIME_S}" \
+  "--ollama-download-max-time-s=${OLLAMA_DOWNLOAD_MAX_TIME_S}"; do
+  _dl_opt_name="${_dl_opt_pair%%=*}"
+  _dl_opt_val="${_dl_opt_pair#*=}"
+  if ! [[ "${_dl_opt_val}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "REFUSED: DOWNLOAD_TIMEOUT_INVALID: ${_dl_opt_name} ${_dl_opt_val}; expected a positive integer number of seconds" >&2
+    exit 2
+  fi
+done
+
+if [ -z "${SETUP_STALL_S:-}" ]; then
+  _min_setup_stall=600
+  if [ "$(( NODE_DOWNLOAD_MAX_TIME_S + 30 ))" -gt "${_min_setup_stall}" ]; then
+    _min_setup_stall="$(( NODE_DOWNLOAD_MAX_TIME_S + 30 ))"
+  fi
+  if [ "$(( OLLAMA_DOWNLOAD_MAX_TIME_S + 30 ))" -gt "${_min_setup_stall}" ]; then
+    _min_setup_stall="$(( OLLAMA_DOWNLOAD_MAX_TIME_S + 30 ))"
+  fi
+  export SETUP_STALL_S="${_min_setup_stall}"
+fi
 
 case "${CARD}" in
   A100 | L4 | G4 | CPU | CPU-high-mem) ;;
@@ -221,6 +274,9 @@ build_remote_env() {
     "PINNED_VRAM_HEADROOM_MIB=${PINNED_VRAM_HEADROOM_MIB}"
     "COLAB_CARD=${CARD}"
     "REPO_COMMIT=${env_repo_commit}"
+    "DOWNLOAD_CONNECT_TIMEOUT_S=${DOWNLOAD_CONNECT_TIMEOUT_S}"
+    "NODE_DOWNLOAD_MAX_TIME_S=${NODE_DOWNLOAD_MAX_TIME_S}"
+    "OLLAMA_DOWNLOAD_MAX_TIME_S=${OLLAMA_DOWNLOAD_MAX_TIME_S}"
   )
   if [ "${env_test_mode}" = "1" ]; then
     REMOTE_ENV+=("REPO_ROOT_FOR_TEST_MODULES=${REPO_ROOT}")
@@ -248,6 +304,9 @@ build_remote_env() {
     if [ -n "${POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S:-}" ]; then
       REMOTE_ENV+=("POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S=${POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S}")
     fi
+    if [ -n "${POLYGLOT_TEST_ZSTD_KILL_GRACE_S:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_ZSTD_KILL_GRACE_S=${POLYGLOT_TEST_ZSTD_KILL_GRACE_S}")
+    fi
     if [ -n "${POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S:-}" ]; then
       REMOTE_ENV+=("POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S=${POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S}")
     fi
@@ -255,6 +314,26 @@ build_remote_env() {
       REMOTE_ENV+=("POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S=${POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S}")
     fi
   fi
+}
+
+compute_remote_step_budget_vars() {
+  local b_test_mode="$1"
+  EFF_ZSTD_TIMEOUT_S="${ZSTD_INSTALL_TIMEOUT_S_DEFAULT}"
+  EFF_ZSTD_KILL_GRACE_S="${ZSTD_INSTALL_KILL_GRACE_S_DEFAULT}"
+  EFF_OLLAMA_SERVE_WAIT_S="${OLLAMA_SERVE_WAIT_S_DEFAULT}"
+  if [ "${b_test_mode}" = "1" ]; then
+    if [[ "${POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S:-}" =~ ^[1-9][0-9]*$ ]]; then
+      EFF_ZSTD_TIMEOUT_S="${POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S}"
+    fi
+    if [[ "${POLYGLOT_TEST_ZSTD_KILL_GRACE_S:-}" =~ ^[1-9][0-9]*$ ]]; then
+      EFF_ZSTD_KILL_GRACE_S="${POLYGLOT_TEST_ZSTD_KILL_GRACE_S}"
+    fi
+    if [[ "${POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S:-}" =~ ^[1-9][0-9]*$ ]]; then
+      EFF_OLLAMA_SERVE_WAIT_S="${POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S}"
+    fi
+  fi
+  ZSTD_INSTALL_BOUND_S=$(( ZSTD_INSTALL_MAX_ATTEMPTS * (EFF_ZSTD_TIMEOUT_S + EFF_ZSTD_KILL_GRACE_S) ))
+  REMOTE_STEP_BUDGET_S=$(( NODE_DOWNLOAD_MAX_TIME_S + OLLAMA_DOWNLOAD_MAX_TIME_S + ZSTD_INSTALL_BOUND_S + EFF_OLLAMA_SERVE_WAIT_S ))
 }
 
 # --dry prints the plan and the price (hours x rate, cap-bound) without any colab call.
@@ -297,10 +376,11 @@ if [ "${DRY_RUN}" = "1" ]; then
   fi
   colab_apply_test_cleanup_overrides "${DRY_TEST_MODE}"
   colab_compute_cleanup_bounds "translate"
+  compute_remote_step_budget_vars "${DRY_TEST_MODE}"
   DRY_REPO_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
   build_remote_env "${DRY_TEST_MODE}" "${DRY_REPO_COMMIT}"
 
-  "${PY_BIN}" - "${GUARDS_PY}" "${CARD}" "${SHAPE}" "${MAX_RATE:-0.26}" "${CAP}" "${MARGIN}" "${WALL_S}" "${GRACE_S}" "${SESSION}" "${OUT_DIR}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_MODEL_DIGEST}" "${PINNED_OLLAMA_VERSION}" "${PINNED_NODE_VERSION}" "${PINNED_OLLAMA_LINUX_AMD64_SHA256}" "${COLAB_CLEANUP_BOUND_S}" "${MIN_RUNTIME_S}" "${STUB_MODE}" "${README_TAR}" "${#README_PATHS[@]}" "${README_PATHS[@]}" "${REMOTE_ENV[@]}" << 'DRYPYEOF'
+  "${PY_BIN}" - "${GUARDS_PY}" "${CARD}" "${SHAPE}" "${MAX_RATE:-0.26}" "${CAP}" "${MARGIN}" "${WALL_S}" "${GRACE_S}" "${SESSION}" "${OUT_DIR}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_MODEL_DIGEST}" "${PINNED_OLLAMA_VERSION}" "${PINNED_NODE_VERSION}" "${PINNED_OLLAMA_LINUX_AMD64_SHA256}" "${COLAB_CLEANUP_BOUND_S}" "${MIN_RUNTIME_S}" "${STUB_MODE}" "${README_TAR}" "${DOWNLOAD_CONNECT_TIMEOUT_S}" "${NODE_DOWNLOAD_MAX_TIME_S}" "${OLLAMA_DOWNLOAD_MAX_TIME_S}" "${EFF_ZSTD_TIMEOUT_S}" "${EFF_ZSTD_KILL_GRACE_S}" "${ZSTD_INSTALL_MAX_ATTEMPTS}" "${ZSTD_INSTALL_BOUND_S}" "${EFF_OLLAMA_SERVE_WAIT_S}" "${REMOTE_STEP_BUDGET_S}" "${#README_PATHS[@]}" "${README_PATHS[@]}" "${REMOTE_ENV[@]}" << 'DRYPYEOF'
 import json
 import shlex
 import sys
@@ -329,9 +409,18 @@ min_runtime_raw = sys.argv[17]
 min_runtime_s = float(min_runtime_raw) if min_runtime_raw else None
 stub_mode = sys.argv[18] == "1"
 readme_tar = sys.argv[19]
-readme_count = int(sys.argv[20])
-readme_paths = sys.argv[21 : 21 + readme_count]
-remote_env = sys.argv[21 + readme_count :]
+dl_connect_timeout_s = int(sys.argv[20])
+node_dl_max_time_s = int(sys.argv[21])
+ollama_dl_max_time_s = int(sys.argv[22])
+zstd_timeout_s = int(sys.argv[23])
+zstd_kill_grace_s = int(sys.argv[24])
+zstd_max_attempts = int(sys.argv[25])
+zstd_bound_s = int(sys.argv[26])
+ollama_serve_wait_s = int(sys.argv[27])
+bounded_setup_total_s = int(sys.argv[28])
+readme_count = int(sys.argv[29])
+readme_paths = sys.argv[30 : 30 + readme_count]
+remote_env = sys.argv[30 + readme_count :]
 
 langs = ["ja", "zh", "es", "fr", "hi", "it", "pt"]
 budget = lg.evaluate_cap_budget(
@@ -427,6 +516,17 @@ plan = {
         "model_digest": None if stub_mode else f"sha256:{model_digest}",
     },
     "remote_steps": remote_steps,
+    "remote_step_budget": {
+        "download_connect_timeout_s": dl_connect_timeout_s,
+        "node_install_download_max_time_s": node_dl_max_time_s,
+        "ollama_download_max_time_s": ollama_dl_max_time_s,
+        "zstd_install_attempt_timeout_s": zstd_timeout_s,
+        "zstd_install_kill_grace_s": zstd_kill_grace_s,
+        "zstd_install_max_attempts": zstd_max_attempts,
+        "zstd_install_bound_s": zstd_bound_s,
+        "ollama_serve_wait_s": ollama_serve_wait_s,
+        "bounded_setup_total_s": bounded_setup_total_s,
+    },
     "remote_command": remote_command,
     "exec_command": exec_command,
     "pricing": {
@@ -521,12 +621,27 @@ PIN_OVERRIDE_VARS=(
   POLYGLOT_TEST_NODE_TAR_SHA256
   POLYGLOT_TEST_OLLAMA_TAR_SHA256
   POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S
+  POLYGLOT_TEST_ZSTD_KILL_GRACE_S
   POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S
   POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S
   SDLAB_TEST_PROBE_ERROR_MODE
 )
 colab_refuse_live_pin_overrides "${OUT_DIR}" "${TEST_MODE}" "${PIN_OVERRIDE_VARS[@]}"
 colab_apply_test_cleanup_overrides "${TEST_MODE}"
+compute_remote_step_budget_vars "${TEST_MODE}"
+cat > "${OUT_DIR}/remote_step_budget.json" << BUDGETEOF
+{
+  "download_connect_timeout_s": ${DOWNLOAD_CONNECT_TIMEOUT_S},
+  "node_install_download_max_time_s": ${NODE_DOWNLOAD_MAX_TIME_S},
+  "ollama_download_max_time_s": ${OLLAMA_DOWNLOAD_MAX_TIME_S},
+  "zstd_install_attempt_timeout_s": ${EFF_ZSTD_TIMEOUT_S},
+  "zstd_install_kill_grace_s": ${EFF_ZSTD_KILL_GRACE_S},
+  "zstd_install_max_attempts": ${ZSTD_INSTALL_MAX_ATTEMPTS},
+  "zstd_install_bound_s": ${ZSTD_INSTALL_BOUND_S},
+  "ollama_serve_wait_s": ${EFF_OLLAMA_SERVE_WAIT_S},
+  "bounded_setup_total_s": ${REMOTE_STEP_BUDGET_S}
+}
+BUDGETEOF
 export TEST_MODE
 
 EXP_GUARDS_SHA="${PINNED_LAUNCH_GUARDS_SHA}"
@@ -856,13 +971,15 @@ from pathlib import Path
 
 step, code, reason, rc_s, state_dir_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 rc_val = int(rc_s) if rc_s.lstrip("-").isdigit() and int(rc_s) != 0 else 1
-why_clean = reason.strip()
-if step and f"[{step}]" not in why_clean and not why_clean.startswith(f"{step}:"):
-    why_with_step = f"[{step}] {why_clean}" if why_clean else f"[{step}] remote step failed (rc={rc_val})"
+step_clean = (step or "unknown")[:64]
+why_clean = reason.strip()[:900]
+if step_clean and f"[{step_clean}]" not in why_clean and not why_clean.startswith(f"{step_clean}:"):
+    why_with_step = f"[{step_clean}] {why_clean}" if why_clean else f"[{step_clean}] remote step failed (rc={rc_val})"
 else:
-    why_with_step = why_clean or f"[{step or 'unknown'}] remote step failed (rc={rc_val})"
+    why_with_step = why_clean or f"[{step_clean}] remote step failed (rc={rc_val})"
+why_with_step = why_with_step[:1024]
 marker = {
-    "step": step or "unknown",
+    "step": step_clean,
     "refusal_code": code,
     "reason": why_clean,
     "why": why_with_step,
@@ -1072,11 +1189,11 @@ if not rf_out.is_file():
             tail_lines.append(ln)
     code = found_code or "REMOTE_STEP_FAILED"
     if found_code and found_reason:
-        reason = found_reason
+        reason = found_reason[:900]
     else:
         tail_snip = tail_lines[-1][:240] if tail_lines else ""
-        reason = f"remote step '{last_step}' exited with rc={rc}" + (f": {tail_snip}" if tail_snip else "")
-    why = reason if (f"[{last_step}]" in reason or reason.startswith(f"{last_step}:")) else f"[{last_step}] {reason}"
+        reason = (f"remote step '{last_step}' exited with rc={rc}" + (f": {tail_snip}" if tail_snip else ""))[:900]
+    why = (reason if (f"[{last_step}]" in reason or reason.startswith(f"{last_step}:")) else f"[{last_step}] {reason}")[:1024]
     marker = {
         "step": last_step,
         "refusal_code": code,
@@ -1126,13 +1243,23 @@ trap remote_on_exit EXIT
     begin_remote_step "node_install"
     NODE_TAR="/content/node-${PINNED_NODE_VERSION}-linux-x64.tar.xz"
     NODE_URL="${POLYGLOT_TEST_NODE_TAR_URL:-https://nodejs.org/dist/${PINNED_NODE_VERSION}/node-${PINNED_NODE_VERSION}-linux-x64.tar.xz}"
+    NODE_DL_CONNECT_TIMEOUT_S="${DOWNLOAD_CONNECT_TIMEOUT_S:-30}"
+    NODE_DL_MAX_TIME_S="${NODE_DOWNLOAD_MAX_TIME_S:-180}"
     node_dl_rc=0
-    curl -fsSL "${NODE_URL}" -o "${NODE_TAR}" > /content/polyglot_out/node_download.log 2>&1 || node_dl_rc=$?
+    curl -fsSL --connect-timeout "${NODE_DL_CONNECT_TIMEOUT_S}" --max-time "${NODE_DL_MAX_TIME_S}" \
+      "${NODE_URL}" -o "${NODE_TAR}" > /content/polyglot_out/node_download.log 2>&1 || node_dl_rc=$?
     if [ -s /content/polyglot_out/node_download.log ]; then
       cat /content/polyglot_out/node_download.log
     fi
     if [ "${node_dl_rc}" -ne 0 ] || [ ! -s "${NODE_TAR}" ]; then
       node_dl_err="$(tr '\r\n' '  ' < /content/polyglot_out/node_download.log 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      if [ "${node_dl_rc}" -eq 28 ] || [ "${node_dl_rc}" -eq 124 ] || [ "${node_dl_rc}" -eq 137 ]; then
+        node_dl_timeout_s="${NODE_DL_MAX_TIME_S}"
+        if [ "${NODE_DL_CONNECT_TIMEOUT_S}" -lt "${NODE_DL_MAX_TIME_S}" ] && printf '%s' "${node_dl_err}" | grep -qi 'connection timed out'; then
+          node_dl_timeout_s="${NODE_DL_CONNECT_TIMEOUT_S}"
+        fi
+        fail_remote_step "node_install" "NODE_INSTALL_FAILED" "curl download of ${NODE_URL} timed out after ${node_dl_timeout_s} s (max_time=${NODE_DL_MAX_TIME_S}s, connect_timeout=${NODE_DL_CONNECT_TIMEOUT_S}s, rc=${node_dl_rc})${node_dl_err:+: ${node_dl_err}}" "${node_dl_rc}"
+      fi
       fail_remote_step "node_install" "NODE_INSTALL_FAILED" "curl download of ${NODE_URL} failed (rc=${node_dl_rc})${node_dl_err:+: ${node_dl_err}}" "${node_dl_rc}"
     fi
     GOT_NODE_SHA="$(sha256sum "${NODE_TAR}" | awk '{print $1}')"
@@ -1164,13 +1291,23 @@ trap remote_on_exit EXIT
     begin_remote_step "ollama_download"
     OLLAMA_ARCHIVE="/content/ollama-linux-amd64.tar.zst"
     OLLAMA_URL_ARCHIVE="${POLYGLOT_TEST_OLLAMA_TAR_URL:-https://github.com/ollama/ollama/releases/download/v${PINNED_OLLAMA_VERSION}/ollama-linux-amd64.tar.zst}"
+    OLLAMA_DL_CONNECT_TIMEOUT_S="${DOWNLOAD_CONNECT_TIMEOUT_S:-30}"
+    OLLAMA_DL_MAX_TIME_S="${OLLAMA_DOWNLOAD_MAX_TIME_S:-300}"
     ollama_dl_rc=0
-    curl -fsSL "${OLLAMA_URL_ARCHIVE}" -o "${OLLAMA_ARCHIVE}" > /content/polyglot_out/ollama_download.log 2>&1 || ollama_dl_rc=$?
+    curl -fsSL --connect-timeout "${OLLAMA_DL_CONNECT_TIMEOUT_S}" --max-time "${OLLAMA_DL_MAX_TIME_S}" \
+      "${OLLAMA_URL_ARCHIVE}" -o "${OLLAMA_ARCHIVE}" > /content/polyglot_out/ollama_download.log 2>&1 || ollama_dl_rc=$?
     if [ -s /content/polyglot_out/ollama_download.log ]; then
       cat /content/polyglot_out/ollama_download.log
     fi
     if [ "${ollama_dl_rc}" -ne 0 ] || [ ! -s "${OLLAMA_ARCHIVE}" ]; then
       ollama_dl_err="$(tr '\r\n' '  ' < /content/polyglot_out/ollama_download.log 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      if [ "${ollama_dl_rc}" -eq 28 ] || [ "${ollama_dl_rc}" -eq 124 ] || [ "${ollama_dl_rc}" -eq 137 ]; then
+        ollama_dl_timeout_s="${OLLAMA_DL_MAX_TIME_S}"
+        if [ "${OLLAMA_DL_CONNECT_TIMEOUT_S}" -lt "${OLLAMA_DL_MAX_TIME_S}" ] && printf '%s' "${ollama_dl_err}" | grep -qi 'connection timed out'; then
+          ollama_dl_timeout_s="${OLLAMA_DL_CONNECT_TIMEOUT_S}"
+        fi
+        fail_remote_step "ollama_download" "OLLAMA_DOWNLOAD_FAILED" "curl download of ${OLLAMA_URL_ARCHIVE} timed out after ${ollama_dl_timeout_s} s (max_time=${OLLAMA_DL_MAX_TIME_S}s, connect_timeout=${OLLAMA_DL_CONNECT_TIMEOUT_S}s, rc=${ollama_dl_rc})${ollama_dl_err:+: ${ollama_dl_err}}" "${ollama_dl_rc}"
+      fi
       fail_remote_step "ollama_download" "OLLAMA_DOWNLOAD_FAILED" "curl download of ${OLLAMA_URL_ARCHIVE} failed (rc=${ollama_dl_rc})${ollama_dl_err:+: ${ollama_dl_err}}" "${ollama_dl_rc}"
     fi
     GOT_OLLAMA_SHA="$(sha256sum "${OLLAMA_ARCHIVE}" | awk '{print $1}')"
@@ -1181,12 +1318,14 @@ trap remote_on_exit EXIT
     # 3. Install zstd on the stock Colab image BEFORE unpacking .tar.zst (Ollama v0.40.15 publishes only .tar.zst for Linux x86_64)
     begin_remote_step "zstd_install"
     ZSTD_INSTALL_TIMEOUT_S="${POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S:-180}"
+    ZSTD_INSTALL_KILL_GRACE_S="${POLYGLOT_TEST_ZSTD_KILL_GRACE_S:-10}"
     zstd_apt_rc=0
-    DEBIAN_FRONTEND=noninteractive timeout -k 10 "${ZSTD_INSTALL_TIMEOUT_S}" apt-get install -y zstd > /content/polyglot_out/zstd_install.log 2>&1 || zstd_apt_rc=$?
+    zstd_upd_rc=0
+    DEBIAN_FRONTEND=noninteractive timeout -k "${ZSTD_INSTALL_KILL_GRACE_S}" "${ZSTD_INSTALL_TIMEOUT_S}" apt-get install -y zstd > /content/polyglot_out/zstd_install.log 2>&1 || zstd_apt_rc=$?
     if [ "${zstd_apt_rc}" -ne 0 ]; then
-      DEBIAN_FRONTEND=noninteractive timeout -k 10 "${ZSTD_INSTALL_TIMEOUT_S}" apt-get update -y >> /content/polyglot_out/zstd_install.log 2>&1 || true
+      DEBIAN_FRONTEND=noninteractive timeout -k "${ZSTD_INSTALL_KILL_GRACE_S}" "${ZSTD_INSTALL_TIMEOUT_S}" apt-get update -y >> /content/polyglot_out/zstd_install.log 2>&1 || zstd_upd_rc=$?
       zstd_apt_rc=0
-      DEBIAN_FRONTEND=noninteractive timeout -k 10 "${ZSTD_INSTALL_TIMEOUT_S}" apt-get install -y zstd >> /content/polyglot_out/zstd_install.log 2>&1 || zstd_apt_rc=$?
+      DEBIAN_FRONTEND=noninteractive timeout -k "${ZSTD_INSTALL_KILL_GRACE_S}" "${ZSTD_INSTALL_TIMEOUT_S}" apt-get install -y zstd >> /content/polyglot_out/zstd_install.log 2>&1 || zstd_apt_rc=$?
     fi
     if [ -s /content/polyglot_out/zstd_install.log ]; then
       cat /content/polyglot_out/zstd_install.log
@@ -1194,6 +1333,12 @@ trap remote_on_exit EXIT
     hash -r 2>/dev/null || true
     if [ "${zstd_apt_rc}" -ne 0 ]; then
       zstd_apt_err="$(tail -n 5 /content/polyglot_out/zstd_install.log 2>/dev/null | tr '\r\n' '  ' | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+      if [ "${zstd_apt_rc}" -eq 124 ] || [ "${zstd_apt_rc}" -eq 137 ]; then
+        fail_remote_step "zstd_install" "ZSTD_INSTALL_FAILED" "apt-get install -y zstd timed out after ${ZSTD_INSTALL_TIMEOUT_S} s (rc=${zstd_apt_rc})${zstd_apt_err:+: ${zstd_apt_err}}" "${zstd_apt_rc}"
+      fi
+      if [ "${zstd_upd_rc}" -eq 124 ] || [ "${zstd_upd_rc}" -eq 137 ]; then
+        fail_remote_step "zstd_install" "ZSTD_INSTALL_FAILED" "apt-get update -y timed out after ${ZSTD_INSTALL_TIMEOUT_S} s (rc=${zstd_upd_rc}) before apt-get install -y zstd exited ${zstd_apt_rc}${zstd_apt_err:+: ${zstd_apt_err}}" "${zstd_apt_rc}"
+      fi
       fail_remote_step "zstd_install" "ZSTD_INSTALL_FAILED" "apt-get install -y zstd exited ${zstd_apt_rc}${zstd_apt_err:+: ${zstd_apt_err}}" "${zstd_apt_rc}"
     fi
     if ! command -v zstd >/dev/null 2>&1; then
@@ -1561,6 +1706,22 @@ vm_win = {
     "ollama_version": ver_data.get("version") or pinned_ollama,
     "remote_step": "ollama_serve",
     "translated_readmes": 0,
+    "remote_step_budget": {
+        "download_connect_timeout_s": int(__import__("os").environ.get("DOWNLOAD_CONNECT_TIMEOUT_S", "30")),
+        "node_install_download_max_time_s": int(__import__("os").environ.get("NODE_DOWNLOAD_MAX_TIME_S", "180")),
+        "ollama_download_max_time_s": int(__import__("os").environ.get("OLLAMA_DOWNLOAD_MAX_TIME_S", "300")),
+        "zstd_install_attempt_timeout_s": int(__import__("os").environ.get("POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S", "180")),
+        "zstd_install_kill_grace_s": int(__import__("os").environ.get("POLYGLOT_TEST_ZSTD_KILL_GRACE_S", "10")),
+        "zstd_install_max_attempts": 3,
+        "zstd_install_bound_s": 3 * (int(__import__("os").environ.get("POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S", "180")) + int(__import__("os").environ.get("POLYGLOT_TEST_ZSTD_KILL_GRACE_S", "10"))),
+        "ollama_serve_wait_s": int(__import__("os").environ.get("POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S", "30")),
+        "bounded_setup_total_s": (
+            int(__import__("os").environ.get("NODE_DOWNLOAD_MAX_TIME_S", "180"))
+            + int(__import__("os").environ.get("OLLAMA_DOWNLOAD_MAX_TIME_S", "300"))
+            + 3 * (int(__import__("os").environ.get("POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S", "180")) + int(__import__("os").environ.get("POLYGLOT_TEST_ZSTD_KILL_GRACE_S", "10")))
+            + int(__import__("os").environ.get("POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S", "30"))
+        ),
+    },
 }
 (out_root / "vm_window.json").write_text(json.dumps(vm_win, indent=2) + "\n", encoding="utf-8", newline="\n")
 print("WINDOW_JSON " + json.dumps(vm_win), flush=True)
@@ -1597,8 +1758,9 @@ state_dir = Path(sys.argv[6])
 def _fail_translate(code: str, reason: str, raw_stderr: str = "") -> None:
     shutil.rmtree(out_root / "_staging_translations", ignore_errors=True)
     shutil.rmtree(out_root / "translations", ignore_errors=True)
-    why = reason if reason.startswith("[translate]") else f"[translate] {reason}"
-    marker = {"step": "translate", "refusal_code": code, "reason": reason, "why": why, "rc": 1}
+    reason_clean = reason.strip()[:900]
+    why = (reason_clean if reason_clean.startswith("[translate]") else f"[translate] {reason_clean}")[:1024]
+    marker = {"step": "translate", "refusal_code": code, "reason": reason_clean, "why": why, "rc": 1}
     payload = json.dumps(marker, indent=2) + "\n"
     (out_root / "remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
     (state_dir / "remote_failure.json").write_text(payload, encoding="utf-8", newline="\n")
@@ -1852,6 +2014,22 @@ vm_win = {
     "fit_probe": fit_probe,
     "remote_step": "translate",
     "translated_readmes": len(readme_manifests),
+    "remote_step_budget": {
+        "download_connect_timeout_s": int(os.environ.get("DOWNLOAD_CONNECT_TIMEOUT_S", "30")),
+        "node_install_download_max_time_s": int(os.environ.get("NODE_DOWNLOAD_MAX_TIME_S", "180")),
+        "ollama_download_max_time_s": int(os.environ.get("OLLAMA_DOWNLOAD_MAX_TIME_S", "300")),
+        "zstd_install_attempt_timeout_s": int(os.environ.get("POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S", "180")),
+        "zstd_install_kill_grace_s": int(os.environ.get("POLYGLOT_TEST_ZSTD_KILL_GRACE_S", "10")),
+        "zstd_install_max_attempts": 3,
+        "zstd_install_bound_s": 3 * (int(os.environ.get("POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S", "180")) + int(os.environ.get("POLYGLOT_TEST_ZSTD_KILL_GRACE_S", "10"))),
+        "ollama_serve_wait_s": int(os.environ.get("POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S", "30")),
+        "bounded_setup_total_s": (
+            int(os.environ.get("NODE_DOWNLOAD_MAX_TIME_S", "180"))
+            + int(os.environ.get("OLLAMA_DOWNLOAD_MAX_TIME_S", "300"))
+            + 3 * (int(os.environ.get("POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S", "180")) + int(os.environ.get("POLYGLOT_TEST_ZSTD_KILL_GRACE_S", "10")))
+            + int(os.environ.get("POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S", "30"))
+        ),
+    },
 }
 if zstd_ver:
     vm_win["zstd_version"] = zstd_ver

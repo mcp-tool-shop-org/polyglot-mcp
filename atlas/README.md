@@ -1,16 +1,15 @@
 # polyglot-mcp: how it works
 
-Mapped at 2026-11-11 from commit 4e8216e by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 66eddd9 by Atlas 1.26.0.
 
 ## What this is
 
 8 parts, mostly TypeScript (51 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.
 
-## What changed since 2026-11-09 (d62cc6a)
+## What changed since 2026-11-11 (4e8216e)
 
-- scripts/colab/colab_window.sh is now read by src/colabLane.test.ts.
-- scripts/colab/launch_guards.py is now read by src/colabLane.test.ts.
-- 1 file added and 10 changed content, across 4 parts.
+- scripts/colab/remote_runner.py is now read by scripts/colab/launch_translate.sh.
+- 5 files changed content, across 3 parts.
 
 ## What comes in
 
@@ -84,10 +83,10 @@ Beside the path, src/translate.ts also calls src/languages.ts, src/glossary.ts, 
 
 ## What this map cannot see
 
-- 4 writes and 12 reads use paths built at run time and are not named here.
+- 4 writes and 14 reads use paths built at run time and are not named here.
 - 11 writes and 23 reads go to a path their caller passes, not to this repository.
 - 1 read goes to the directory the command is run in (LICENSE), not to this repository.
-- 28 commands are built at run time and not followed, 26 of them in tests.
+- 29 commands are built at run time and not followed, 27 of them in tests.
 - Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

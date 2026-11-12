@@ -469,6 +469,8 @@ colab_upload_checked() {
   printf '%s\n' "${out}" >> "${out_dir}/colab.log"
   if colab_rc_is_timeout "${rc}"; then
     echo "UPLOAD_TIMEOUT ${src} -> ${dst} timeout_s=${upload_timeout} kill_grace_s=${kill_grace} rc=${rc}" >> "${out_dir}/guards.log"
+    colab_refuse_logged "${out_dir}" UPLOAD_FAILED "${src} -> ${dst}: colab upload timed out after ${upload_timeout} s (rc=${rc}) http=$(_colab_http_status "${out}") (CLI output in colab.log)"
+    return 1
   fi
   if [ "${rc}" -ne 0 ] || ! grep -Fq "[colab] Uploaded '" <<< "${out}"; then
     colab_refuse_logged "${out_dir}" UPLOAD_FAILED "${src} -> ${dst}: colab upload rc=${rc} http=$(_colab_http_status "${out}") (CLI output in colab.log)"
@@ -506,6 +508,9 @@ colab_download_checked() {
   printf '%s\n' "${out}" >> "${out_dir}/colab.log"
   if colab_rc_is_timeout "${rc}"; then
     echo "SALVAGE_STEP_TIMEOUT download timeout_s=${dl_timeout} kill_grace_s=${kill_grace} rc=${rc}" >> "${out_dir}/guards.log"
+    rm -f "${dst}"
+    colab_refuse_logged "${out_dir}" DOWNLOAD_FAILED "${src} -> ${dst}: colab download timed out after ${dl_timeout} s (rc=${rc}) http=$(_colab_http_status "${out}") (CLI output in colab.log)"
+    return 1
   fi
   if [ "${rc}" -ne 0 ] || ! grep -Fq "[colab] Downloaded '" <<< "${out}" || [ ! -s "${dst}" ]; then
     rm -f "${dst}"
@@ -1548,8 +1553,10 @@ colab_open_session_locked() {
       if [ "${lock_rc}" -ne 0 ]; then
         if colab_rc_is_timeout "${lock_rc}"; then
           echo "OPEN_LOCK_TIMEOUT lock=${lock_file} session=${session} timeout_s=${open_lock_timeout} kill_grace_s=${kill_grace} rc=${lock_rc}" >> "${out_dir}/guards.log"
+          colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "acquiring ${lock_file} timed out after ${open_lock_timeout} s (rc=${lock_rc})"
+        else
+          colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_file} within ${open_lock_timeout} s (rc=${lock_rc})"
         fi
-        colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_file} within ${open_lock_timeout} s (rc=${lock_rc})"
         exit "${lock_rc}"
       fi
       printf '1\n' > "${lock_file}.held"
@@ -1559,6 +1566,8 @@ colab_open_session_locked() {
       rm -f "${lock_file}.held"
       if colab_rc_is_timeout "${new_rc}"; then
         echo "NEW_TIMEOUT session=${session} timeout_s=${new_timeout} kill_grace_s=${kill_grace} rc=${new_rc}" >> "${out_dir}/guards.log"
+        colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} timed out after ${new_timeout} s (rc=${new_rc})"
+        exit "${new_rc}"
       fi
       if [ "${new_rc}" -ne 0 ]; then
         colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} failed (rc=${new_rc})"
@@ -1575,8 +1584,10 @@ colab_open_session_locked() {
     if [ "${lock_rc}" -ne 0 ]; then
       if colab_rc_is_timeout "${lock_rc}"; then
         echo "OPEN_LOCK_TIMEOUT lock=${lock_file} session=${session} timeout_s=${open_lock_timeout} kill_grace_s=${kill_grace} rc=${lock_rc}" >> "${out_dir}/guards.log"
+        colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "acquiring ${lock_dir} timed out after ${open_lock_timeout} s (rc=${lock_rc})"
+      else
+        colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_dir} within ${open_lock_timeout} s (rc=${lock_rc})"
       fi
-      colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_dir} within ${open_lock_timeout} s (rc=${lock_rc})"
       return "${lock_rc}"
     fi
     printf '1\n' > "${lock_file}.held"
@@ -1587,6 +1598,8 @@ colab_open_session_locked() {
     rmdir "${lock_dir}" 2>/dev/null || true
     if colab_rc_is_timeout "${rc}"; then
       echo "NEW_TIMEOUT session=${session} timeout_s=${new_timeout} kill_grace_s=${kill_grace} rc=${rc}" >> "${out_dir}/guards.log"
+      colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} timed out after ${new_timeout} s (rc=${rc})"
+      return "${rc}"
     fi
     if [ "${rc}" -ne 0 ]; then
       colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} failed (rc=${rc})"
@@ -2482,6 +2495,12 @@ if vitals_p.exists():
                 pass
 
 
+if (out_dir / "remote_step_budget.json").is_file() and "remote_step_budget" not in vm_facts:
+    try:
+        vm_facts["remote_step_budget"] = json.loads((out_dir / "remote_step_budget.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
 def bundle_member_text(name: str) -> str | None:
     """Text of the first member called `name` in a downloaded bundle, or None."""
     for tar_p in sorted(out_dir.glob("*.tar.gz")):
@@ -2611,6 +2630,7 @@ REFUSAL_CODES = (
     "REMOTE_STEP_FAILED",
     "STUB_CPU_ONLY",
     "STUB_SKIP_INSTALL_FORBIDDEN",
+    "DOWNLOAD_TIMEOUT_INVALID",
 )
 # A refusal code comes only from a line the kit itself emits, starting `REFUSED: <CODE>`, in the
 # files those lines are written to: guards.log (rig side), the exec stream in vitals.log, and the
@@ -2619,6 +2639,38 @@ REFUSAL_CODES = (
 # `python -c` source with its refusal words) is skipped up to the block's HARNESS: line.
 REFUSED_LINE_RE = re.compile(r"^REFUSED: ([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?=[:\s]|$)")
 REMOTE_STEP_LINE_RE = re.compile(r"^REMOTE_STEP\s+step=([A-Za-z0-9_.-]+)\s*$")
+MARKER_STEP_MAX_LEN = 64
+MARKER_WHY_MAX_LEN = 1024
+
+
+def validate_marker_step(raw_step: object) -> tuple[str | None, str | None]:
+    """Validate a marker's `step` against MARKER_STEP_MAX_LEN and REMOTE_STEP_LINE_RE."""
+    if not isinstance(raw_step, str):
+        return None, "REMOTE_STEP_LINE_RE (marker step is missing or not a string)"
+    if "\n" in raw_step or "\r" in raw_step or raw_step != raw_step.strip():
+        return None, "REMOTE_STEP_LINE_RE (marker step contains whitespace or control characters)"
+    if not raw_step:
+        return None, "REMOTE_STEP_LINE_RE (marker step is empty)"
+    if len(raw_step) > MARKER_STEP_MAX_LEN:
+        return None, f"MARKER_STEP_MAX_LEN={MARKER_STEP_MAX_LEN} (marker step len={len(raw_step)})"
+    ms = REMOTE_STEP_LINE_RE.match(f"REMOTE_STEP step={raw_step}")
+    if not ms or ms.group(1) != raw_step:
+        return None, "REMOTE_STEP_LINE_RE (marker step does not match [A-Za-z0-9_.-]+)"
+    return raw_step, None
+
+
+def validate_marker_why(rf: dict) -> tuple[str, str | None]:
+    """Validate a marker's `why` / `reason` fields against MARKER_WHY_MAX_LEN."""
+    for field in ("why", "reason"):
+        val = rf.get(field)
+        if val is None:
+            continue
+        if not isinstance(val, str):
+            return "", f"MARKER_WHY_MAX_LEN (marker {field} is not a string)"
+        if len(val) > MARKER_WHY_MAX_LEN:
+            return "", f"MARKER_WHY_MAX_LEN={MARKER_WHY_MAX_LEN} (marker {field} len={len(val)})"
+    chosen = rf.get("why") if isinstance(rf.get("why"), str) and rf.get("why").strip() else (rf.get("reason") or "")
+    return str(chosen).strip(), None
 
 
 def iter_non_proc_lines(text: str, skip_proc: bool):
@@ -2699,22 +2751,32 @@ if remote_failure is None:
                     pass
 
 last_remote_step: str | None = None
-if isinstance(remote_failure, dict) and isinstance(remote_failure.get("step"), str) and remote_failure["step"].strip():
-    last_remote_step = remote_failure["step"].strip()
+if isinstance(remote_failure, dict):
+    valid_rf_step, _ = validate_marker_step(remote_failure.get("step"))
+    if valid_rf_step:
+        last_remote_step = valid_rf_step
 if not last_remote_step:
-    last_remote_step = read_text_file(out_dir / "remote_step.txt")
+    disk_step = read_text_file(out_dir / "remote_step.txt")
+    if disk_step:
+        valid_disk_step, _ = validate_marker_step(disk_step)
+        if valid_disk_step:
+            last_remote_step = valid_disk_step
 if not last_remote_step:
     rs_bundle = bundle_member_text("remote_step.txt")
     if rs_bundle and rs_bundle.strip():
-        last_remote_step = rs_bundle.strip().splitlines()[-1].strip()
+        valid_bundle_step, _ = validate_marker_step(rs_bundle.strip().splitlines()[-1].strip())
+        if valid_bundle_step:
+            last_remote_step = valid_bundle_step
 if not last_remote_step:
     for src_txt, sk in ((vitals_text, True), (setup_bundle_text, False)):
         for ln in iter_non_proc_lines(src_txt, sk):
             ms = REMOTE_STEP_LINE_RE.match(ln)
-            if ms:
+            if ms and len(ms.group(1)) <= MARKER_STEP_MAX_LEN:
                 last_remote_step = ms.group(1)
-if not last_remote_step and isinstance(vm_facts.get("remote_step"), str) and vm_facts["remote_step"].strip():
-    last_remote_step = vm_facts["remote_step"].strip()
+if not last_remote_step and isinstance(vm_facts.get("remote_step"), str):
+    valid_vm_step, _ = validate_marker_step(vm_facts["remote_step"].strip())
+    if valid_vm_step:
+        last_remote_step = valid_vm_step
 
 refusal_code: str | None = None
 refusal_why: str | None = None
@@ -2726,15 +2788,26 @@ if guards_p.exists():
         refusal_code, refusal_why = found_guard
 
 if refusal_code is None and isinstance(remote_failure, dict):
-    m_code = str(remote_failure.get("refusal_code") or "").strip()
-    m_step = str(remote_failure.get("step") or last_remote_step or "").strip()
-    m_why = str(remote_failure.get("why") or remote_failure.get("reason") or "").strip()
-    if m_code in REFUSAL_CODES:
-        refusal_code = m_code
-        if m_why:
-            refusal_why = m_why if (not m_step or m_step in m_why) else f"[{m_step}] {m_why}"
+    m_step, step_check_err = validate_marker_step(remote_failure.get("step"))
+    m_why, why_check_err = validate_marker_why(remote_failure)
+    if step_check_err is not None or why_check_err is not None:
+        failed_checks = "; ".join(err for err in (step_check_err, why_check_err) if err)
+        step_tag = last_remote_step or "unknown"
+        refusal_code = "REMOTE_STEP_FAILED"
+        refusal_why = f"[{step_tag}] remote failure marker failed check: {failed_checks}"
+    else:
+        m_code = str(remote_failure.get("refusal_code") or "").strip()
+        eff_step = m_step or last_remote_step or "unknown"
+        if m_code in REFUSAL_CODES:
+            refusal_code = m_code
+            if m_why:
+                cand_why = m_why if (eff_step in m_why) else f"[{eff_step}] {m_why}"
+                refusal_why = cand_why[:MARKER_WHY_MAX_LEN]
+            else:
+                refusal_why = f"[{eff_step}] remote step '{eff_step}' failed ({m_code})"
         else:
-            refusal_why = f"[{m_step or 'unknown'}] remote step '{m_step or 'unknown'}' failed ({m_code})"
+            refusal_code = "REMOTE_STEP_FAILED"
+            refusal_why = f"[{eff_step}] remote failure marker failed check: REFUSAL_CODES (unknown refusal_code={m_code[:64]!r})"
 
 if refusal_code is None:
     for src_text, skip_proc in ((vitals_text, True), (setup_bundle_text, False)):
