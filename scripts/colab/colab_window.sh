@@ -962,6 +962,7 @@ colab_run_exec_with_live_guards() {
   local stall_s="${STALL_S:-300}"
   local setup_stall_s="${SETUP_STALL_S:-600}"
   local last_size=0
+  local last_segments=""
   local last_progress_epoch
   last_progress_epoch="$(date -u +%s)"
   local last_setup_bytes=0
@@ -1010,6 +1011,16 @@ colab_run_exec_with_live_guards() {
     if [ "${cur_size:-0}" != "${last_size}" ]; then
       last_size="${cur_size:-0}"
       last_progress_epoch="${now_epoch}"
+    fi
+    # Per-segment heartbeat: the VM's vitals sampler prints SEGMENTS_DONE (segments translated so far). A rise is
+    # progress, so a run that is slow but finishing segments never trips the stall guard; one whose count stops
+    # rising for STALL_S still does.
+    cur_segments="$("${py_bin}" "${guards_py}" --segments-done "${out_dir}/vitals.log" </dev/null 2>/dev/null || true)"
+    if [ -n "${cur_segments}" ] && [ "${cur_segments}" != "${last_segments}" ]; then
+      if [ -n "${last_segments}" ] && [ "${cur_segments}" -gt "${last_segments}" ] 2>/dev/null; then
+        last_progress_epoch="${now_epoch}"
+      fi
+      last_segments="${cur_segments}"
     fi
     idle_s="$((now_epoch - last_progress_epoch))"
 
@@ -2669,6 +2680,7 @@ REFUSAL_CODES = (
     "MODEL_DIGEST_MISMATCH",
     "MODEL_NOT_FULLY_ON_GPU",
     "VRAM_HEADROOM_LOW",
+    "CONTEXT_PIN_MISMATCH",
     "NAV_BAR_INCOMPLETE",
     "PIN_OVERRIDE_IN_LIVE_RUN",
     "OUT_DIR_REQUIRED",

@@ -4,6 +4,7 @@
  */
 
 import { OllamaClient, type StreamCallback } from "./ollama.js";
+import { numPredictFor } from "./numCtx.js";
 import { resolveLanguage, type Language } from "./languages.js";
 import {
   buildGlossaryHint,
@@ -67,6 +68,8 @@ export interface BatchItem {
 export interface TranslateBatchOptions extends TranslateOptions {
   /** Max combined characters before flushing a batch. Auto-derived from model if omitted. */
   batchCharLimit?: number;
+  /** Called after each group of items has its translation: (items finished so far, items in this call). */
+  onItemsDone?: (done: number, total: number) => void;
 }
 
 /**
@@ -79,6 +82,8 @@ export interface TranslateBatchOptions extends TranslateOptions {
  */
 export interface BatchItemDetail {
   via: "single" | "batch" | "fallback";
+  /** The model hit the output cap (num_predict) on this item; its translation is returned empty. */
+  truncated?: boolean;
 }
 
 export interface TranslateBatchResult {
@@ -262,18 +267,24 @@ export async function translate(
     let response;
     if (useStream) {
       response = await client.generateStream(
-        { model, prompt, options: { temperature: options.temperature ?? 0.1 } },
+        { model, prompt, options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk) } },
         options.onToken!
       );
     } else {
       response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1 },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk) },
       });
     }
 
     let translated = response.response.trim();
+    if (response.done_reason === "length") {
+      // Cut off at the output cap: never keep half a translation.
+      warnings.push(`Chunk translation hit the num_predict cap and was cut short — using source text.`);
+      translations.push(chunk);
+      continue;
+    }
     if (options.polish !== false) {
       translated = polish(translated);
     }
@@ -351,13 +362,16 @@ export async function translateBatch(
       const response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1 },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, item.text) },
       });
       ollamaCalls++;
-      let translated = response.response.trim();
+      const truncated = response.done_reason === "length";
+      // A cut-off translation is returned empty, so the caller's retry and reporting
+      // machinery treats it as unusable instead of keeping half a segment.
+      let translated = truncated ? "" : response.response.trim();
       if (options.polish !== false) translated = polish(translated);
       results[item.index] = translated;
-      details[item.index] = { via: "single" };
+      details[item.index] = truncated ? { via: "single", truncated: true } : { via: "single" };
     } else {
       // Multiple items — join with separator
       const joinedText = batchItems.map((b) => b.text).join(BATCH_SEPARATOR);
@@ -366,13 +380,14 @@ export async function translateBatch(
       const response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1 },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, joinedText) },
       });
       ollamaCalls++;
 
       const outputParts = response.response.split(/---POLYGLOT_SEP---/);
 
-      if (outputParts.length === batchItems.length) {
+      // A batch cut off at the output cap has lost its tail: send each item on its own.
+      if (response.done_reason !== "length" && outputParts.length === batchItems.length) {
         // Separator count matches — split worked
         for (let j = 0; j < batchItems.length; j++) {
           let translated = outputParts[j].trim();
@@ -388,18 +403,20 @@ export async function translateBatch(
           const fallbackResponse = await client.generate({
             model,
             prompt: fallbackPrompt,
-            options: { temperature: options.temperature ?? 0.1 },
+            options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(fallbackPrompt, item.text) },
           });
           ollamaCalls++;
-          let translated = fallbackResponse.response.trim();
+          const truncated = fallbackResponse.done_reason === "length";
+          let translated = truncated ? "" : fallbackResponse.response.trim();
           if (options.polish !== false) translated = polish(translated);
           results[item.index] = translated;
-          details[item.index] = { via: "fallback" };
+          details[item.index] = truncated ? { via: "fallback", truncated: true } : { via: "fallback" };
         }
       }
     }
 
     batchStart += batchItems.length;
+    options.onItemsDone?.(batchStart, items.length);
   }
 
   return {
