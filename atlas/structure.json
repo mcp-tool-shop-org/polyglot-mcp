@@ -341,7 +341,7 @@
           "path": ".polyglot-pins.json"
         },
         {
-          "hash": "968c380dc20e6b12669b78c7b2f17a40f27f73f6cf775b0245d75649c3a5ca04",
+          "hash": "0e9fb5e5514faf0557f9c8daac8bd92ddd69663117ec2c5b61ead668856779e5",
           "path": "CHANGELOG.md"
         },
         {
@@ -437,7 +437,7 @@
       "externals": 0,
       "files": [
         {
-          "hash": "671886261b0ce5a60daca412084565ec6aca7560f7c39ea45aa5cb9780575eb7",
+          "hash": "8cf47326d30f2bf430c67a6eb881cb82a1162d3ba89c616c09ed9ed30f66787b",
           "path": "scripts/colab/colab_window.sh"
         },
         {
@@ -480,6 +480,7 @@
             "run_output_bytes",
             "scrub_colab_tokens",
             "scrub_file_in_place",
+            "segments_done",
             "sha256_file",
             "sha256_self_normalized",
             "update_window_rate",
@@ -531,23 +532,23 @@
             {
               "in": "check_host_ram_projection",
               "kind": "raise",
-              "line": 1088
+              "line": 1105
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 1233
+              "line": 1258
             },
             {
               "kind": "raise",
-              "line": 1337
+              "line": 1362
             }
           ],
-          "hash": "905b6525c4c79e19f5cab590170b8f5ffc8f9d2bf857109c538dde547eb776fa",
+          "hash": "4e6d30ee02773a23deec84fa64df056395a31730ca4b8686cc2fdc7831a0d873",
           "path": "scripts/colab/launch_guards.py"
         },
         {
-          "hash": "e1b458d46b316a4837ccec545ae9878f1c4094d89466cd70d4641300226569a8",
+          "hash": "396be0db202440d51b005e539bacc1a4bf0f6f96d32819a214830baf1383070b",
           "path": "scripts/colab/launch_translate.sh"
         },
         {
@@ -596,7 +597,7 @@
               "line": 99
             }
           ],
-          "hash": "078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef05829e4194a",
+          "hash": "61a203bdebb9fe832e061f1f47c59b1ecffee2d3c9098c0fc8ab9460e9a8dafa",
           "importsFiles": [
             "src/survival.ts",
             "src/translateAll.ts"
@@ -624,15 +625,20 @@
               "line": 72
             },
             {
+              "in": "writeHeartbeat",
               "kind": "catch",
-              "line": 106
+              "line": 101
+            },
+            {
+              "kind": "catch",
+              "line": 123
             },
             {
               "kind": "throw",
-              "line": 115
+              "line": 132
             }
           ],
-          "hash": "6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078",
+          "hash": "f6c35dd7253835939d897970a32154813682f42e1eb504a053a65ca8f12bf41b",
           "importOrder": [
             "src/translateMarkdown.ts",
             "src/survival.ts"
@@ -652,15 +658,15 @@
       "origin": "authored",
       "outsidePlaces": [
         {
-          "reads": 8,
+          "reads": 9,
           "where": [
             "caller"
           ],
-          "writes": 5
+          "writes": 6
         }
       ],
-      "outsideReads": 8,
-      "outsideWrites": 5,
+      "outsideReads": 9,
+      "outsideWrites": 6,
       "role": "code",
       "testRunners": [
         "vitest"
@@ -760,8 +766,8 @@
     },
     {
       "dynamicReads": 2,
-      "dynamicSpawns": 30,
-      "dynamicSpawnsInTests": 28,
+      "dynamicSpawns": 31,
+      "dynamicSpawnsInTests": 29,
       "dynamicWrites": 0,
       "entryPoints": [
         "src/index.ts"
@@ -915,7 +921,7 @@
           ]
         },
         {
-          "hash": "421e44d3b5eea960c17df6700ebf42460c377bc9dff6603a3cfe41fe6fe7c3f5",
+          "hash": "addd104f5952eb283378cb23b794479bea7a0362d196e2ef7b4b89dc6cdecadf",
           "names": [
             "scripts/colab/compare_translations.py",
             "scripts/colab/launch_guards.py",
@@ -937,7 +943,7 @@
           "exports": [
             "friendlyError"
           ],
-          "hash": "edb957480cf823e14905d2a1a6042f27aec1f7eece0399a9f2aa6bdd93a5663b",
+          "hash": "520ff14285718d3ec8c4600248f444bf4569515dafd17b56fc158e2c88d6b466",
           "path": "src/errors.ts"
         },
         {
@@ -1140,6 +1146,38 @@
           "path": "src/languages.ts"
         },
         {
+          "hash": "0021255b8681249f5e4f04f96900292cf48c652062a434c4027a154997cc1ccb",
+          "importOrder": [
+            "src/ollama.ts",
+            "src/numCtx.ts"
+          ],
+          "importsFiles": [
+            "src/numCtx.ts",
+            "src/ollama.ts"
+          ],
+          "path": "src/numCtx.test.ts",
+          "testFramework": "vitest"
+        },
+        {
+          "exports": [
+            "estimateTokens",
+            "numPredictFor",
+            "resolveNumCtx"
+          ],
+          "failurePaths": [
+            {
+              "in": "numPredictFor",
+              "kind": "throw",
+              "line": 42
+            }
+          ],
+          "hash": "7a0d20b6f460d88af846c8dbf13c8bf76cbc556f8cbad9a2843182525f1409cb",
+          "importsFiles": [
+            "src/errors.ts"
+          ],
+          "path": "src/numCtx.ts"
+        },
+        {
           "hash": "8ae86ebd0f4f09830e89a48fb471a21363fb9b35a5999666e2ed532c00e4394b",
           "importOrder": [
             "src/ollama.ts",
@@ -1155,39 +1193,29 @@
         {
           "failurePaths": [
             {
+              "in": "withContext",
+              "kind": "throw",
+              "line": 100
+            },
+            {
               "in": "_generateWithRetry",
+              "kind": "catch",
+              "line": 131
+            },
+            {
+              "in": "_generateWithRetry",
+              "kind": "throw",
+              "line": 141
+            },
+            {
+              "in": "_generateWithRetry",
+              "kind": "throw",
+              "line": 145
+            },
+            {
+              "in": "_generate",
               "kind": "catch",
-              "line": 103
-            },
-            {
-              "in": "_generateWithRetry",
-              "kind": "throw",
-              "line": 113
-            },
-            {
-              "in": "_generateWithRetry",
-              "kind": "throw",
-              "line": 117
-            },
-            {
-              "in": "_generate",
-              "kind": "catch",
-              "line": 135
-            },
-            {
-              "in": "_generate",
-              "kind": "throw",
-              "line": 138
-            },
-            {
-              "in": "_generate",
-              "kind": "throw",
-              "line": 146
-            },
-            {
-              "in": "_generate",
-              "kind": "throw",
-              "line": 153
+              "line": 163
             },
             {
               "in": "_generate",
@@ -1197,42 +1225,42 @@
             {
               "in": "_generate",
               "kind": "throw",
-              "line": 173
+              "line": 174
+            },
+            {
+              "in": "_generate",
+              "kind": "throw",
+              "line": 181
+            },
+            {
+              "in": "_generate",
+              "kind": "throw",
+              "line": 194
+            },
+            {
+              "in": "_generate",
+              "kind": "throw",
+              "line": 201
             },
             {
               "in": "_generateStreamWithRetry",
               "kind": "catch",
-              "line": 210
+              "line": 239
             },
             {
               "in": "_generateStreamWithRetry",
               "kind": "throw",
-              "line": 220
+              "line": 249
             },
             {
               "in": "_generateStreamWithRetry",
               "kind": "throw",
-              "line": 223
+              "line": 252
             },
             {
               "in": "_generateStream",
               "kind": "catch",
-              "line": 244
-            },
-            {
-              "in": "_generateStream",
-              "kind": "throw",
-              "line": 247
-            },
-            {
-              "in": "_generateStream",
-              "kind": "throw",
-              "line": 255
-            },
-            {
-              "in": "_generateStream",
-              "kind": "throw",
-              "line": 262
+              "line": 273
             },
             {
               "in": "_generateStream",
@@ -1242,57 +1270,78 @@
             {
               "in": "_generateStream",
               "kind": "throw",
-              "line": 283
+              "line": 284
             },
             {
               "in": "_generateStream",
               "kind": "throw",
-              "line": 294
+              "line": 291
+            },
+            {
+              "in": "_generateStream",
+              "kind": "throw",
+              "line": 305
+            },
+            {
+              "in": "_generateStream",
+              "kind": "throw",
+              "line": 312
+            },
+            {
+              "in": "_generateStream",
+              "kind": "throw",
+              "line": 323
             },
             {
               "in": "_generateStream",
               "kind": "catch",
-              "line": 328
+              "line": 357
             },
             {
               "in": "listModels",
               "kind": "throw",
-              "line": 353
+              "line": 382
             },
             {
               "in": "isAvailable",
               "kind": "catch",
-              "line": 373
+              "line": 402
             },
             {
               "in": "ensureRunning",
               "kind": "catch",
-              "line": 408
+              "line": 437
             },
             {
               "in": "ensureRunning",
               "kind": "catch",
-              "line": 411
+              "line": 440
             },
             {
               "in": "ensureRunning",
               "kind": "catch",
-              "line": 421
+              "line": 450
             },
             {
               "in": "ensureModel",
               "kind": "catch",
-              "line": 492
+              "line": 521
             },
             {
               "in": "ensureModel",
               "kind": "catch",
-              "line": 498
+              "line": 527
             }
           ],
-          "hash": "33f344bbf209b50a6eff239cfec8ae675668de63e4e9f07685df000df830519f",
+          "hash": "26a9a1e19f9ad59795633b0f62de09c723c3eaa7966aadea2a96c9e48894c5cc",
+          "importOrder": [
+            "src/errors.ts",
+            "src/semaphore.ts",
+            "src/numCtx.ts"
+          ],
           "importsFiles": [
             "src/errors.ts",
+            "src/numCtx.ts",
             "src/semaphore.ts"
           ],
           "path": "src/ollama.ts"
@@ -1949,6 +1998,14 @@
           "path": "src/semaphore.ts"
         },
         {
+          "hash": "31ed57c04a22fd6e64ddbb613dbdcafe1bba91b0987b8782222f37906a26bb0e",
+          "names": [
+            "scripts/colab/launch_guards.py"
+          ],
+          "path": "src/stallHeartbeat.test.ts",
+          "testFramework": "vitest"
+        },
+        {
           "hash": "fb748aca42fd7be8f5dd0f1001036191c98be28e7cdd845ecf84a9de7c137725",
           "importOrder": [
             "src/translateMarkdown.ts",
@@ -2425,6 +2482,14 @@
           "testFramework": "vitest"
         },
         {
+          "hash": "7526c38152844e4d936ab766ddc0d967908e28e03518ccbfababa676b5a6b40a",
+          "importsFiles": [
+            "src/translate.ts"
+          ],
+          "path": "src/translate.truncation.test.ts",
+          "testFramework": "vitest"
+        },
+        {
           "entry": "translate",
           "entryRule": 3,
           "exports": [
@@ -2439,40 +2504,41 @@
             {
               "in": "resolveSetup",
               "kind": "throw",
-              "line": 180
+              "line": 185
             },
             {
               "in": "resolveSetup",
               "kind": "throw",
-              "line": 190
+              "line": 195
             },
             {
               "in": "resolveSetup",
               "kind": "throw",
-              "line": 199
+              "line": 204
             },
             {
               "in": "resolveSetup",
               "kind": "throw",
-              "line": 211
+              "line": 216
             },
             {
               "in": "resolveSetup",
               "kind": "throw",
-              "line": 220
+              "line": 225
             },
             {
               "in": "translate",
               "kind": "catch",
-              "line": 286
+              "line": 297
             }
           ],
-          "hash": "4191c8e62848b699c9a67310d0fcec9b05b21298c56b5612548eb2943e172353",
+          "hash": "762b6effb15b1a4dbafb73ac728f5c42c84079a6b5cd68e46d7078d7ab88e087",
           "importsFiles": [
             "src/codeSpans.ts",
             "src/errors.ts",
             "src/glossary.ts",
             "src/languages.ts",
+            "src/numCtx.ts",
             "src/ollama.ts",
             "src/polish.ts",
             "src/validate.ts"
@@ -2482,7 +2548,7 @@
             {
               "calls": [
                 {
-                  "line": 112,
+                  "line": 117,
                   "name": "containsCodePlaceholder",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -2497,7 +2563,7 @@
             {
               "calls": [
                 {
-                  "line": 127,
+                  "line": 132,
                   "name": "containsCodePlaceholder",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -2512,14 +2578,14 @@
             {
               "calls": [
                 {
-                  "line": 178,
+                  "line": 183,
                   "name": "resolveLanguage",
                   "target": {
                     "file": "src/languages.ts"
                   }
                 },
                 {
-                  "line": 210,
+                  "line": 215,
                   "name": "ensureRunning",
                   "receiver": "OllamaClient",
                   "target": {
@@ -2527,7 +2593,7 @@
                   }
                 },
                 {
-                  "line": 219,
+                  "line": 224,
                   "name": "ensureModel",
                   "receiver": "OllamaClient",
                   "target": {
@@ -2543,7 +2609,7 @@
             {
               "calls": [
                 {
-                  "line": 178,
+                  "line": 183,
                   "name": "resolveLanguage",
                   "target": {
                     "file": "src/languages.ts"
@@ -2551,7 +2617,7 @@
                   "via": "resolveSetup"
                 },
                 {
-                  "line": 210,
+                  "line": 215,
                   "name": "ensureRunning",
                   "receiver": "OllamaClient",
                   "target": {
@@ -2560,7 +2626,7 @@
                   "via": "resolveSetup"
                 },
                 {
-                  "line": 219,
+                  "line": 224,
                   "name": "ensureModel",
                   "receiver": "OllamaClient",
                   "target": {
@@ -2569,14 +2635,14 @@
                   "via": "resolveSetup"
                 },
                 {
-                  "line": 259,
+                  "line": 264,
                   "name": "buildGlossaryHint",
                   "target": {
                     "file": "src/glossary.ts"
                   }
                 },
                 {
-                  "line": 112,
+                  "line": 117,
                   "name": "containsCodePlaceholder",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -2584,14 +2650,21 @@
                   "via": "buildPrompt"
                 },
                 {
-                  "line": 278,
+                  "line": 270,
+                  "name": "numPredictFor",
+                  "target": {
+                    "file": "src/numCtx.ts"
+                  }
+                },
+                {
+                  "line": 289,
                   "name": "polish",
                   "target": {
                     "file": "src/polish.ts"
                   }
                 },
                 {
-                  "line": 284,
+                  "line": 295,
                   "name": "validateTranslation",
                   "target": {
                     "file": "src/validate.ts"
@@ -2606,7 +2679,7 @@
             {
               "calls": [
                 {
-                  "line": 178,
+                  "line": 183,
                   "name": "resolveLanguage",
                   "target": {
                     "file": "src/languages.ts"
@@ -2614,7 +2687,7 @@
                   "via": "resolveSetup"
                 },
                 {
-                  "line": 210,
+                  "line": 215,
                   "name": "ensureRunning",
                   "receiver": "OllamaClient",
                   "target": {
@@ -2623,7 +2696,7 @@
                   "via": "resolveSetup"
                 },
                 {
-                  "line": 219,
+                  "line": 224,
                   "name": "ensureModel",
                   "receiver": "OllamaClient",
                   "target": {
@@ -2632,14 +2705,14 @@
                   "via": "resolveSetup"
                 },
                 {
-                  "line": 349,
+                  "line": 360,
                   "name": "buildGlossaryHint",
                   "target": {
                     "file": "src/glossary.ts"
                   }
                 },
                 {
-                  "line": 112,
+                  "line": 117,
                   "name": "containsCodePlaceholder",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -2647,21 +2720,28 @@
                   "via": "buildPrompt"
                 },
                 {
-                  "line": 358,
+                  "line": 365,
+                  "name": "numPredictFor",
+                  "target": {
+                    "file": "src/numCtx.ts"
+                  }
+                },
+                {
+                  "line": 372,
                   "name": "polish",
                   "target": {
                     "file": "src/polish.ts"
                   }
                 },
                 {
-                  "line": 364,
+                  "line": 378,
                   "name": "buildGlossaryHint",
                   "target": {
                     "file": "src/glossary.ts"
                   }
                 },
                 {
-                  "line": 127,
+                  "line": 132,
                   "name": "containsCodePlaceholder",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -2669,25 +2749,44 @@
                   "via": "buildBatchPrompt"
                 },
                 {
-                  "line": 379,
+                  "line": 383,
+                  "name": "numPredictFor",
+                  "target": {
+                    "file": "src/numCtx.ts"
+                  }
+                },
+                {
+                  "line": 394,
                   "name": "polish",
                   "target": {
                     "file": "src/polish.ts"
                   }
                 },
                 {
-                  "line": 386,
+                  "line": 401,
                   "name": "buildGlossaryHint",
                   "target": {
                     "file": "src/glossary.ts"
                   }
                 },
                 {
-                  "line": 395,
+                  "line": 406,
+                  "name": "numPredictFor",
+                  "target": {
+                    "file": "src/numCtx.ts"
+                  }
+                },
+                {
+                  "line": 411,
                   "name": "polish",
                   "target": {
                     "file": "src/polish.ts"
                   }
+                },
+                {
+                  "line": 419,
+                  "name": "onItemsDone",
+                  "target": null
                 }
               ],
               "exported": true,
@@ -3000,10 +3099,10 @@
             {
               "in": "translateMarkdown",
               "kind": "catch",
-              "line": 1148
+              "line": 1156
             }
           ],
-          "hash": "403989cd99a649b6b08803c640151a64cb8394524e2a596131c2b3a4c631e610",
+          "hash": "3a83700b7c8dd3ad612e6c463242c24f7662ad84077dfed78901e9cbc5f7e5cf",
           "importsFiles": [
             "src/cache.ts",
             "src/codeSpans.ts",
@@ -3454,7 +3553,7 @@
                 {
                   "inner": [
                     {
-                      "line": 178,
+                      "line": 183,
                       "name": "resolveLanguage",
                       "target": {
                         "file": "src/languages.ts"
@@ -3462,7 +3561,7 @@
                       "via": "resolveSetup"
                     },
                     {
-                      "line": 210,
+                      "line": 215,
                       "name": "ensureRunning",
                       "receiver": "OllamaClient",
                       "target": {
@@ -3471,7 +3570,7 @@
                       "via": "resolveSetup"
                     },
                     {
-                      "line": 219,
+                      "line": 224,
                       "name": "ensureModel",
                       "receiver": "OllamaClient",
                       "target": {
@@ -3480,14 +3579,14 @@
                       "via": "resolveSetup"
                     },
                     {
-                      "line": 349,
+                      "line": 360,
                       "name": "buildGlossaryHint",
                       "target": {
                         "file": "src/glossary.ts"
                       }
                     },
                     {
-                      "line": 112,
+                      "line": 117,
                       "name": "containsCodePlaceholder",
                       "target": {
                         "file": "src/codeSpans.ts"
@@ -3495,21 +3594,28 @@
                       "via": "buildPrompt"
                     },
                     {
-                      "line": 358,
+                      "line": 365,
+                      "name": "numPredictFor",
+                      "target": {
+                        "file": "src/numCtx.ts"
+                      }
+                    },
+                    {
+                      "line": 372,
                       "name": "polish",
                       "target": {
                         "file": "src/polish.ts"
                       }
                     },
                     {
-                      "line": 364,
+                      "line": 378,
                       "name": "buildGlossaryHint",
                       "target": {
                         "file": "src/glossary.ts"
                       }
                     },
                     {
-                      "line": 127,
+                      "line": 132,
                       "name": "containsCodePlaceholder",
                       "target": {
                         "file": "src/codeSpans.ts"
@@ -3517,27 +3623,28 @@
                       "via": "buildBatchPrompt"
                     },
                     {
-                      "line": 379,
+                      "line": 383,
+                      "name": "numPredictFor",
+                      "target": {
+                        "file": "src/numCtx.ts"
+                      }
+                    },
+                    {
+                      "line": 394,
                       "name": "polish",
                       "target": {
                         "file": "src/polish.ts"
                       }
                     },
                     {
-                      "line": 386,
+                      "line": 401,
                       "name": "buildGlossaryHint",
                       "target": {
                         "file": "src/glossary.ts"
                       }
-                    },
-                    {
-                      "line": 395,
-                      "name": "polish",
-                      "target": {
-                        "file": "src/polish.ts"
-                      }
                     }
                   ],
+                  "innerTruncated": true,
                   "line": 1000,
                   "name": "translateBatch",
                   "target": {
@@ -3545,7 +3652,7 @@
                   }
                 },
                 {
-                  "line": 1042,
+                  "line": 1048,
                   "name": "segmentLabel",
                   "target": {
                     "file": "src/survival.ts"
@@ -3554,7 +3661,7 @@
                 {
                   "inner": [
                     {
-                      "line": 178,
+                      "line": 183,
                       "name": "resolveLanguage",
                       "target": {
                         "file": "src/languages.ts"
@@ -3562,7 +3669,7 @@
                       "via": "resolveSetup"
                     },
                     {
-                      "line": 210,
+                      "line": 215,
                       "name": "ensureRunning",
                       "receiver": "OllamaClient",
                       "target": {
@@ -3571,7 +3678,7 @@
                       "via": "resolveSetup"
                     },
                     {
-                      "line": 219,
+                      "line": 224,
                       "name": "ensureModel",
                       "receiver": "OllamaClient",
                       "target": {
@@ -3580,14 +3687,14 @@
                       "via": "resolveSetup"
                     },
                     {
-                      "line": 349,
+                      "line": 360,
                       "name": "buildGlossaryHint",
                       "target": {
                         "file": "src/glossary.ts"
                       }
                     },
                     {
-                      "line": 112,
+                      "line": 117,
                       "name": "containsCodePlaceholder",
                       "target": {
                         "file": "src/codeSpans.ts"
@@ -3595,21 +3702,28 @@
                       "via": "buildPrompt"
                     },
                     {
-                      "line": 358,
+                      "line": 365,
+                      "name": "numPredictFor",
+                      "target": {
+                        "file": "src/numCtx.ts"
+                      }
+                    },
+                    {
+                      "line": 372,
                       "name": "polish",
                       "target": {
                         "file": "src/polish.ts"
                       }
                     },
                     {
-                      "line": 364,
+                      "line": 378,
                       "name": "buildGlossaryHint",
                       "target": {
                         "file": "src/glossary.ts"
                       }
                     },
                     {
-                      "line": 127,
+                      "line": 132,
                       "name": "containsCodePlaceholder",
                       "target": {
                         "file": "src/codeSpans.ts"
@@ -3617,28 +3731,29 @@
                       "via": "buildBatchPrompt"
                     },
                     {
-                      "line": 379,
+                      "line": 383,
+                      "name": "numPredictFor",
+                      "target": {
+                        "file": "src/numCtx.ts"
+                      }
+                    },
+                    {
+                      "line": 394,
                       "name": "polish",
                       "target": {
                         "file": "src/polish.ts"
                       }
                     },
                     {
-                      "line": 386,
+                      "line": 401,
                       "name": "buildGlossaryHint",
                       "target": {
                         "file": "src/glossary.ts"
                       }
-                    },
-                    {
-                      "line": 395,
-                      "name": "polish",
-                      "target": {
-                        "file": "src/polish.ts"
-                      }
                     }
                   ],
-                  "line": 1061,
+                  "innerTruncated": true,
+                  "line": 1069,
                   "name": "translateBatch",
                   "target": {
                     "file": "src/translate.ts"
@@ -3806,7 +3921,7 @@
       "testRunners": [
         "vitest"
       ],
-      "testedBy": 27,
+      "testedBy": 29,
       "unresolvedSites": 0
     }
   ],
@@ -3973,7 +4088,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 48
+          "files": 52
         }
       ],
       "readers": [],
@@ -4053,6 +4168,13 @@
         {
           "job": "quality-gates",
           "matched": true,
+          "path": "src/numCtx.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "quality-gates",
+          "matched": true,
           "path": "src/ollama.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -4088,6 +4210,13 @@
         {
           "job": "quality-gates",
           "matched": true,
+          "path": "src/stallHeartbeat.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "quality-gates",
+          "matched": true,
           "path": "src/survival.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -4096,6 +4225,13 @@
           "job": "quality-gates",
           "matched": true,
           "path": "src/translate.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "quality-gates",
+          "matched": true,
+          "path": "src/translate.truncation.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
         },
@@ -4191,7 +4327,7 @@
           "via": "vitest vitest.config.ts"
         }
       ],
-      "runsCount": 30,
+      "runsCount": 33,
       "secrets": [],
       "sends": {
         "deploysPages": false,
@@ -4208,7 +4344,7 @@
         {
           "config": "vitest.config.ts",
           "coverage": true,
-          "files": 29,
+          "files": 32,
           "job": "quality-gates",
           "junit": true,
           "runner": "vitest",
@@ -4540,7 +4676,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 48
+          "files": 52
         }
       ],
       "readers": [],
@@ -4620,6 +4756,13 @@
         {
           "job": "publish",
           "matched": true,
+          "path": "src/numCtx.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "publish",
+          "matched": true,
           "path": "src/ollama.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -4655,6 +4798,13 @@
         {
           "job": "publish",
           "matched": true,
+          "path": "src/stallHeartbeat.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "publish",
+          "matched": true,
           "path": "src/survival.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -4663,6 +4813,13 @@
           "job": "publish",
           "matched": true,
           "path": "src/translate.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "publish",
+          "matched": true,
+          "path": "src/translate.truncation.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
         },
@@ -4758,7 +4915,7 @@
           "via": "vitest vitest.config.ts"
         }
       ],
-      "runsCount": 30,
+      "runsCount": 33,
       "secrets": [],
       "sends": {
         "deploysPages": false,
@@ -4783,7 +4940,7 @@
       "tests": [
         {
           "config": "vitest.config.ts",
-          "files": 29,
+          "files": 32,
           "job": "publish",
           "runner": "vitest",
           "step": "4",
@@ -4825,7 +4982,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 19
+          "files": 20
         }
       ],
       "readers": [],
@@ -4927,7 +5084,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 18
+          "files": 19
         }
       ],
       "readers": [],
@@ -4964,8 +5121,8 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "cfe76331d42aff234d6a6d66455256c4217f548d",
-    "tracked": 172
+    "commit": "cd8d46aeef34570092041da5b6c46c6db8b9313c",
+    "tracked": 176
   },
   "landings": [
     {
@@ -5302,6 +5459,12 @@
           "call": "readFileSync",
           "confidence": "ast",
           "fromTests": true
+        },
+        {
+          "by": "src/numCtx.test.ts",
+          "call": "readFileSync",
+          "confidence": "ast",
+          "fromTests": true
         }
       ],
       "target": "scripts/colab/launch_translate.sh",
@@ -5450,6 +5613,6 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 29,
+  "testFiles": 32,
   "unassigned": []
 }
