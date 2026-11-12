@@ -1644,7 +1644,7 @@ describe("polyglot-mcp Colab translation lane", () => {
     }
   });
 
-  it("(ask1.b) adopts #67 receipt rule in the Colab lane: refuses TRANSLATION_UNVERIFIED when a file fails receipt/structural verification, stops session and logs STOP", async () => {
+  it("(ask1.b) the #67 receipt rule is per language: one language that fails verification is refused with its reason and the window ends partial, with the other six fetched", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-unverified-"));
     try {
       ollamaState.digest = PINNED_DIGEST;
@@ -1663,11 +1663,107 @@ describe("polyglot-mcp Colab translation lane", () => {
         ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-unverified-receipt"],
         env,
       );
+      expect(res.code).toBe(0);
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.status).toBe("partial");
+      expect(win.refusal_code).toBeNull();
+      expect(win.why).toContain("ja");
+      const rr = win.readme_results[0];
+      expect(rr.passed).toHaveLength(6);
+      expect(rr.refused.map((e: { lang: string }) => e.lang)).toEqual(["ja"]);
+      expect(existsSync(join(outDir, "README.ja.md"))).toBe(false);
+      expect(existsSync(join(outDir, "README.zh.md"))).toBe(true);
+      // the refused language's raw output is kept for a hand-fix
+      expect(existsSync(join(outDir, "refused_raw", "default", "README.ja.md"))).toBe(true);
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-unverified-receipt");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(per.zero) a window in which no language passes its gates still fails with the refusal code, and keeps every raw output", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-per-zero-"));
+    try {
+      ollamaState.digest = PINNED_DIGEST;
+      ollamaState.processor = "100% GPU";
+      ollamaState.sizeBytes = 17358640928;
+      ollamaState.sizeVramBytes = 17358640928;
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { env } = makeFakeColabEnv(tmp, { POLYGLOT_TEST_CORRUPT_RECEIPT_LANG: "ja,zh,es,fr,hi,it,pt" });
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-per-zero"],
+        env,
+      );
       expect(res.code).not.toBe(0);
       const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
       expect(win.refusal_code).toBe("TRANSLATION_UNVERIFIED");
-      expect(win.why).toContain("ja");
-      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-unverified-receipt");
+      expect(win.readme_results[0].refused).toHaveLength(7);
+      expect(existsSync(join(outDir, "refused_raw", "default", "README.ja.md"))).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(per.gate) the summary counts languages that passed every gate, not what the model returned: a lost-span verdict on one language gives succeeded 6, modelReturned 7", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-per-gate-"));
+    try {
+      ollamaState.digest = PINNED_DIGEST;
+      ollamaState.processor = "100% GPU";
+      ollamaState.sizeBytes = 17358640928;
+      ollamaState.sizeVramBytes = 17358640928;
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { env } = makeFakeColabEnv(tmp, { POLYGLOT_TEST_LOST_SPAN_LANG: "zh" });
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-per-gate"],
+        env,
+      );
+      expect(res.code).toBe(0);
+      const summary = JSON.parse(readFileSync(join(outDir, "bundle_extracted", "summary_default.json"), "utf-8"));
+      expect(summary.succeeded).toBe(6);
+      expect(summary.modelReturned).toBe(7);
+      expect(summary.gate.refused.map((e: { lang: string }) => e.lang)).toEqual(["zh"]);
+      expect(summary.gate.refused[0].reasons.length).toBeGreaterThan(0);
+      const raw = JSON.parse(readFileSync(join(outDir, "bundle_extracted", "summary_default.translate-all.json"), "utf-8"));
+      expect(raw.polyglot).toBe("complete");
+      expect(raw.succeeded).toBe(7);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(per.fail.staged) a failure exit still fetches every README already staged, with its summary, and publishes it", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-per-staged-"));
+    try {
+      ollamaState.digest = PINNED_DIGEST;
+      ollamaState.processor = "100% GPU";
+      ollamaState.sizeBytes = 17358640928;
+      ollamaState.sizeVramBytes = 17358640928;
+      const dirA = join(tmp, "repoA");
+      const dirB = join(tmp, "repoB");
+      mkdirSync(dirA, { recursive: true });
+      mkdirSync(dirB, { recursive: true });
+      writeFileSync(join(dirA, "README.md"), SAMPLE_README, "utf-8");
+      writeFileSync(join(dirB, "README.md"), SAMPLE_README.replace("# Registry Sync", "# Second Package"), "utf-8");
+      const outDir = join(tmp, "out");
+      const { env } = makeFakeColabEnv(tmp, { POLYGLOT_TEST_FAIL_AFTER_FIRST_STAGED: "1" });
+      const res = await runLauncher(
+        ["--readme", join(dirA, "README.md"), "--readme", join(dirB, "README.md"), "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-per-staged"],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.status).toBe("TRANSLATION_FAILED");
+      // the bundle carried the staged README, and the failure path published it
+      expect(existsSync(join(outDir, "bundle_extracted", "_staging_translations", "repoA", "README.ja.md"))).toBe(true);
+      expect(existsSync(join(outDir, "repoA", "README.ja.md"))).toBe(true);
+      expect(existsSync(join(outDir, "bundle_extracted", "summary_repoA.json"))).toBe(true);
+      // the failure-path publish writes SHA256SUMS too, and marks the unpack complete
+      expect(readFileSync(join(outDir, "SHA256SUMS"), "utf-8")).toContain("repoA/README.ja.md");
+      expect(existsSync(join(outDir, "bundle_unpack_complete.txt"))).toBe(true);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -2685,7 +2781,7 @@ describe("polyglot-mcp Colab translation lane", () => {
     }
   }, 60_000);
 
-  it("(fix1.ask9) multi-README atomicity: in a 2-README window where README 2 fails verification, neither outDir nor the salvaged bundle publishes README 1's translations", async () => {
+  it("(fix1.ask9) multi-README failures are per README and per language: README 2 loses link spans in zh, READMEs 1 and 3 still translate and are fetched, README 2's other languages are fetched, its zh raw output is kept and marked refused, the window is partial", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-fix1-ask9-"));
     try {
       ollamaState.digest = PINNED_DIGEST;
@@ -2693,71 +2789,63 @@ describe("polyglot-mcp Colab translation lane", () => {
       ollamaState.sizeBytes = 17358640928;
       ollamaState.sizeVramBytes = 17358640928;
 
-      const dirA = join(tmp, "repoA");
-      const dirB = join(tmp, "repoB");
-      mkdirSync(dirA, { recursive: true });
-      mkdirSync(dirB, { recursive: true });
-      const readmeA = join(dirA, "README.md");
-      const readmeB = join(dirB, "README.md");
-      writeFileSync(readmeA, SAMPLE_README, "utf-8");
-      writeFileSync(readmeB, SAMPLE_README.replace("# Registry Sync", "# Second Package"), "utf-8");
+      const names = ["repoA", "repoB", "repoC"];
+      const readmes = names.map((n, i) => {
+        const d = join(tmp, n);
+        mkdirSync(d, { recursive: true });
+        writeFileSync(join(d, "README.md"), SAMPLE_README.replace("# Registry Sync", "# Package " + i), "utf-8");
+        return join(d, "README.md");
+      });
 
       const outDir = join(tmp, "out");
       const { stateDir, env } = makeFakeColabEnv(tmp, {
-        POLYGLOT_TEST_CORRUPT_RECEIPT_LANG: "ja",
-        POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT: "repoB",
+        POLYGLOT_TEST_LOST_SPAN_LANG: "zh",
+        POLYGLOT_TEST_LOST_SPAN_SLOT: "repoB",
       });
 
       const res = await runLauncher(
         [
-          "--readme",
-          readmeA,
-          "--readme",
-          readmeB,
-          "--card",
-          "CPU",
-          "--out-dir",
-          outDir,
-          "--session",
-          "polyglot-fix1-ask9-multi",
+          "--readme", readmes[0], "--readme", readmes[1], "--readme", readmes[2],
+          "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-fix1-ask9-multi",
         ],
         env,
       );
-      expect(res.code).not.toBe(0);
+      expect(res.code).toBe(0);
       const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
-      expect(win.refusal_code).toBe("TRANSLATION_UNVERIFIED");
+      expect(win.status).toBe("partial");
+      expect(win.readme_results.map((r: { slug: string; status: string }) => r.slug + ":" + r.status)).toEqual([
+        "repoA:ok",
+        "repoB:partial",
+        "repoC:ok",
+      ]);
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-fix1-ask9-multi");
 
-      // 1. Nothing published to outDir (no README*.md or repoA/repoB slot dirs)
-      const outEntries = readdirSync(outDir);
-      for (const entry of outEntries) {
-        expect(entry.startsWith("README")).toBe(false);
-        expect(entry).not.toBe("repoA");
-        expect(entry).not.toBe("repoB");
+      for (const slug of ["repoA", "repoC"]) {
+        expect(existsSync(join(outDir, slug, "README.zh.md"))).toBe(true);
+        expect(existsSync(join(outDir, slug, "README.ja.md"))).toBe(true);
       }
-
-      // 2. Salvaged bundle (if present) contains zero files under translations/
-      const bundlePath = join(outDir, "polyglot_translate_bundle.tar.gz");
-      if (existsSync(bundlePath)) {
-        const listRes = spawnSync(
-          pyBin,
-          [
-            "-c",
-            `import sys, tarfile
-with tarfile.open(sys.argv[1], "r:gz") as tf:
-    names = [m.name for m in tf.getmembers() if "translations/" in m.name or m.name.startswith("./translations") or m.name.startswith("translations")]
-print("\\n".join(names))`,
-            bundlePath,
-          ],
-          { encoding: "utf-8" },
-        );
-        expect(listRes.status).toBe(0);
-        expect(listRes.stdout.trim()).toBe("");
-      }
+      expect(existsSync(join(outDir, "repoB", "README.ja.md"))).toBe(true);
+      expect(existsSync(join(outDir, "repoB", "README.zh.md"))).toBe(false);
+      // the published source and the passed translations of README 2 do not link to the refused language (B1), and
+      // still link to the passed ones; READMEs 1 and 3 keep the full nav bar
+      const navB = readFileSync(join(outDir, "repoB", "README.md"), "utf-8");
+      expect(navB).not.toContain("README.zh.md");
+      expect(navB).toContain("README.ja.md");
+      expect(readFileSync(join(outDir, "repoB", "README.ja.md"), "utf-8")).not.toContain("README.zh.md");
+      expect(readFileSync(join(outDir, "repoA", "README.md"), "utf-8")).toContain("README.zh.md");
+      // apply_ready is true only for a README whose every language passed
+      expect(win.readme_results.map((r: { apply_ready: boolean }) => r.apply_ready)).toEqual([true, false, true]);
+      // the refused language's raw output is kept, and the manifest says why
+      expect(existsSync(join(outDir, "refused_raw", "repoB", "README.zh.md"))).toBe(true);
+      const manifest = JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf-8"));
+      const b = manifest.readmes.find((r: { slug: string }) => r.slug === "repoB");
+      expect(b.refused_languages[0].lang).toBe("zh");
+      expect(b.refused_languages[0].reasons.join(",")).toContain("lost-span");
+      expect(b.refused_languages[0].raw).toBe("refused_raw/repoB/README.zh.md");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 180_000);
 });
 
 describe("fix2: cleanup_on_exit kills tracked pids", () => {
@@ -3860,6 +3948,43 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       rmSync(tmp, { recursive: true, force: true });
     }
   }, 60_000);
+});
+
+describe("dead-exec salvage collects what the VM holds", () => {
+  it.skipIf(process.platform === "win32")("(per.bundlenow) translate_bundle_now.py tars staged translations, refused raw output and in-flight README outputs from readmes_in, and carries readme_results into vm_window.json", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-bundle-now-"));
+    try {
+      const content = join(tmp, "content");
+      const out = join(content, "polyglot_out");
+      mkdirSync(join(out, "_staging_translations", "repoA"), { recursive: true });
+      writeFileSync(join(out, "_staging_translations", "repoA", "README.ja.md"), "staged", "utf-8");
+      mkdirSync(join(out, "refused_raw", "repoB"), { recursive: true });
+      writeFileSync(join(out, "refused_raw", "repoB", "README.zh.md"), "raw", "utf-8");
+      writeFileSync(join(out, "readme_results.json"), JSON.stringify({ readmes: [{ slug: "repoA", status: "ok" }] }), "utf-8");
+      mkdirSync(join(content, "readmes_in", "repoC"), { recursive: true });
+      writeFileSync(join(content, "readmes_in", "repoC", "README.md"), "source", "utf-8");
+      writeFileSync(join(content, "readmes_in", "repoC", "README.fr.md"), "in flight", "utf-8");
+      const res = spawnSync(pyBin, ["-I", join(colabDir, "translate_bundle_now.py")], {
+        encoding: "utf-8",
+        env: { ...process.env, SDLAB_CONTENT: content, SDLAB_BUNDLE_RC: "93" },
+      });
+      expect(res.stdout).toContain("SDLAB_BUNDLE_NOW_RC=0");
+      const list = spawnSync(
+        pyBin,
+        ["-I", "-c", "import sys, tarfile\nprint('\\n'.join(tarfile.open(sys.argv[1]).getnames()))", join(content, "polyglot_translate_bundle.tar.gz")],
+        { encoding: "utf-8" },
+      );
+      const names = list.stdout.split("\n").map((n) => n.replace(/^\.\//, ""));
+      expect(names).toContain("_staging_translations/repoA/README.ja.md");
+      expect(names).toContain("refused_raw/repoB/README.zh.md");
+      expect(names).toContain("in_flight_outputs/repoC/README.fr.md");
+      expect(names).not.toContain("in_flight_outputs/repoC/README.md");
+      const vm = JSON.parse(readFileSync(join(out, "vm_window.json"), "utf-8"));
+      expect(vm.readme_results[0].slug).toBe("repoA");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("throughput: the context pin, parallel slots, and the per-segment stall heartbeat", () => {

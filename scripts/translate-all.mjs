@@ -589,8 +589,11 @@ console.log(JSON.stringify({
   polyglot: "complete",
   readme: absReadmePath,
   languages: results.length,
-  // A language marked "untranslated", "written-after-error", or "written-unverified" is not a clean success.
-  succeeded: results.filter((r) => r.status === "ok" || r.status === "lost-span").length,
+  // A language marked "lost-span", "untranslated", "written-after-error", or "written-unverified" is not a clean
+  // success: the model returned text, but a gate refused it. (A lost-span language used to be counted here, so a
+  // README with 12 lost code spans reported 7/7 succeeded.)
+  succeeded: results.filter((r) => r.status === "ok").length,
+  modelReturned: results.filter((r) => r.status !== "error").length,
   doneAfterSilence: doneAfterSilenceResults.map((r) => r.lang),
   untranslatedLanguages: results.filter((r) => r.status === "untranslated").length,
   writtenAfterError: writtenAfterErrorResults.map((r) => r.lang),

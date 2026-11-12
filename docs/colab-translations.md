@@ -115,6 +115,39 @@ On an NVIDIA A100 40 GB (`40,960 MiB` total VRAM):
 - Required headroom (`1,024 MiB`): `22,547 + 1,024 = 23,571 MiB` (`18,413 MiB` free headroom on A100 40 GB, `100% GPU`).
 - An NVIDIA L4 (`23,034 MiB` total VRAM) provides only `487 MiB` of margin above the `22,547 MiB` peak (`< 23,571 MiB`), so an L4 attempt is refused by default with `VRAM_HEADROOM_LOW` and would only be revisited after a measured fit probe at the Publisher's call.
 
+## Per-README results: `ok`, `partial`, and when to apply
+
+Failures are per README and per language. A gate (write receipt, structure, protected spans, untranslated prose,
+nav bar) that refuses one language marks that README and language `refused` with its reasons, keeps the raw output in
+`refused_raw/<slug>/`, and the next README still runs. The window ends:
+
+| `window.json` `status` | Meaning |
+|---|---|
+| `ok` | every language of every README passed every gate |
+| `partial` | exit 0; at least one language passed and at least one was refused. Some languages are published. |
+| a refusal code (for example `TRANSLATION_UNVERIFIED`) | exit non-zero; no language passed, or the window failed some other way |
+
+`window.json` carries `readme_results` (per README: `passed`, `refused` with `reasons` and `raw`, `apply_ready`), and
+`manifest.json` carries the same per README. `summary_<slug>.json` counts what passed every gate (`succeeded`), with
+`modelReturned` for what the model wrote and `gate.refused`; the model's own summary is kept as
+`summary_<slug>.translate-all.json`. A published source README and the published translations of a `partial` README
+have their nav bars rewritten down to the passed languages, so nothing links to a refused one.
+
+**A `partial` README is not applied to its repo.** Apply it only when every one of its 7 languages passes. The flow:
+
+1. The README comes back `partial` (`apply_ready: false`).
+2. Hand-fix each refused language from `refused_raw/<slug>/` and pin the result in `.polyglot-pins.json`.
+3. Re-run the pinned languages, on the rig or in the next window.
+4. Apply only once all 7 languages pass (`apply_ready: true`).
+
+Why: applying a `partial` README leaves the repo with a stale old translation beside fresh ones, and `publisher check`
+blocks its next release. Readers of the output directory must also skip `refused_raw/`, `in_flight_outputs/` and
+`bundle_extracted/`: they hold raw, unverified or duplicate files, never publishable translations.
+
+Every exit path returns what was written. A failure or salvage bundle (a refusal, a stall, the wall, a dead exec) is
+unpacked and published the same way as a success: staged translations, `SHA256SUMS`, `refused_raw/`, every summary
+and log. The unpack is finished only when `bundle_unpack_complete.txt` exists; a half-finished unpack is redone.
+
 ## Guards & Refusal Codes
 
 | Refusal Code | Stage | Trigger |

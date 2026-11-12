@@ -306,7 +306,7 @@
           "path": "docs/colab-rung1-request.md"
         },
         {
-          "hash": "14b1cfca13a9f7c4d2ce7e9497af3cc3a620f21055ad814eb4378f455fe2cb58",
+          "hash": "fab3169be3fa0178d41d215b9f0bea84a994034bb34476ddd72a71f1848a42e7",
           "path": "docs/colab-translations.md"
         }
       ],
@@ -341,7 +341,7 @@
           "path": ".polyglot-pins.json"
         },
         {
-          "hash": "0e9fb5e5514faf0557f9c8daac8bd92ddd69663117ec2c5b61ead668856779e5",
+          "hash": "76a859960840815751a587ab28438c7d005b5644774b56604f0bde26fee2a3ed",
           "path": "CHANGELOG.md"
         },
         {
@@ -429,15 +429,15 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 12,
+      "dynamicReads": 13,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
-      "dynamicWrites": 4,
+      "dynamicWrites": 5,
       "entryPoints": [],
       "externals": 0,
       "files": [
         {
-          "hash": "8cf47326d30f2bf430c67a6eb881cb82a1162d3ba89c616c09ed9ed30f66787b",
+          "hash": "580b5d34c73491a3625185e8d8b8572bce189cdc528bcf2c4f735eb176374f08",
           "path": "scripts/colab/colab_window.sh"
         },
         {
@@ -548,7 +548,7 @@
           "path": "scripts/colab/launch_guards.py"
         },
         {
-          "hash": "45aa5faa430f1036f38358a78f664145cab3342d7128bdf4ecd3abb8b194d580",
+          "hash": "1adf84ecd6c356aa9a2d1b70a5c734c74dcb9adde3313e09de45e2856efb0749",
           "path": "scripts/colab/launch_translate.sh"
         },
         {
@@ -570,11 +570,16 @@
               "line": 39
             },
             {
+              "in": "bundle_now",
+              "kind": "except",
+              "line": 109
+            },
+            {
               "kind": "raise",
-              "line": 131
+              "line": 150
             }
           ],
-          "hash": "70b98ec2f6b363d3e94b7bc8283c74cee640c5229308e69c7dbf6a9482f7c536",
+          "hash": "dadc1f2956cd84d357506b1397c39f83dd2ab5541081a5db3f557ba6258d1db8",
           "path": "scripts/colab/translate_bundle_now.py"
         },
         {
@@ -597,7 +602,7 @@
               "line": 99
             }
           ],
-          "hash": "61a203bdebb9fe832e061f1f47c59b1ecffee2d3c9098c0fc8ab9460e9a8dafa",
+          "hash": "474d9cb9a7977ea63788793f108c2270138fab00dd401a73a5a3d1ca9c7a34af",
           "importsFiles": [
             "src/survival.ts",
             "src/translateAll.ts"
@@ -766,8 +771,8 @@
     },
     {
       "dynamicReads": 2,
-      "dynamicSpawns": 31,
-      "dynamicSpawnsInTests": 29,
+      "dynamicSpawns": 32,
+      "dynamicSpawnsInTests": 30,
       "dynamicWrites": 0,
       "entryPoints": [
         "src/index.ts"
@@ -921,11 +926,12 @@
           ]
         },
         {
-          "hash": "addd104f5952eb283378cb23b794479bea7a0362d196e2ef7b4b89dc6cdecadf",
+          "hash": "c986162c1fa13ef252393b44f781c37e8185f67d65e66c6666ab0cc8cb973f02",
           "names": [
             "scripts/colab/compare_translations.py",
             "scripts/colab/launch_guards.py",
             "scripts/colab/remote_runner.py",
+            "scripts/colab/translate_bundle_now.py",
             "scripts/translate-all.mjs"
           ],
           "path": "src/colabLane.test.ts",
@@ -3023,6 +3029,14 @@
           "testFramework": "vitest"
         },
         {
+          "hash": "2be018bb2be19daa1c2f7396d520629f45d698f58fefed7fb3965c2dacd8c705",
+          "importsFiles": [
+            "src/translateMarkdown.ts"
+          ],
+          "path": "src/translateMarkdown.heartbeat.test.ts",
+          "testFramework": "vitest"
+        },
+        {
           "hash": "342987a435461ffb5c749be39eccff841aa13ca1b85acd9e1cb72974d4187a67",
           "importOrder": [
             "src/translateMarkdown.ts",
@@ -3917,7 +3931,7 @@
       "testRunners": [
         "vitest"
       ],
-      "testedBy": 29,
+      "testedBy": 30,
       "unresolvedSites": 0
     }
   ],
@@ -4084,7 +4098,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 52
+          "files": 53
         }
       ],
       "readers": [],
@@ -4269,6 +4283,13 @@
         {
           "job": "quality-gates",
           "matched": true,
+          "path": "src/translateMarkdown.heartbeat.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "quality-gates",
+          "matched": true,
           "path": "src/translateMarkdown.protected.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -4323,7 +4344,7 @@
           "via": "vitest vitest.config.ts"
         }
       ],
-      "runsCount": 33,
+      "runsCount": 34,
       "secrets": [],
       "sends": {
         "deploysPages": false,
@@ -4340,7 +4361,7 @@
         {
           "config": "vitest.config.ts",
           "coverage": true,
-          "files": 32,
+          "files": 33,
           "job": "quality-gates",
           "junit": true,
           "runner": "vitest",
@@ -4672,7 +4693,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 52
+          "files": 53
         }
       ],
       "readers": [],
@@ -4857,6 +4878,13 @@
         {
           "job": "publish",
           "matched": true,
+          "path": "src/translateMarkdown.heartbeat.test.ts",
+          "runKind": "executes",
+          "via": "vitest vitest.config.ts"
+        },
+        {
+          "job": "publish",
+          "matched": true,
           "path": "src/translateMarkdown.protected.test.ts",
           "runKind": "executes",
           "via": "vitest vitest.config.ts"
@@ -4911,7 +4939,7 @@
           "via": "vitest vitest.config.ts"
         }
       ],
-      "runsCount": 33,
+      "runsCount": 34,
       "secrets": [],
       "sends": {
         "deploysPages": false,
@@ -4936,7 +4964,7 @@
       "tests": [
         {
           "config": "vitest.config.ts",
-          "files": 32,
+          "files": 33,
           "job": "publish",
           "runner": "vitest",
           "step": "4",
@@ -5117,8 +5145,8 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "1a5df55cab62f523cbce44499e115934798a20ed",
-    "tracked": 176
+    "commit": "280cb7c9eb5d4d6b986cf8801b213665dd99ffb4",
+    "tracked": 177
   },
   "landings": [
     {
@@ -5256,6 +5284,12 @@
           "confidence": "text"
         },
         {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        },
+        {
           "by": "src/translateAll.test.ts",
           "call": "literal",
           "confidence": "ast",
@@ -5342,6 +5376,12 @@
           "by": "scripts/colab/launch_translate.sh",
           "call": "literal",
           "confidence": "text"
+        },
+        {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
         },
         {
           "by": "src/translateAll.untranslated.test.ts",
@@ -5480,6 +5520,18 @@
     {
       "readers": [
         {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "scripts/colab/translate_bundle_now.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
           "by": "src/translateAll.untranslated.test.ts",
           "call": "literal",
           "confidence": "ast",
@@ -5609,6 +5661,6 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 32,
+  "testFiles": 33,
   "unassigned": []
 }
