@@ -47,7 +47,10 @@ export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
 COLAB_KILL_GRACE_S_DEFAULT=10
-COLAB_OPEN_LOCK_TIMEOUT_S_DEFAULT=180
+# 1200 s (2026-11-12): the open lock is now held from the pre-open rate read through the first stable
+# post-open rate read, so parallel windows queue behind each other's opens; the wait is pre-open and
+# unbilled, but it does run on the wall.
+COLAB_OPEN_LOCK_TIMEOUT_S_DEFAULT=1200
 COLAB_NEW_TIMEOUT_S_DEFAULT=180
 COLAB_UPLOAD_TIMEOUT_S_DEFAULT=120
 COLAB_WALL_ESCALATE_S_DEFAULT=30
@@ -569,6 +572,7 @@ colab_poll_usage_and_ram() {
   printf '%s\n' "${usage_text}" >> "${out_dir}/usage.log"
 
   "${py_bin}" - "${out_dir}" "${default_rate}" "${usage_rc}" "${usage_text}" "${guards_py}" "${COLAB_CARD_CLASS:?the kit must set COLAB_CARD_CLASS to gpu or cpu}" << 'PYEOF'
+import json
 import os
 import re
 import sys
@@ -638,6 +642,19 @@ except lg.RateUnread as exc:
         "error": None,
     }
 
+pre_assign_f = out_dir / "pre_open_assignments.txt"
+if card_class == "gpu" and not session_opened and parsed.get("ok"):
+    # Parallel windows: the pre-open assignment count, read under the open lock just before
+    # `colab new`, is what the first post-open count must exceed by exactly one.
+    _pa = lg.parse_active_assignments(raw_usage)
+    pre_assign_f.write_text(f"{'' if _pa is None else _pa}\n", encoding="utf-8", newline="\n")
+existing_pre_assign = None
+if pre_assign_f.exists():
+    try:
+        existing_pre_assign = int(pre_assign_f.read_text(encoding="utf-8").strip())
+    except ValueError:
+        existing_pre_assign = None
+
 if card_class == "gpu" and session_opened:
     import json as _json
     from datetime import datetime, timezone
@@ -654,7 +671,8 @@ if card_class == "gpu" and session_opened:
                                       at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                                       epoch=_time.time(),
                                       assignments=lg.parse_active_assignments(raw_usage),
-                                      min_gap_s=float(os.environ.get("COLAB_RATE_READ_INTERVAL_S", lg.RATE_STABLE_GAP_S)))
+                                      min_gap_s=float(os.environ.get("COLAB_RATE_READ_INTERVAL_S", lg.RATE_STABLE_GAP_S)),
+                                      pre_open_assignments=existing_pre_assign)
         state_f.write_text(_json.dumps(state, indent=2) + "\n", encoding="utf-8", newline="\n")
     if max_rate is not None:
         parsed["rate_for_projection"] = lg.gpu_projection_rate(state, max_rate)
@@ -668,6 +686,21 @@ if parsed["ok"]:
     start_bal_str = start_f.read_text(encoding="utf-8").strip()
     end_f.write_text(f"{bal}\n", encoding="utf-8", newline="\n")
     cur_bal_str = f"{bal}"
+    if card_class == "gpu" and session_opened:
+        # The balance is account-wide and moves when ANY session settles, including one that closed
+        # just before this window opened, so a neighbour's spend would trip this window's cap. A GPU
+        # window is priced only by rate x elapsed at max(--max-rate, highest stable window rate);
+        # the balance drop is kept as a record (account_balance.json), never as this window's spend.
+        try:
+            _drop = round(max(0.0, float(start_bal_str) - float(bal)), 6)
+        except ValueError:
+            _drop = None
+        (out_dir / "account_balance.json").write_text(
+            json.dumps({"start_balance": start_bal_str, "current_balance": bal, "account_balance_drop": _drop,
+                        "used_for_spend": False,
+                        "why": "account-wide balance; GPU spend = window rate x elapsed"}) + "\n",
+            encoding="utf-8", newline="\n")
+        start_bal_str = cur_bal_str
     if parsed["rate_measured_pre_open"] is not None:
         rate_pre_f.write_text(f"{parsed['rate_measured_pre_open']}\n", encoding="utf-8", newline="\n")
     if parsed["rate_measured_post_open"] is not None:
@@ -746,6 +779,10 @@ rec = {"decision": decision, "window_rate": state.get("best_stable"), "account_r
 PYEOF
   if [ "${decision}" = "assignments_unreadable" ]; then
     colab_refuse_logged "${out_dir}" ASSIGNMENTS_UNREADABLE "colab usage gave no readable Active assignments count (missing or 0) on 3 consecutive reads (rate_window.json)"
+    return 1
+  fi
+  if [ "${decision}" = "unattributable" ]; then
+    colab_refuse_logged "${out_dir}" RATE_UNATTRIBUTABLE "the first post-open assignment count was not the pre-open count + 1, so another session opened or closed meanwhile and (account - pre-open) is not this window's rate (rate_window.json)"
     return 1
   fi
   if [ "${decision}" = "unread" ]; then
@@ -1537,61 +1574,65 @@ colab_open_session_locked() {
     new_args+=("-s" "${session}")
   fi
 
-  local open_lock_timeout="${COLAB_OPEN_LOCK_TIMEOUT_S:-180}"
+  local open_lock_timeout="${COLAB_OPEN_LOCK_TIMEOUT_S:-1200}"
   local new_timeout="${COLAB_NEW_TIMEOUT_S:-180}"
   local kill_grace="${COLAB_KILL_GRACE_S:-10}"
-  local open_rc=0
+  # Parallel windows (2026-11-12, BL 107-108: w1 and w2 read 30.15 and 20.1/h and refused RATE_ABOVE_MAX):
+  # every window's pre-open rate read must see every neighbour that opened before it, and no neighbour
+  # may open between this window's pre-open read and its first stable post-open read. So the open lock
+  # is held from a fresh pre-open read, through `colab new`, the shape check and the post-open rate
+  # read, and released on every path out.
+  local lock_mode="" lock_dir="${lock_file}.lockdir" lock_rc=0
   if command -v flock >/dev/null 2>&1; then
-    (
-      local lock_rc=0
-      colab_run_bounded "${open_lock_timeout}" "${kill_grace}" flock -x 9 || lock_rc=$?
-      if [ "${lock_rc}" -ne 0 ]; then
-        if colab_rc_is_timeout "${lock_rc}"; then
-          echo "OPEN_LOCK_TIMEOUT lock=${lock_file} session=${session} timeout_s=${open_lock_timeout} kill_grace_s=${kill_grace} rc=${lock_rc}" >> "${out_dir}/guards.log"
-        fi
-        colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_file} within ${open_lock_timeout} s (rc=${lock_rc})"
-        exit "${lock_rc}"
-      fi
-      printf '1\n' > "${lock_file}.held"
-      printf '1\n' > "${out_dir}/session_open_started.txt"
-      local new_rc=0
-      colab_run_bounded "${new_timeout}" "${kill_grace}" colab "${new_args[@]}" >> "${out_dir}/colab.log" 2>&1 || new_rc=$?
-      rm -f "${lock_file}.held"
-      if colab_rc_is_timeout "${new_rc}"; then
-        echo "NEW_TIMEOUT session=${session} timeout_s=${new_timeout} kill_grace_s=${kill_grace} rc=${new_rc}" >> "${out_dir}/guards.log"
-      fi
-      if [ "${new_rc}" -ne 0 ]; then
-        colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} failed (rc=${new_rc})"
-        exit "${new_rc}"
-      fi
-    ) 9>"${lock_file}" || open_rc=$?
-    if [ "${open_rc}" -ne 0 ]; then
-      return "${open_rc}"
-    fi
+    lock_mode="flock"
+    exec 9>"${lock_file}"
+    colab_run_bounded "${open_lock_timeout}" "${kill_grace}" flock -x 9 || lock_rc=$?
   else
-    local lock_dir="${lock_file}.lockdir"
-    local lock_rc=0
+    lock_mode="dir"
     colab_run_bounded "${open_lock_timeout}" "${kill_grace}" bash -c 'while ! mkdir "$1" 2>/dev/null; do sleep 0.1; done' _ "${lock_dir}" || lock_rc=$?
-    if [ "${lock_rc}" -ne 0 ]; then
-      if colab_rc_is_timeout "${lock_rc}"; then
-        echo "OPEN_LOCK_TIMEOUT lock=${lock_file} session=${session} timeout_s=${open_lock_timeout} kill_grace_s=${kill_grace} rc=${lock_rc}" >> "${out_dir}/guards.log"
-      fi
-      colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_dir} within ${open_lock_timeout} s (rc=${lock_rc})"
-      return "${lock_rc}"
+  fi
+  if [ "${lock_rc}" -ne 0 ]; then
+    [ "${lock_mode}" = "flock" ] && exec 9>&-
+    if colab_rc_is_timeout "${lock_rc}"; then
+      echo "OPEN_LOCK_TIMEOUT lock=${lock_file} session=${session} timeout_s=${open_lock_timeout} kill_grace_s=${kill_grace} rc=${lock_rc}" >> "${out_dir}/guards.log"
     fi
-    printf '1\n' > "${lock_file}.held"
-    printf '1\n' > "${out_dir}/session_open_started.txt"
-    local rc=0
-    colab_run_bounded "${new_timeout}" "${kill_grace}" colab "${new_args[@]}" >> "${out_dir}/colab.log" 2>&1 || rc=$?
-    rm -f "${lock_file}.held"
+    colab_refuse_logged "${out_dir}" OPEN_LOCK_TIMEOUT "could not acquire ${lock_file} within ${open_lock_timeout} s (rc=${lock_rc})"
+    return "${lock_rc}"
+  fi
+  printf '1\n' > "${lock_file}.held"
+  local under_rc=0
+  colab_open_session_under_lock "${session}" "${card}" "${out_dir}" "${shape}" "${new_timeout}" "${kill_grace}" \
+    "${new_args[@]}" || under_rc=$?
+  rm -f "${lock_file}.held"
+  if [ "${lock_mode}" = "flock" ]; then
+    flock -u 9 2>/dev/null || true
+    exec 9>&-
+  else
     rmdir "${lock_dir}" 2>/dev/null || true
-    if colab_rc_is_timeout "${rc}"; then
-      echo "NEW_TIMEOUT session=${session} timeout_s=${new_timeout} kill_grace_s=${kill_grace} rc=${rc}" >> "${out_dir}/guards.log"
-    fi
-    if [ "${rc}" -ne 0 ]; then
-      colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} failed (rc=${rc})"
-      return "${rc}"
-    fi
+  fi
+  echo "OPEN_LOCK_RELEASED session=${session} rc=${under_rc}" >> "${out_dir}/guards.log"
+  return "${under_rc}"
+}
+
+# colab_open_session_under_lock <session> <card> <out_dir> <shape> <new_timeout> <kill_grace> <colab new args...>:
+# the body of colab_open_session_locked, run only while the open lock is held.
+colab_open_session_under_lock() {
+  local session="$1" card="$2" out_dir="$3" shape="$4" new_timeout="$5" kill_grace="$6"
+  shift 6
+  if ! colab_card_is_cpu "${card}"; then
+    # A fresh pre-open read under the lock: every neighbour that opened earlier is in the baseline now.
+    colab_poll_usage_and_ram "${PY_BIN:?the kit must set PY_BIN}" "${out_dir}" >/dev/null 2>&1 || true
+    echo "PRE_OPEN_UNDER_LOCK rate=$(cat "${out_dir}/rate_measured_pre_open.txt" 2>/dev/null || echo none) assignments=$(cat "${out_dir}/pre_open_assignments.txt" 2>/dev/null || echo none)" >> "${out_dir}/guards.log"
+  fi
+  printf '1\n' > "${out_dir}/session_open_started.txt"
+  local new_rc=0
+  colab_run_bounded "${new_timeout}" "${kill_grace}" colab "$@" >> "${out_dir}/colab.log" 2>&1 || new_rc=$?
+  if colab_rc_is_timeout "${new_rc}"; then
+    echo "NEW_TIMEOUT session=${session} timeout_s=${new_timeout} kill_grace_s=${kill_grace} rc=${new_rc}" >> "${out_dir}/guards.log"
+  fi
+  if [ "${new_rc}" -ne 0 ]; then
+    colab_refuse_logged "${out_dir}" SESSION_OPEN_FAILED "colab new -s ${session} failed (rc=${new_rc})"
+    return "${new_rc}"
   fi
   printf '1\n' > "${out_dir}/session_opened.txt"
   # The cap clock starts the moment `colab new` succeeds on both GPU and CPU: rate polls, shape check,
@@ -2546,6 +2587,7 @@ REFUSAL_CODES = (
     "HF_READ_TOKEN_MISSING",
     "RATE_UNREAD",
     "RATE_ABOVE_MAX",
+    "RATE_UNATTRIBUTABLE",
     "ASSIGNMENTS_UNREADABLE",
     "GPU_RATE_GATE_NOT_ARMED",
     "SHAPE_REQUIRED",
@@ -2945,8 +2987,22 @@ rate_for_floor = (
     if session_was_opened
     else 0.0
 )
+_gpu_rate_state = {}
+try:
+    if (out_dir / "rate_window.json").is_file():
+        _gpu_rate_state = json.loads((out_dir / "rate_window.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    _gpu_rate_state = {}
+spend_basis = "max_of_balance_drop_and_rate_x_elapsed"
+if session_was_opened and _gpu_rate_state.get("best_stable") is not None:
+    # Parallel windows (2026-11-12): `colab usage` reports the account's rate and the balance is
+    # account-wide, so on a GPU window both would book the neighbours' spend as this window's. The
+    # window's own stable rate (post-open minus neighbours) is the spend basis; the balance drop is
+    # kept below as a record only.
+    rate_for_floor = float(_gpu_rate_state["best_stable"])
+    spend_basis = "window_rate_x_elapsed"
 rate_floor_ccu = max(0.0, (rate_for_floor * elapsed_window_s) / 3600.0)
-spend_ccu = round(max(drop_ccu, rate_floor_ccu), 6)
+spend_ccu = round(rate_floor_ccu if spend_basis == "window_rate_x_elapsed" else max(drop_ccu, rate_floor_ccu), 6)
 
 window_payload = {
     **vm_facts,
@@ -2984,6 +3040,10 @@ window_payload = {
     "end_balance": end_balance_val,
     "elapsed_s": round(elapsed_window_s, 3),
     "spend_ccu": spend_ccu,
+    "spend_basis": spend_basis,
+    "account_balance_drop": round(drop_ccu, 6),
+    "account_shared": bool(_gpu_rate_state.get("shared_account")),
+    "pre_open_assignments": _gpu_rate_state.get("pre_open_assignments"),
     "rate_measured": rate_measured,
     "rate_measured_pre_open": rate_measured_pre_open,
     "rate_measured_post_open": rate_measured_post_open,
