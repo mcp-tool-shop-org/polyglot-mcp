@@ -1,17 +1,16 @@
 # polyglot-mcp: how it works
 
-Mapped at 2026-11-12 from commit 3701108 by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 280cb7c by Atlas 1.26.0.
 
 ## What this is
 
 8 parts, mostly TypeScript (56 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.
 
-## What changed since 2026-11-12 (1a5df55)
+## What changed since 2026-11-12 (3701108)
 
-- CI now also runs src/translateMarkdown.heartbeat.test.ts.
-- Publish to npm now also runs src/translateMarkdown.heartbeat.test.ts.
-- scripts/colab/translate_bundle_now.py is now read by src/colabLane.test.ts.
-- 1 file added and 6 changed content, across 3 parts.
+- README.ja.md is now also read by src/colabLane.test.ts.
+- README.zh.md is now also read by src/colabLane.test.ts.
+- 3 files changed content, across 3 parts.
 
 ## What comes in
 
@@ -46,7 +45,7 @@ CI writes nothing this map can see.
 
 ## What tends to change together
 
-- **scripts/translate-all.mjs** and **scripts/translate-readme.mjs** changed together in 7 of 9 commits, inside the scripts part.
+- **scripts/translate-all.mjs** and **scripts/translate-readme.mjs** changed together in 7 of 10 commits, inside the scripts part.
 - **scripts/translate-readme.mjs** and **src/translateMarkdown.ts** changed together in 6 of 11 commits, and the scripts part imports the src part.
 
 Confidence is low: fewer than 25 source files reach 10 revisions in the window.

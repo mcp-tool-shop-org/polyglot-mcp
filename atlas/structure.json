@@ -306,7 +306,7 @@
           "path": "docs/colab-rung1-request.md"
         },
         {
-          "hash": "14b1cfca13a9f7c4d2ce7e9497af3cc3a620f21055ad814eb4378f455fe2cb58",
+          "hash": "fab3169be3fa0178d41d215b9f0bea84a994034bb34476ddd72a71f1848a42e7",
           "path": "docs/colab-translations.md"
         }
       ],
@@ -548,7 +548,7 @@
           "path": "scripts/colab/launch_guards.py"
         },
         {
-          "hash": "8f4f03f9e640abc52f774895a5e5f392e9d64e3d2472a8c2de62be22e03dfbde",
+          "hash": "1adf84ecd6c356aa9a2d1b70a5c734c74dcb9adde3313e09de45e2856efb0749",
           "path": "scripts/colab/launch_translate.sh"
         },
         {
@@ -926,7 +926,7 @@
           ]
         },
         {
-          "hash": "dbdac56090743a7587043b4464a05cd51ef993d3a8c7aa3600a246fa23c6c39b",
+          "hash": "c986162c1fa13ef252393b44f781c37e8185f67d65e66c6666ab0cc8cb973f02",
           "names": [
             "scripts/colab/compare_translations.py",
             "scripts/colab/launch_guards.py",
@@ -5145,7 +5145,7 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "3701108ec3b96216057c92ff9aadd08747ecef15",
+    "commit": "280cb7c9eb5d4d6b986cf8801b213665dd99ffb4",
     "tracked": 177
   },
   "landings": [
@@ -5284,6 +5284,12 @@
           "confidence": "text"
         },
         {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        },
+        {
           "by": "src/translateAll.test.ts",
           "call": "literal",
           "confidence": "ast",
@@ -5370,6 +5376,12 @@
           "by": "scripts/colab/launch_translate.sh",
           "call": "literal",
           "confidence": "text"
+        },
+        {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
         },
         {
           "by": "src/translateAll.untranslated.test.ts",

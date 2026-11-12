@@ -1761,6 +1761,9 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(existsSync(join(outDir, "bundle_extracted", "_staging_translations", "repoA", "README.ja.md"))).toBe(true);
       expect(existsSync(join(outDir, "repoA", "README.ja.md"))).toBe(true);
       expect(existsSync(join(outDir, "bundle_extracted", "summary_repoA.json"))).toBe(true);
+      // the failure-path publish writes SHA256SUMS too, and marks the unpack complete
+      expect(readFileSync(join(outDir, "SHA256SUMS"), "utf-8")).toContain("repoA/README.ja.md");
+      expect(existsSync(join(outDir, "bundle_unpack_complete.txt"))).toBe(true);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -2823,6 +2826,15 @@ describe("polyglot-mcp Colab translation lane", () => {
       }
       expect(existsSync(join(outDir, "repoB", "README.ja.md"))).toBe(true);
       expect(existsSync(join(outDir, "repoB", "README.zh.md"))).toBe(false);
+      // the published source and the passed translations of README 2 do not link to the refused language (B1), and
+      // still link to the passed ones; READMEs 1 and 3 keep the full nav bar
+      const navB = readFileSync(join(outDir, "repoB", "README.md"), "utf-8");
+      expect(navB).not.toContain("README.zh.md");
+      expect(navB).toContain("README.ja.md");
+      expect(readFileSync(join(outDir, "repoB", "README.ja.md"), "utf-8")).not.toContain("README.zh.md");
+      expect(readFileSync(join(outDir, "repoA", "README.md"), "utf-8")).toContain("README.zh.md");
+      // apply_ready is true only for a README whose every language passed
+      expect(win.readme_results.map((r: { apply_ready: boolean }) => r.apply_ready)).toEqual([true, false, true]);
       // the refused language's raw output is kept, and the manifest says why
       expect(existsSync(join(outDir, "refused_raw", "repoB", "README.zh.md"))).toBe(true);
       const manifest = JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf-8"));

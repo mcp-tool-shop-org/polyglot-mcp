@@ -55,7 +55,7 @@ PINNED_TRANSLATE_ALL_SHA="474d9cb9a7977ea63788793f108c2270138fab00dd401a73a5a3d1
 PINNED_TRANSLATE_README_SHA="3b9cee469b4c75b84db26459ecfe803cc73510839caaa0b86b33abc7273a9e57"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="63216e298df46af2ac1c406f7081a569025cb2d483088804e13e894fbe5c9b6f"
+PINNED_SELF_SHA="7f5ecda8b040a18d02948479ba8157187b24b8792ec28eda5ba034d742e1984f"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -800,6 +800,7 @@ if refused_dir.is_dir():
     shutil.copytree(refused_dir, dst_refused)
 for summ in sorted(extract_dir.glob("summary_*.json")):
     shutil.copy2(summ, out_dir / summ.name)
+published_staging = trans_dir.name == "_staging_translations"
 if trans_dir.is_dir():
     for item in trans_dir.iterdir():
         dst = out_dir / item.name
@@ -809,6 +810,16 @@ if trans_dir.is_dir():
             shutil.copytree(item, dst)
         elif item.is_file():
             shutil.copy2(item, dst)
+if published_staging and not (out_dir / "SHA256SUMS").is_file():
+    # The failure path publishes the staged files without the normal rename, so it writes the sums the normal path does.
+    import hashlib
+    lines = []
+    for fp in sorted(p for p in trans_dir.rglob("*") if p.is_file()):
+        lines.append("%s  %s\n" % (hashlib.sha256(fp.read_bytes()).hexdigest(), fp.relative_to(trans_dir).as_posix()))
+    (out_dir / "SHA256SUMS").write_text("".join(lines), encoding="utf-8", newline="\n")
+# Completion marker: the failure-path guard checks this, not the existence of bundle_extracted/, so a half-finished
+# unpack is redone.
+(out_dir / "bundle_unpack_complete.txt").write_text("1\n", encoding="utf-8")
 UNPACKPYEOF
 }
 
@@ -840,7 +851,7 @@ cleanup_on_exit() {
   fi
   # Every exit path publishes what the bundle holds: a README that finished clean before a later refusal,
   # a stall or the wall comes back with its summaries and logs (window polyglot-rb-d lost one this way).
-  if [ "${rc}" -ne 0 ] && [ -s "${OUT_DIR}/polyglot_translate_bundle.tar.gz" ] && [ ! -d "${OUT_DIR}/bundle_extracted" ]; then
+  if [ "${rc}" -ne 0 ] && [ -s "${OUT_DIR}/polyglot_translate_bundle.tar.gz" ] && [ ! -f "${OUT_DIR}/bundle_unpack_complete.txt" ]; then
     translate_unpack_bundle "${OUT_DIR}/polyglot_translate_bundle.tar.gz" "${OUT_DIR}" || true
   fi
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
@@ -1199,6 +1210,12 @@ EXITMARKPYEOF
     done < <(find /content/polyglot_out -type f \( -name "*.log" -o -name "*.json" -o -name "*.txt" \) -print0 2>/dev/null || true)
     if [ "${#r_scrub_args[@]}" -gt 0 ]; then
       python3 /content/launch_guards.py "${r_scrub_args[@]}" </dev/null || true
+    fi
+    # in-flight README.<lang>.md next to each source under readmes_in were written by the model but not yet staged
+    if [ -d /content/readmes_in ]; then
+      (cd /content/readmes_in && find . -type f -name 'README.*.md' -print0 2>/dev/null \
+        | while IFS= read -r -d '' f; do mkdir -p "/content/polyglot_out/in_flight_outputs/$(dirname "${f}")" \
+          && cp -n "${f}" "/content/polyglot_out/in_flight_outputs/${f}" || true; done) || true
     fi
     tar -czf /content/polyglot_translate_bundle.tar.gz -C /content/polyglot_out . || true
   fi
@@ -1827,6 +1844,7 @@ for slot in slots:
         "refused": [],
         "refusal_code": None,
         "reason": None,
+        "apply_ready": False,
         "total_elapsed_s": elapsed_s,
     }
 
@@ -2037,8 +2055,54 @@ for slot in slots:
                     row["refusal_code"] = row["refusal_code"] or "TRANSLATION_UNVERIFIED"
                     row["reason"] = (row["reason"] or "unverified translation(s): ") + f" {lc_missing}({fname}: missing_file)"
                 continue
-            dst_fp = dest_dir / fname
-            shutil.copy2(fp, dst_fp)
+            shutil.copy2(fp, dest_dir / fname)
+
+    # translate-all puts every language whose write receipt checks out into the nav bars, including the ones the gate
+    # refused. Rewrite the STAGED copies (the source README and every passed translation) down to the passed set, so
+    # a published README never links to a translation that was refused, then re-check the source nav bar against the
+    # passed set. If that still fails the README's source is refused and nothing of it is staged.
+    if passed_langs and refused_entries:
+        rewrite_script = (
+            "import { readFileSync, writeFileSync } from 'node:fs';"
+            "import { resolve } from 'node:path';"
+            "import { TRANSLATE_ALL_LANGUAGES, buildNavBar, injectNavBar, checkSourceNavBar } from './dist/translateAll.js';"
+            "const [destDir, passedJson] = process.argv.slice(1);"
+            "const passed = new Set(JSON.parse(passedJson));"
+            "const rewrite = (file, code) => {"
+            "  const path = resolve(destDir, file);"
+            "  let nav = buildNavBar(TRANSLATE_ALL_LANGUAGES, passed, code);"
+            "  if (!code) nav = nav.replace('<p align=\"center\">\\n  ', '<p align=\"center\">\\n  <a href=\"README.md\">English</a> | ');"
+            "  writeFileSync(path, injectNavBar(readFileSync(path, 'utf-8'), nav), 'utf-8');"
+            "};"
+            "rewrite('README.md', undefined);"
+            "for (const lang of TRANSLATE_ALL_LANGUAGES) { if (passed.has(lang.code)) rewrite(`README.${lang.file ?? lang.code}.md`, lang.code); }"
+            "console.log(JSON.stringify(checkSourceNavBar(readFileSync(resolve(destDir, 'README.md'), 'utf-8'), passed, TRANSLATE_ALL_LANGUAGES)));"
+        )
+        rw = subprocess.run(
+            ["node", "--input-type=module", "-e", rewrite_script, str(dest_dir), json.dumps(passed_langs)],
+            cwd=str(work_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        rw_res = None
+        if rw.returncode == 0:
+            try:
+                rw_res = json.loads(rw.stdout.strip())
+            except ValueError:
+                rw_res = None
+        if rw_res is None or not rw_res.get("ok"):
+            why = (rw_res or {}).get("why") or f"nav bar rewrite failed (rc={rw.returncode})"
+            code = (rw_res or {}).get("refusalCode") or "NAV_BAR_INCOMPLETE"
+            for lc in passed_langs:
+                refused_entries.append({"lang": lc, "file": lang_file_map[lc], "reasons": [f"held_back:{code}"], "raw": _keep_raw(lc)})
+            passed_langs = []
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            row["refusal_code"] = code
+            row["reason"] = f"{why}; this README's source was not staged"
+        else:
+            nav_res = rw_res
+
+    for fname in (["README.md"] + [lang_file_map[lc] for lc in passed_langs]) if passed_langs else []:
+        dst_fp = dest_dir / fname
+        if dst_fp.is_file():
             f_hex = hashlib.sha256(dst_fp.read_bytes()).hexdigest()
             output_shas[fname] = f"sha256:{f_hex}"
             all_sha_entries.append((f_hex, dst_fp.relative_to(staging_root).as_posix()))
@@ -2073,10 +2137,14 @@ for slot in slots:
 
     row["passed"] = list(passed_langs)
     row["refused"] = refused_entries
+    # A README is safe to apply to its repo only when every one of its languages passed. A partial README is not
+    # applied: the repo would carry a stale old translation beside fresh ones (see docs/colab-translations.md).
+    row["apply_ready"] = len(passed_langs) == len(langs) and not refused_entries
     _close_row({
         "slug": slot.name,
         "input_sha256": input_sha,
         "status": "ok" if not refused_entries else ("partial" if passed_langs else "refused"),
+        "apply_ready": row["apply_ready"],
         "output_shas": output_shas,
         "verified_languages": passed_langs,
         "refused_languages": refused_entries,
