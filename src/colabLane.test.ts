@@ -1778,12 +1778,30 @@ describe("polyglot-mcp Colab translation lane", () => {
         "fcntl.flock(fh, fcntl.LOCK_EX)",
         "os.makedirs(lock + '.lockdir', exist_ok=True)",
         "open(flag, 'w').write('1')",
-        "time.sleep(8)",
+        "calls = sys.argv[4]",
+        "t0 = time.time()",
+        "while time.time() - t0 < 90:",
+        "    try:",
+        "        if 'CALL usage' in open(calls, encoding='utf-8').read():",
+        "            break",
+        "    except OSError:",
+        "        pass",
+        "    time.sleep(0.1)",
+        "time.sleep(1.5)",
         "open(on, 'w').write('1')",
         "os.rmdir(lock + '.lockdir')",
         "fcntl.flock(fh, fcntl.LOCK_UN)",
       ].join("\n");
-      const holder = spawn(pyBin, ["-c", holderPy, lockPath, holdingFlag, join(stateDir, "neighbours_on.txt")]);
+      // The holder turns the neighbours on only after the launcher's launch-time usage read (first "CALL usage"
+      // in calls.log), while the launcher waits on the lock: the race is reproduced however slow the runner is.
+      const holder = spawn(pyBin, [
+        "-c",
+        holderPy,
+        lockPath,
+        holdingFlag,
+        join(stateDir, "neighbours_on.txt"),
+        join(stateDir, "calls.log"),
+      ]);
       const t0 = Date.now();
       while (!existsSync(holdingFlag) && Date.now() - t0 < 10_000) {
         await new Promise((r) => setTimeout(r, 100));
@@ -1801,6 +1819,9 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win.spend_basis).toBe("window_rate_x_elapsed");
       const guards = readFileSync(join(outDir, "guards.log"), "utf-8");
       expect(guards).toContain("PRE_OPEN_UNDER_LOCK rate=20.1 assignments=2");
+      // The launch-time read (the one the old code priced from) saw no neighbours: the race was real.
+      const usage = readFileSync(join(outDir, "usage.log"), "utf-8").split("\n");
+      expect(usage.slice(0, 3)).toEqual(expect.arrayContaining(["Usage rate: 0.00/hr", "Active assignments: 0"]));
       expect(guards).toContain("OPEN_LOCK_RELEASED session=polyglot-par1");
     } finally {
       rmSync(tmp, { recursive: true, force: true });

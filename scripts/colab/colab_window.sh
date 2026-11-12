@@ -1591,6 +1591,11 @@ colab_open_session_locked() {
   if command -v flock >/dev/null 2>&1; then
     lock_mode="flock"
     exec 9>"${lock_file}"
+    # Mark fd 9 as ours BEFORE the wait (PR #80 re-review note 6): a TERM between acquiring the lock and
+    # the line below must still release it in cleanup. Releasing an fd we never locked is harmless; the
+    # mkdir path is not marked early, since an early rmdir could remove another window's lock.
+    COLAB_OPEN_LOCK_HELD="flock"
+    COLAB_OPEN_LOCK_FILE="${lock_file}"
     colab_run_bounded "${open_lock_timeout}" "${kill_grace}" flock -x 9 || lock_rc=$?
   else
     lock_mode="dir"
@@ -1598,6 +1603,7 @@ colab_open_session_locked() {
   fi
   if [ "${lock_rc}" -ne 0 ]; then
     [ "${lock_mode}" = "flock" ] && exec 9>&-
+    COLAB_OPEN_LOCK_HELD=""
     if colab_rc_is_timeout "${lock_rc}"; then
       echo "OPEN_LOCK_TIMEOUT lock=${lock_file} session=${session} timeout_s=${open_lock_timeout} kill_grace_s=${kill_grace} rc=${lock_rc}" >> "${out_dir}/guards.log"
     fi
@@ -1607,6 +1613,7 @@ colab_open_session_locked() {
   printf '1\n' > "${lock_file}.held"
   COLAB_OPEN_LOCK_HELD="${lock_mode}"
   COLAB_OPEN_LOCK_FILE="${lock_file}"
+  COLAB_OPEN_LOCK_ACQUIRED=1
   local under_rc=0
   colab_open_session_under_lock "${session}" "${card}" "${out_dir}" "${shape}" "${new_timeout}" "${kill_grace}" \
     "${new_args[@]}" || under_rc=$?
@@ -1621,7 +1628,9 @@ colab_release_open_lock_if_held() {
   local out_dir="$1" note="${2:-}"
   [ -n "${COLAB_OPEN_LOCK_HELD:-}" ] || return 0
   local lock_file="${COLAB_OPEN_LOCK_FILE:-${COLAB_OPEN_LOCK:-/tmp/colab-window-open.lock}}"
-  rm -f "${lock_file}.held"
+  # The .held marker is shared per lock file: remove it only if this shell really acquired the lock.
+  [ "${COLAB_OPEN_LOCK_ACQUIRED:-0}" = "1" ] && rm -f "${lock_file}.held"
+  COLAB_OPEN_LOCK_ACQUIRED=0
   if [ "${COLAB_OPEN_LOCK_HELD}" = "flock" ]; then
     flock -u 9 2>/dev/null || true
     exec 9>&-
@@ -1650,6 +1659,9 @@ colab_open_session_under_lock() {
       colab_refuse_logged "${out_dir}" WALL_SHORT_AFTER_LOCK "only ${w_left} s of wall left after the open-lock wait (minimum ${w_min} s); not opening a session"
       return 2
     fi
+  else
+    # The watcher has not written its clock yet, so the lock was taken at once and nothing waited (note 7).
+    echo "WALL_AFTER_LOCK unknown (no wall_start_epoch.txt or wall_limit_s.txt yet)" >> "${out_dir}/guards.log"
   fi
   if ! colab_card_is_cpu "${card}"; then
     # A fresh pre-open read under the lock: every neighbour that opened earlier is in the baseline now.
@@ -3047,8 +3059,21 @@ if session_was_opened and _gpu_rate_state.get("best_stable") is not None:
     # kept below as a record only.
     rate_for_floor = float(_gpu_rate_state["best_stable"])
     spend_basis = "window_rate_x_elapsed"
+elif session_was_opened and str(card).upper() not in ("CPU", "CPU-HIGH-MEM"):
+    # A GPU window that never read a stable own rate (RATE_UNATTRIBUTABLE, RATE_UNREAD, an early cap trip):
+    # the account's rate and balance include the neighbours, so book it at --max-rate x elapsed (PR #80
+    # re-review note 1), never at the account figures.
+    _mr = read_float_file(out_dir / "max_rate.txt")
+    if _mr is not None and _mr > 0.0:
+        rate_for_floor = float(_mr)
+        spend_basis = "max_rate_x_elapsed_no_stable_rate"
 rate_floor_ccu = max(0.0, (rate_for_floor * elapsed_window_s) / 3600.0)
-spend_ccu = round(rate_floor_ccu if spend_basis == "window_rate_x_elapsed" else max(drop_ccu, rate_floor_ccu), 6)
+spend_ccu = round(
+    rate_floor_ccu
+    if spend_basis in ("window_rate_x_elapsed", "max_rate_x_elapsed_no_stable_rate")
+    else max(drop_ccu, rate_floor_ccu),
+    6,
+)
 
 window_payload = {
     **vm_facts,

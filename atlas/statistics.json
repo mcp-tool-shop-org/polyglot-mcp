@@ -133,7 +133,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "src",
-      "qualifyingSourceCommits": 15,
+      "qualifyingSourceCommits": 17,
       "rebaseline": null
     }
   ],
@@ -221,8 +221,8 @@
         "path": "SECURITY.md"
       },
       {
-        "commits": 12,
-        "lines": 543,
+        "commits": 13,
+        "lines": 565,
         "path": "atlas/README.md"
       },
       {
@@ -231,18 +231,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 12,
-        "lines": 2009,
+        "commits": 13,
+        "lines": 2055,
         "path": "atlas/page.json"
       },
       {
-        "commits": 12,
-        "lines": 3903,
+        "commits": 13,
+        "lines": 3973,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 12,
-        "lines": 14823,
+        "commits": 13,
+        "lines": 14905,
         "path": "atlas/structure.json"
       },
       {
@@ -276,8 +276,8 @@
         "path": "package.json"
       },
       {
-        "commits": 3,
-        "lines": 3250,
+        "commits": 4,
+        "lines": 3313,
         "path": "scripts/colab/colab_window.sh"
       },
       {
@@ -291,8 +291,8 @@
         "path": "scripts/colab/launch_guards.py"
       },
       {
-        "commits": 3,
-        "lines": 2314,
+        "commits": 4,
+        "lines": 2321,
         "path": "scripts/colab/launch_translate.sh"
       },
       {
@@ -396,8 +396,8 @@
         "path": "src/codeSpans.ts"
       },
       {
-        "commits": 3,
-        "lines": 4087,
+        "commits": 5,
+        "lines": 4148,
         "path": "src/colabLane.test.ts"
       },
       {
@@ -631,9 +631,9 @@
     "level": "low",
     "reason": "fewer than 25 source files reach 10 revisions in the window"
   },
-  "generatedAt": "2026-11-12T18:02:21.201Z",
+  "generatedAt": "2026-11-12T18:29:09.783Z",
   "generatedFrom": {
-    "commit": "85d20d54faf82be9ddef53ab562c66a68bd62674"
+    "commit": "cfe76331d42aff234d6a6d66455256c4217f548d"
   },
   "pairs": [
     {
@@ -807,43 +807,43 @@
     {
       "a": "atlas/README.md",
       "b": "atlas/page.json",
-      "either": 8,
-      "shared": 8,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/README.md",
       "b": "atlas/statistics.json",
-      "either": 8,
-      "shared": 8,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/README.md",
       "b": "atlas/structure.json",
-      "either": 8,
-      "shared": 8,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/page.json",
       "b": "atlas/statistics.json",
-      "either": 8,
-      "shared": 8,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/page.json",
       "b": "atlas/structure.json",
-      "either": 8,
-      "shared": 8,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/statistics.json",
       "b": "atlas/structure.json",
-      "either": 8,
-      "shared": 8,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
@@ -878,16 +878,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "revision-depth",
-    "headDate": "2026-11-12T12:50:52-05:00",
+    "headDate": "2026-11-12T13:17:02-05:00",
     "inScopeFiles": 177,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 40,
+    "qualifyingCommits": 42,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-05-16T17:50:52.000Z",
+    "since": "2026-05-16T18:17:02.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

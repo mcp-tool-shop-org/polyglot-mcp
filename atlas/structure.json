@@ -437,7 +437,7 @@
       "externals": 0,
       "files": [
         {
-          "hash": "2ab01f8c97e185252d846578ff80cd843e4084a328ae3a635549d3371775668e",
+          "hash": "671886261b0ce5a60daca412084565ec6aca7560f7c39ea45aa5cb9780575eb7",
           "path": "scripts/colab/colab_window.sh"
         },
         {
@@ -547,7 +547,7 @@
           "path": "scripts/colab/launch_guards.py"
         },
         {
-          "hash": "b5d4759237379c7cf10d1e9c3fee63072bacd2e40606d8203e19d8727b02370a",
+          "hash": "e1b458d46b316a4837ccec545ae9878f1c4094d89466cd70d4641300226569a8",
           "path": "scripts/colab/launch_translate.sh"
         },
         {
@@ -915,7 +915,7 @@
           ]
         },
         {
-          "hash": "8fe3bcdf76b41b9081a8e60231324fe423666b4a132cd7c2c17a579ed004b54b",
+          "hash": "421e44d3b5eea960c17df6700ebf42460c377bc9dff6603a3cfe41fe6fe7c3f5",
           "names": [
             "scripts/colab/compare_translations.py",
             "scripts/colab/launch_guards.py",
@@ -4964,7 +4964,7 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "85d20d54faf82be9ddef53ab562c66a68bd62674",
+    "commit": "cfe76331d42aff234d6a6d66455256c4217f548d",
     "tracked": 172
   },
   "landings": [

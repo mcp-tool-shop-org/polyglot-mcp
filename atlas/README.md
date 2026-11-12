@@ -1,18 +1,14 @@
 # polyglot-mcp: how it works
 
-Mapped at 2026-11-12 from commit 85d20d5 by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit cfe7633 by Atlas 1.26.0.
 
 ## What this is
 
 8 parts, mostly TypeScript (51 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.
 
-## What changed since 2026-11-12 (66eddd9)
+## What changed since 2026-11-12 (85d20d5)
 
-- scripts/colab/colab_window.sh is now read by src/colabLane.test.ts.
-- scripts/colab/compare_translations.py is now read by src/colabLane.test.ts.
-- scripts/colab/launch_guards.py is now read by src/colabLane.test.ts.
-- And 1 more new writer or reader of a place.
-- 3 files changed content, across 2 parts.
+Nothing structural changed since 2026-11-12; 3 files changed content.
 
 ## What comes in
 
