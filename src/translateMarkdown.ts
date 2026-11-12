@@ -93,6 +93,13 @@ export interface TranslateMarkdownOptions extends TranslateBatchOptions {
   /** Progress callback — called with (completed, total) after each segment batch. */
   onProgress?: (completed: number, total: number) => void;
   /**
+   * Called after every model call made while retrying or re-cutting an unusable segment, where
+   * `onProgress` cannot move (its count is already at the last segment). A host that watches for a
+   * stalled run (the Colab lane's stall guard) counts these as progress, so a language working
+   * through retries alone is not mistaken for a hung one.
+   */
+  onHeartbeat?: () => void;
+  /**
    * Protected terms masked in prose, like inline code spans. Default: the
    * `.polyglot-terms.json` beside `filePath` if there is one, else the
    * default patterns.
@@ -1069,6 +1076,7 @@ export async function translateMarkdown(
         const retry = await translateBatch([item], sourceLang, targetLang, batchOptions);
         ollamaCalls += retry.ollamaCalls;
         retries++;
+        options.onHeartbeat?.();
         const again = retry.translations[0] ?? "";
         if (unusableReason(item.text, spans, again, isHeading) === undefined) {
           uniqueTranslations[i] = again;
@@ -1093,6 +1101,7 @@ export async function translateMarkdown(
         if (recovered || !applies) continue;
         const attempt = await translateByPieces(item, spans, mode, sourceLang, targetLang, batchOptions);
         ollamaCalls += attempt.calls;
+        options.onHeartbeat?.();
         if (attempt.translation === undefined) {
           route += `; ${label} did not recover it`;
           continue;

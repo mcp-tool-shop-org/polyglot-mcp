@@ -548,7 +548,7 @@
           "path": "scripts/colab/launch_guards.py"
         },
         {
-          "hash": "396be0db202440d51b005e539bacc1a4bf0f6f96d32819a214830baf1383070b",
+          "hash": "45aa5faa430f1036f38358a78f664145cab3342d7128bdf4ecd3abb8b194d580",
           "path": "scripts/colab/launch_translate.sh"
         },
         {
@@ -627,18 +627,18 @@
             {
               "in": "writeHeartbeat",
               "kind": "catch",
-              "line": 101
+              "line": 106
             },
             {
               "kind": "catch",
-              "line": 123
+              "line": 129
             },
             {
               "kind": "throw",
-              "line": 132
+              "line": 138
             }
           ],
-          "hash": "f6c35dd7253835939d897970a32154813682f42e1eb504a053a65ca8f12bf41b",
+          "hash": "3b9cee469b4c75b84db26459ecfe803cc73510839caaa0b86b33abc7273a9e57",
           "importOrder": [
             "src/translateMarkdown.ts",
             "src/survival.ts"
@@ -1546,7 +1546,7 @@
                 {
                   "inner": [
                     {
-                      "line": 514,
+                      "line": 521,
                       "name": "safeDecodeSlug",
                       "target": {
                         "file": "src/survival.ts"
@@ -2862,70 +2862,70 @@
                 {
                   "inner": [
                     {
-                      "line": 823,
+                      "line": 830,
                       "name": "resolveLanguage",
                       "target": {
                         "file": "src/languages.ts"
                       }
                     },
                     {
-                      "line": 853,
+                      "line": 860,
                       "name": "loadProtectedTerms",
                       "target": {
                         "file": "src/protectedTerms.ts"
                       }
                     },
                     {
-                      "line": 854,
+                      "line": 861,
                       "name": "loadPins",
                       "target": {
                         "file": "src/pins.ts"
                       }
                     },
                     {
-                      "line": 854,
+                      "line": 861,
                       "name": "createPins",
                       "target": {
                         "file": "src/pins.ts"
                       }
                     },
                     {
-                      "line": 859,
+                      "line": 866,
                       "name": "loadCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 863,
+                      "line": 870,
                       "name": "clearCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 864,
+                      "line": 871,
                       "name": "saveCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 866,
+                      "line": 873,
                       "name": "pruneCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 869,
+                      "line": 876,
                       "name": "createCache",
                       "target": {
                         "file": "src/cache.ts"
                       }
                     },
                     {
-                      "line": 917,
+                      "line": 924,
                       "name": "getPin",
                       "target": {
                         "file": "src/pins.ts"
@@ -2933,7 +2933,7 @@
                       "via": "enqueue"
                     },
                     {
-                      "line": 923,
+                      "line": 930,
                       "name": "maskCodeSpans",
                       "target": {
                         "file": "src/codeSpans.ts"
@@ -2941,7 +2941,7 @@
                       "via": "enqueue"
                     },
                     {
-                      "line": 923,
+                      "line": 930,
                       "name": "DEFAULT_PROTECTED_TERMS",
                       "passed": true,
                       "target": {
@@ -3089,20 +3089,20 @@
             {
               "in": "translateMarkdown",
               "kind": "throw",
-              "line": 825
+              "line": 832
             },
             {
               "in": "translateMarkdown",
               "kind": "throw",
-              "line": 835
+              "line": 842
             },
             {
               "in": "translateMarkdown",
               "kind": "catch",
-              "line": 1156
+              "line": 1165
             }
           ],
-          "hash": "3a83700b7c8dd3ad612e6c463242c24f7662ad84077dfed78901e9cbc5f7e5cf",
+          "hash": "65a106b3d3124516cd29eb5d20c5c2a5ed6102393c91e84158e91bf4ba7149a1",
           "importsFiles": [
             "src/cache.ts",
             "src/codeSpans.ts",
@@ -3119,21 +3119,21 @@
             {
               "calls": [
                 {
-                  "line": 452,
+                  "line": 459,
                   "name": "stripHeadingMarkup",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 452,
+                  "line": 459,
                   "name": "safeDecodeSlug",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 454,
+                  "line": 461,
                   "name": "stripHeadingMarkup",
                   "target": {
                     "file": "src/survival.ts"
@@ -3148,7 +3148,7 @@
             {
               "calls": [
                 {
-                  "line": 514,
+                  "line": 521,
                   "name": "safeDecodeSlug",
                   "target": {
                     "file": "src/survival.ts"
@@ -3163,28 +3163,28 @@
             {
               "calls": [
                 {
-                  "line": 543,
+                  "line": 550,
                   "name": "extractRefDefinitions",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 550,
+                  "line": 557,
                   "name": "checkSegment",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 561,
+                  "line": 568,
                   "name": "expectedSpans",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 561,
+                  "line": 568,
                   "name": "DEFAULT_PROTECTED_TERMS",
                   "passed": true,
                   "target": {
@@ -3192,35 +3192,35 @@
                   }
                 },
                 {
-                  "line": 572,
+                  "line": 579,
                   "name": "checkLinks",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 578,
+                  "line": 585,
                   "name": "checkPlaceholders",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 584,
+                  "line": 591,
                   "name": "checkCodeStructure",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 585,
+                  "line": 592,
                   "name": "anchorsEnabled",
                   "target": {
                     "file": "src/protectedTerms.ts"
                   }
                 },
                 {
-                  "line": 585,
+                  "line": 592,
                   "name": "DEFAULT_PROTECTED_TERMS",
                   "passed": true,
                   "target": {
@@ -3228,14 +3228,14 @@
                   }
                 },
                 {
-                  "line": 586,
+                  "line": 593,
                   "name": "extractLinks",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 599,
+                  "line": 606,
                   "name": "checkAnchors",
                   "target": {
                     "file": "src/survival.ts"
@@ -3250,7 +3250,7 @@
             {
               "calls": [
                 {
-                  "line": 643,
+                  "line": 650,
                   "name": "PLACEHOLDER_PATTERN",
                   "passed": true,
                   "target": {
@@ -3266,7 +3266,7 @@
             {
               "calls": [
                 {
-                  "line": 761,
+                  "line": 768,
                   "name": "PLACEHOLDER_PATTERN",
                   "passed": true,
                   "target": {
@@ -3274,7 +3274,7 @@
                   }
                 },
                 {
-                  "line": 766,
+                  "line": 773,
                   "name": "translateBatch",
                   "target": {
                     "file": "src/translate.ts"
@@ -3282,7 +3282,7 @@
                 },
                 {
                   "branch": "spans.length === 0",
-                  "line": 803,
+                  "line": 810,
                   "name": "survivingProse",
                   "target": {
                     "file": "src/survival.ts"
@@ -3290,7 +3290,7 @@
                   "via": "unusableReason"
                 },
                 {
-                  "line": 804,
+                  "line": 811,
                   "name": "restoreCodeSpans",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -3298,7 +3298,7 @@
                   "via": "unusableReason"
                 },
                 {
-                  "line": 806,
+                  "line": 813,
                   "name": "survivingProse",
                   "target": {
                     "file": "src/survival.ts"
@@ -3306,7 +3306,7 @@
                   "via": "unusableReason"
                 },
                 {
-                  "line": 773,
+                  "line": 780,
                   "name": "PLACEHOLDER_PATTERN",
                   "passed": true,
                   "target": {
@@ -3323,21 +3323,21 @@
               "calls": [
                 {
                   "branch": "spans.length === 0",
-                  "line": 803,
+                  "line": 810,
                   "name": "survivingProse",
                   "target": {
                     "file": "src/survival.ts"
                   }
                 },
                 {
-                  "line": 804,
+                  "line": 811,
                   "name": "restoreCodeSpans",
                   "target": {
                     "file": "src/codeSpans.ts"
                   }
                 },
                 {
-                  "line": 806,
+                  "line": 813,
                   "name": "survivingProse",
                   "target": {
                     "file": "src/survival.ts"
@@ -3352,63 +3352,63 @@
             {
               "calls": [
                 {
-                  "line": 823,
+                  "line": 830,
                   "name": "resolveLanguage",
                   "target": {
                     "file": "src/languages.ts"
                   }
                 },
                 {
-                  "line": 853,
+                  "line": 860,
                   "name": "loadProtectedTerms",
                   "target": {
                     "file": "src/protectedTerms.ts"
                   }
                 },
                 {
-                  "line": 854,
+                  "line": 861,
                   "name": "loadPins",
                   "target": {
                     "file": "src/pins.ts"
                   }
                 },
                 {
-                  "line": 854,
+                  "line": 861,
                   "name": "createPins",
                   "target": {
                     "file": "src/pins.ts"
                   }
                 },
                 {
-                  "line": 859,
+                  "line": 866,
                   "name": "loadCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 863,
+                  "line": 870,
                   "name": "clearCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 864,
+                  "line": 871,
                   "name": "saveCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 866,
+                  "line": 873,
                   "name": "pruneCache",
                   "target": {
                     "file": "src/cache.ts"
                   }
                 },
                 {
-                  "line": 869,
+                  "line": 876,
                   "name": "createCache",
                   "target": {
                     "file": "src/cache.ts"
@@ -3425,7 +3425,7 @@
                       "via": "pinKey"
                     }
                   ],
-                  "line": 917,
+                  "line": 924,
                   "name": "getPin",
                   "target": {
                     "file": "src/pins.ts"
@@ -3449,7 +3449,7 @@
                       }
                     }
                   ],
-                  "line": 923,
+                  "line": 930,
                   "name": "maskCodeSpans",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -3457,7 +3457,7 @@
                   "via": "enqueue"
                 },
                 {
-                  "line": 923,
+                  "line": 930,
                   "name": "DEFAULT_PROTECTED_TERMS",
                   "passed": true,
                   "target": {
@@ -3466,7 +3466,7 @@
                   "via": "enqueue"
                 },
                 {
-                  "line": 924,
+                  "line": 931,
                   "name": "cacheKey",
                   "target": {
                     "file": "src/cache.ts"
@@ -3475,7 +3475,7 @@
                 },
                 {
                   "branch": "!/\\p{L}/u.test(masked)",
-                  "line": 929,
+                  "line": 936,
                   "name": "restoreCodeSpans",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -3483,7 +3483,7 @@
                   "via": "enqueue"
                 },
                 {
-                  "line": 935,
+                  "line": 942,
                   "name": "getCached",
                   "target": {
                     "file": "src/cache.ts"
@@ -3503,7 +3503,7 @@
                       "via": "proseText"
                     }
                   ],
-                  "line": 803,
+                  "line": 810,
                   "name": "survivingProse",
                   "target": {
                     "file": "src/survival.ts"
@@ -3511,7 +3511,7 @@
                   "via": "unusableReason"
                 },
                 {
-                  "line": 804,
+                  "line": 811,
                   "name": "restoreCodeSpans",
                   "target": {
                     "file": "src/codeSpans.ts"
@@ -3530,7 +3530,7 @@
                       "via": "proseText"
                     }
                   ],
-                  "line": 806,
+                  "line": 813,
                   "name": "survivingProse",
                   "target": {
                     "file": "src/survival.ts"
@@ -3538,7 +3538,7 @@
                   "via": "unusableReason"
                 },
                 {
-                  "line": 941,
+                  "line": 948,
                   "name": "getFuzzyCached",
                   "target": {
                     "file": "src/cache.ts"
@@ -3546,7 +3546,7 @@
                   "via": "enqueue"
                 },
                 {
-                  "line": 986,
+                  "line": 993,
                   "name": "onProgress",
                   "target": null
                 },
@@ -3645,14 +3645,14 @@
                     }
                   ],
                   "innerTruncated": true,
-                  "line": 1000,
+                  "line": 1007,
                   "name": "translateBatch",
                   "target": {
                     "file": "src/translate.ts"
                   }
                 },
                 {
-                  "line": 1048,
+                  "line": 1055,
                   "name": "segmentLabel",
                   "target": {
                     "file": "src/survival.ts"
@@ -3753,20 +3753,16 @@
                     }
                   ],
                   "innerTruncated": true,
-                  "line": 1069,
+                  "line": 1076,
                   "name": "translateBatch",
                   "target": {
                     "file": "src/translate.ts"
                   }
                 },
                 {
-                  "line": 761,
-                  "name": "PLACEHOLDER_PATTERN",
-                  "passed": true,
-                  "target": {
-                    "file": "src/codeSpans.ts"
-                  },
-                  "via": "translateByPieces"
+                  "line": 1079,
+                  "name": "onHeartbeat",
+                  "target": null
                 }
               ],
               "exported": true,
@@ -5121,7 +5117,7 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "cd8d46aeef34570092041da5b6c46c6db8b9313c",
+    "commit": "1a5df55cab62f523cbce44499e115934798a20ed",
     "tracked": 176
   },
   "landings": [

@@ -52,10 +52,10 @@ PINNED_COLAB_WINDOW_SHA="8cf47326d30f2bf430c67a6eb881cb82a1162d3ba89c616c09ed9ed
 PINNED_BUNDLE_NOW_SHA="70b98ec2f6b363d3e94b7bc8283c74cee640c5229308e69c7dbf6a9482f7c536"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
 PINNED_TRANSLATE_ALL_SHA="61a203bdebb9fe832e061f1f47c59b1ecffee2d3c9098c0fc8ab9460e9a8dafa"
-PINNED_TRANSLATE_README_SHA="f6c35dd7253835939d897970a32154813682f42e1eb504a053a65ca8f12bf41b"
+PINNED_TRANSLATE_README_SHA="3b9cee469b4c75b84db26459ecfe803cc73510839caaa0b86b33abc7273a9e57"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="3c4bb03798dec95ea89670b4922ce800327afc568fd7aaf1fccbdb519b8844c2"
+PINNED_SELF_SHA="fdc94f98384e596d19c43c1ed325828f7f803f1db041ed21dea745ad3eea8972"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -1514,10 +1514,16 @@ probe = {
     "gpu_percent": gpu_pct,
     "fully_on_gpu": fully_on_gpu,
 }
+# Whether `ollama ps` reports the per-slot context or the total over all slots is not verified for 0.40.15
+# (PR #82 review): accept exactly either, record which one was seen, refuse anything else.
+_ctx_ok = {translator_ctx: "per_slot", translator_ctx * max(1, num_parallel): "total_over_slots"}
+probe["ps_context_basis"] = (
+    "not_reported" if ps_context_length is None else _ctx_ok.get(ps_context_length, "mismatch")
+)
 Path("/content/polyglot_out/fit_probe.json").write_text(json.dumps(probe, indent=2) + "\n", encoding="utf-8")
 print("FIT_PROBE " + json.dumps(probe), flush=True)
 
-if ps_context_length is not None and ps_context_length != translator_ctx:
+if ps_context_length is not None and ps_context_length not in _ctx_ok:
     # The server is not running at the pinned window (a KV cache sized by Ollama's own default is what made the
     # 2026-11-12 window crawl): refuse before any translation spends units.
     _fail_probe(
@@ -1714,7 +1720,13 @@ for slot in slots:
     # One slot per language on the server, so the languages decode side by side instead of queueing on one slot.
     num_parallel_file = state_dir / "num_parallel"
     num_parallel = int(num_parallel_file.read_text(encoding="utf-8").strip()) if num_parallel_file.is_file() else int(os.environ.get("PINNED_NUM_PARALLEL", "1"))
-    cmd = ["node", str(work_dir / "scripts" / "translate-all.mjs"), str(src_readme), "--no-cache", f"--concurrency={num_parallel}"]
+    # Per-language child timeout scaled to the README (PR #82 review): translate-all's 900 s default would end a
+    # large README's language while it is still working; the window's wall and stall guard still bound the run.
+    lang_timeout_s = max(900, -(-len(pre_run_source_md.encode("utf-8")) // 1000) * 60)
+    cmd = [
+        "node", str(work_dir / "scripts" / "translate-all.mjs"), str(src_readme), "--no-cache",
+        f"--concurrency={num_parallel}", f"--timeout={lang_timeout_s}",
+    ]
     env = dict(os.environ)
     env["POLYGLOT_MODEL"] = model_name
     env["POLYGLOT_NUM_CTX"] = os.environ.get("PINNED_TRANSLATOR_CONTEXT", "8192")

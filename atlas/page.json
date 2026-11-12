@@ -20,52 +20,24 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 4,
-      "changed": 11,
+      "added": 0,
+      "changed": 3,
       "moved": 0,
-      "parts": 3,
+      "parts": 2,
       "removed": 0
     },
     "items": [
       {
-        "kind": "door",
-        "sentence": "CI now also runs src/numCtx.test.ts, src/stallHeartbeat.test.ts and src/translate.truncation.test.ts.",
-        "subjects": [
-          ".github/workflows/ci.yml",
-          "src/numCtx.test.ts",
-          "src/stallHeartbeat.test.ts",
-          "src/translate.truncation.test.ts"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "Publish to npm now also runs src/numCtx.test.ts, src/stallHeartbeat.test.ts and src/translate.truncation.test.ts.",
-        "subjects": [
-          ".github/workflows/publish.yml",
-          "src/numCtx.test.ts",
-          "src/stallHeartbeat.test.ts",
-          "src/translate.truncation.test.ts"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "scripts/colab/launch_translate.sh is now also read by src/numCtx.test.ts.",
-        "subjects": [
-          "scripts/colab/launch_translate.sh",
-          "src/numCtx.test.ts"
-        ]
-      },
-      {
         "kind": "counts",
-        "sentence": "4 files added and 11 changed content, across 3 parts.",
+        "sentence": "Nothing structural changed since 2026-11-12; 3 files changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "cfe76331d42aff234d6a6d66455256c4217f548d",
-      "generatedAt": "2026-11-12T18:29:09.783Z"
+      "commit": "cd8d46aeef34570092041da5b6c46c6db8b9313c",
+      "generatedAt": "2026-11-12T18:36:07.284Z"
     },
-    "unchanged": false
+    "unchanged": true
   },
   "changesTogether": [
     {
@@ -104,7 +76,7 @@
     "Window: 180 days; a pair counts from 3 shared commits, since 0 source files reach 10 revisions; the floor rises to 10 when 25 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "cd8d46aeef34570092041da5b6c46c6db8b9313c",
+  "commit": "1a5df55cab62f523cbce44499e115934798a20ed",
   "defaultBranch": "main",
   "derived": "8 parts, mostly TypeScript (55 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
@@ -343,7 +315,7 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T18:36:07.284Z",
+  "generatedAt": "2026-11-12T19:01:11.213Z",
   "limits": [
     "4 writes and 14 reads use paths built at run time and are not named here.",
     "12 writes and 24 reads go to a path their caller passes, not to this repository.",
