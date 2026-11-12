@@ -20,51 +20,50 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 0,
-      "changed": 3,
+      "added": 4,
+      "changed": 11,
       "moved": 0,
-      "parts": 2,
+      "parts": 3,
       "removed": 0
     },
     "items": [
       {
-        "kind": "landing",
-        "sentence": "scripts/colab/colab_window.sh is now read by src/colabLane.test.ts.",
+        "kind": "door",
+        "sentence": "CI now also runs src/numCtx.test.ts, src/stallHeartbeat.test.ts and src/translate.truncation.test.ts.",
         "subjects": [
-          "scripts/colab/colab_window.sh",
-          "src/colabLane.test.ts"
+          ".github/workflows/ci.yml",
+          "src/numCtx.test.ts",
+          "src/stallHeartbeat.test.ts",
+          "src/translate.truncation.test.ts"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "Publish to npm now also runs src/numCtx.test.ts, src/stallHeartbeat.test.ts and src/translate.truncation.test.ts.",
+        "subjects": [
+          ".github/workflows/publish.yml",
+          "src/numCtx.test.ts",
+          "src/stallHeartbeat.test.ts",
+          "src/translate.truncation.test.ts"
         ]
       },
       {
         "kind": "landing",
-        "sentence": "scripts/colab/compare_translations.py is now read by src/colabLane.test.ts.",
+        "sentence": "scripts/colab/launch_translate.sh is now also read by src/numCtx.test.ts.",
         "subjects": [
-          "scripts/colab/compare_translations.py",
-          "src/colabLane.test.ts"
+          "scripts/colab/launch_translate.sh",
+          "src/numCtx.test.ts"
         ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "scripts/colab/launch_guards.py is now read by src/colabLane.test.ts.",
-        "subjects": [
-          "scripts/colab/launch_guards.py",
-          "src/colabLane.test.ts"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "And 1 more new writer or reader of a place.",
-        "subjects": []
       },
       {
         "kind": "counts",
-        "sentence": "3 files changed content, across 2 parts.",
+        "sentence": "4 files added and 11 changed content, across 3 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "66eddd9d96a89970f75036d2692ba5ffdc072b30",
-      "generatedAt": "2026-11-12T17:50:51.969Z"
+      "commit": "85d20d54faf82be9ddef53ab562c66a68bd62674",
+      "generatedAt": "2026-11-12T18:02:21.201Z"
     },
     "unchanged": false
   },
@@ -72,7 +71,7 @@
     {
       "a": "scripts/translate-all.mjs",
       "b": "scripts/translate-readme.mjs",
-      "either": 8,
+      "either": 9,
       "partLabels": [
         "scripts",
         "scripts"
@@ -82,12 +81,12 @@
         "scripts"
       ],
       "relation": "inside",
-      "shared": 6
+      "shared": 7
     },
     {
       "a": "scripts/translate-readme.mjs",
       "b": "src/translateMarkdown.ts",
-      "either": 10,
+      "either": 11,
       "partLabels": [
         "scripts",
         "src"
@@ -97,7 +96,7 @@
         "src"
       ],
       "relation": "a-imports-b",
-      "shared": 5
+      "shared": 6
     }
   ],
   "changesTogetherNote": [
@@ -105,9 +104,9 @@
     "Window: 180 days; a pair counts from 3 shared commits, since 0 source files reach 10 revisions; the floor rises to 10 when 25 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "85d20d54faf82be9ddef53ab562c66a68bd62674",
+  "commit": "ef1f402c4750533009cadefe327374c999581871",
   "defaultBranch": "main",
-  "derived": "8 parts, mostly TypeScript (51 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
+  "derived": "8 parts, mostly TypeScript (55 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
     {
       "builds": [
@@ -125,7 +124,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 48
+          "files": 52
         }
       ],
       "runs": [
@@ -138,13 +137,16 @@
         "src/index.test.ts",
         "src/integration.test.ts",
         "src/languages.test.ts",
+        "src/numCtx.test.ts",
         "src/ollama.test.ts",
         "src/pins.test.ts",
         "src/polish.test.ts",
         "src/protectedTerms.test.ts",
         "src/semaphore.test.ts",
+        "src/stallHeartbeat.test.ts",
         "src/survival.test.ts",
         "src/translate.test.ts",
+        "src/translate.truncation.test.ts",
         "src/translateAll.test.ts",
         "src/translateAll.untranslated.test.ts",
         "src/translateMarkdown.cache.test.ts",
@@ -159,8 +161,8 @@
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 29,
-      "runsMore": 26,
+      "runsCount": 32,
+      "runsMore": 29,
       "sends": [
         "uploads coverage to Codecov"
       ],
@@ -219,7 +221,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 48
+          "files": 52
         }
       ],
       "runs": [
@@ -232,13 +234,16 @@
         "src/index.test.ts",
         "src/integration.test.ts",
         "src/languages.test.ts",
+        "src/numCtx.test.ts",
         "src/ollama.test.ts",
         "src/pins.test.ts",
         "src/polish.test.ts",
         "src/protectedTerms.test.ts",
         "src/semaphore.test.ts",
+        "src/stallHeartbeat.test.ts",
         "src/survival.test.ts",
         "src/translate.test.ts",
+        "src/translate.truncation.test.ts",
         "src/translateAll.test.ts",
         "src/translateAll.untranslated.test.ts",
         "src/translateMarkdown.cache.test.ts",
@@ -253,8 +258,8 @@
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 29,
-      "runsMore": 26,
+      "runsCount": 32,
+      "runsMore": 29,
       "sends": [
         "publishes to npm"
       ],
@@ -278,7 +283,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 19
+          "files": 20
         }
       ],
       "runs": [
@@ -319,7 +324,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 18
+          "files": 19
         }
       ],
       "runs": [
@@ -338,12 +343,12 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T18:02:21.201Z",
+  "generatedAt": "2026-11-12T18:23:25.029Z",
   "limits": [
     "4 writes and 14 reads use paths built at run time and are not named here.",
-    "11 writes and 23 reads go to a path their caller passes, not to this repository.",
+    "12 writes and 24 reads go to a path their caller passes, not to this repository.",
     "1 read goes to the directory the command is run in (LICENSE), not to this repository.",
-    "30 commands are built at run time and not followed, 28 of them in tests.",
+    "31 commands are built at run time and not followed, 29 of them in tests.",
     "Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window."
   ],
   "mainDoor": ".github/workflows/ci.yml",
@@ -382,15 +387,16 @@
     "src/index.ts",
     "src/translate.ts",
     "src/ollama.ts",
+    "src/numCtx.ts",
     "src/errors.ts"
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 29,
+  "testFiles": 32,
   "testedBy": {
     "scripts": 1,
     "site": 0,
-    "src": 27
+    "src": 29
   },
   "testedCodeParts": 3,
   "unnamedWrites": 4,
