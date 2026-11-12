@@ -70,6 +70,11 @@ interface FakeOllamaConfig {
   failTagsHttp?: boolean;
   failPullHttp?: boolean;
   failWarmupProbe?: boolean;
+  /** Delay before each translation (non-warm-up) reply, in ms. */
+  generateDelayMs?: number;
+  /** Request bodies the fake saw: warm-up and translation, in order. */
+  warmupBodies: Array<Record<string, unknown>>;
+  generateBodies: Array<Record<string, unknown>>;
 }
 
 const ollamaState: FakeOllamaConfig = {
@@ -77,12 +82,15 @@ const ollamaState: FakeOllamaConfig = {
   processor: "100% GPU",
   sizeBytes: 17358640928,
   sizeVramBytes: 17358640928,
-  contextLength: 4096,
+  contextLength: 8192,
   kvCacheMib: 1536.0,
   ollamaVersion: "0.40.15",
   failTagsHttp: false,
   failPullHttp: false,
   failWarmupProbe: false,
+  generateDelayMs: 0,
+  warmupBodies: [],
+  generateBodies: [],
 };
 
 let server: Server;
@@ -156,6 +164,29 @@ function getZstdFreePath(basePath: string): string {
   return out.join(delimiter);
 }
 
+function replyTranslation(prompt: string, res: import("node:http").ServerResponse) {
+  const lang = /translator\.[^]*? into ([A-Za-z ()]+):/.exec(prompt)?.[1] ?? "xx";
+  const text = prompt.split("\n\n\n").slice(1).join("\n\n\n");
+  const translatePart = (part: string) => {
+    return part
+      .split("\n")
+      .map((line) => {
+        if (!line.trim()) return line;
+        // Keep headings as valid headings with a language tag
+        const hMatch = /^(#{1,6}\s+)(.*)$/.exec(line);
+        if (hMatch) {
+          return `${hMatch[1]}[${lang}] ${hMatch[2]}`;
+        }
+        return `[${lang}] ${line}`;
+      })
+      .join("\n");
+  };
+  const response = text.includes(SEP)
+    ? text.split(/\n?---POLYGLOT_SEP---\n?/).map(translatePart).join(`\n${SEP}\n`)
+    : translatePart(text);
+  res.end(JSON.stringify({ model: "translategemma:27b", response, done: true }));
+}
+
 beforeAll(async () => {
   server = createServer((req, res) => {
     let body = "";
@@ -222,6 +253,13 @@ beforeAll(async () => {
       if (req.url === "/api/generate") {
         const parsed = JSON.parse(body || "{}") as { prompt?: string };
         const prompt = parsed.prompt ?? "";
+        if (prompt === "Warmup probe.") ollamaState.warmupBodies.push(parsed as Record<string, unknown>);
+        else ollamaState.generateBodies.push(parsed as Record<string, unknown>);
+        if (prompt !== "Warmup probe." && ollamaState.generateDelayMs) {
+          // A slow model: reply after the delay (the server stays responsive to the other languages).
+          setTimeout(() => replyTranslation(prompt, res), ollamaState.generateDelayMs);
+          return;
+        }
         if (prompt === "Warmup probe.") {
           if (ollamaState.failWarmupProbe) {
             res.statusCode = 500;
@@ -231,26 +269,7 @@ beforeAll(async () => {
           res.end(JSON.stringify({ model: "translategemma:27b", response: "OK", done: true }));
           return;
         }
-        const lang = /translator\.[^]*? into ([A-Za-z ()]+):/.exec(prompt)?.[1] ?? "xx";
-        const text = prompt.split("\n\n\n").slice(1).join("\n\n\n");
-        const translatePart = (part: string) => {
-          return part
-            .split("\n")
-            .map((line) => {
-              if (!line.trim()) return line;
-              // Keep headings as valid headings with a language tag
-              const hMatch = /^(#{1,6}\s+)(.*)$/.exec(line);
-              if (hMatch) {
-                return `${hMatch[1]}[${lang}] ${hMatch[2]}`;
-              }
-              return `[${lang}] ${line}`;
-            })
-            .join("\n");
-        };
-        const response = text.includes(SEP)
-          ? text.split(/\n?---POLYGLOT_SEP---\n?/).map(translatePart).join(`\n${SEP}\n`)
-          : translatePart(text);
-        res.end(JSON.stringify({ model: "translategemma:27b", response, done: true }));
+        replyTranslation(prompt, res);
         return;
       }
       res.statusCode = 404;
@@ -1004,6 +1023,7 @@ set -euo pipefail
 ${stageLogSnippet(`printf 'ollama\\t%s\\n' "$*"`)}
 case "\${1:-}" in
   serve)
+${stageLogSnippet(`printf 'ollama-serve-env\\tOLLAMA_CONTEXT_LENGTH=%s\\tOLLAMA_NUM_PARALLEL=%s\\n' "\${OLLAMA_CONTEXT_LENGTH:-}" "\${OLLAMA_NUM_PARALLEL:-}"`)}
     if [ "\${FAKE_OLLAMA_SERVE_FAIL:-0}" = "1" ]; then
       echo "Error: listen tcp 127.0.0.1:11434: bind: address already in use" >&2
       exit 1
@@ -3840,4 +3860,123 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       rmSync(tmp, { recursive: true, force: true });
     }
   }, 60_000);
+});
+
+describe("throughput: the context pin, parallel slots, and the per-segment stall heartbeat", () => {
+  const LONG_README =
+    SAMPLE_README +
+    "\n\n" +
+    Array.from(
+      { length: 56 },
+      (_, i) =>
+        `Paragraph ${i} explains one more thing the tool does for the person using it, in plain words, with detail number ${i * 7919} so no two paragraphs match, and enough length to fill the batch quickly.`,
+    ).join("\n\n") +
+    "\n";
+
+  function resetOllamaRecords() {
+    ollamaState.digest = PINNED_DIGEST;
+    ollamaState.processor = "100% GPU";
+    ollamaState.sizeBytes = 17358640928;
+    ollamaState.sizeVramBytes = 17358640928;
+    ollamaState.contextLength = 8192;
+    ollamaState.generateDelayMs = 0;
+    ollamaState.warmupBodies.length = 0;
+    ollamaState.generateBodies.length = 0;
+  }
+
+  it("(tp.ctx) serve gets OLLAMA_CONTEXT_LENGTH and OLLAMA_NUM_PARALLEL; the warm-up and every request carry num_ctx; the fit probe records both", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-tp-ctx-"));
+    try {
+      resetOllamaRecords();
+      const { stateDir, env } = setupRealInstallEnv(tmp, {});
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-tp-ctx"],
+        env,
+      );
+      expect(res.code).toBe(0);
+      const cmds = readFileSync(join(stateDir, "vm_commands.log"), "utf-8");
+      expect(cmds).toContain("ollama-serve-env\tOLLAMA_CONTEXT_LENGTH=8192\tOLLAMA_NUM_PARALLEL=7");
+      expect(ollamaState.warmupBodies.length).toBeGreaterThan(0);
+      for (const b of ollamaState.warmupBodies) expect((b.options as Record<string, unknown>).num_ctx).toBe(8192);
+      expect(ollamaState.generateBodies.length).toBeGreaterThan(0);
+      for (const b of ollamaState.generateBodies) {
+        const o = b.options as Record<string, number>;
+        expect(o.num_ctx).toBe(8192);
+        expect(o.num_predict).toBeGreaterThanOrEqual(256);
+      }
+      const manifest = JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf-8"));
+      expect(manifest.fit_probe).toMatchObject({ pinned_context_tokens: 8192, translator_context_tokens: 8192, num_parallel: 7 });
+    } finally {
+      delete fixtureBuffers["/fixtures/node.tar.xz"];
+      delete fixtureBuffers["/fixtures/ollama.tar.zst"];
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it("(tp.mismatch) the fit probe refuses CONTEXT_PIN_MISMATCH when ollama ps reports a context other than the pin", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-tp-mismatch-"));
+    try {
+      resetOllamaRecords();
+      ollamaState.contextLength = 131072;
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { stateDir, env } = makeFakeColabEnv(tmp);
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", "polyglot-tp-mismatch"],
+        env,
+      );
+      expect(res.code).not.toBe(0);
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).toBe("CONTEXT_PIN_MISMATCH");
+      expect(win.why).toContain("131072");
+      expect(existsSync(join(outDir, "README.ja.md"))).toBe(false);
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-tp-mismatch");
+    } finally {
+      ollamaState.contextLength = 8192;
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  async function runSlowTranslation(session: string, delayMs: number) {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-tp-stall-"));
+    try {
+      resetOllamaRecords();
+      ollamaState.generateDelayMs = delayMs;
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, LONG_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { env } = makeFakeColabEnv(tmp, { STALL_S: "8", GUARD_POLL_INTERVAL_S: "1", POLYGLOT_TEST_VITALS_STEPS: "2" });
+      const res = await runLauncher(
+        ["--readme", srcReadme, "--card", "CPU", "--out-dir", outDir, "--session", session],
+        env,
+      );
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      return { res, win };
+    } finally {
+      ollamaState.generateDelayMs = 0;
+      try {
+        rmDirRetry(tmp);
+      } catch {
+        // A child of the tripped window may still hold a file for a moment; the temp dir is disposable.
+      }
+    }
+  }
+
+  // The stall guard reads a complete Linux vitals sample (cgroup and /proc/meminfo AnonPages); Git Bash on Windows
+  // cannot produce one, so the host-RAM guard refuses first. CI (Linux) runs both.
+  it.skipIf(process.platform === "win32")("(tp.stall.heartbeat) a translation that outlasts STALL_S without writing a row, but finishes segments, does not trip the stall guard", async () => {
+    // Each language makes several 3 s calls: more than STALL_S (8 s) in all, never 8 s between two segments finishing.
+    const { res, win } = await runSlowTranslation("polyglot-tp-heartbeat", 3000);
+    expect(win.refusal_code).toBeNull();
+    expect(res.code).toBe(0);
+  }, 180_000);
+
+  it.skipIf(process.platform === "win32")("(tp.stall.silent) a translation that finishes no segment for STALL_S still trips STALL_GUARD_TRIPPED", async () => {
+    const { win } = await runSlowTranslation("polyglot-tp-silent", 30_000);
+    expect(win.refusal_code).toBe("STALL_GUARD_TRIPPED");
+  }, 180_000);
 });

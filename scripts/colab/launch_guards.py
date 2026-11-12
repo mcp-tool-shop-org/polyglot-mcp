@@ -983,6 +983,7 @@ VITALS_LINE_PREFIXES = (
     "CGROUP_MEM_STAT:",
     "MEM:",
     "SETUP_BYTES:",
+    "SEGMENTS_DONE:",
     "PROC:",
     "HARNESS:",
 )
@@ -997,6 +998,22 @@ def is_vitals_line(line: str) -> bool:
     if stripped.startswith(VITALS_LINE_PREFIXES[1:]) or re.match(r"^===\s*VITALS", stripped):
         return True
     return bool(_PS_WORKER_ROW_RE.match(stripped))
+
+
+_SEGMENTS_DONE_RE = re.compile(r"^SEGMENTS_DONE:\s*(\d+)\s*$")
+
+
+def segments_done(vitals_text: str) -> int | None:
+    """The newest SEGMENTS_DONE reading in the exec stream (segments translated so far, summed over every
+    language), or None when the stream has none. The line repeats on every vitals sample, so it is not run
+    output (it is in VITALS_LINE_PREFIXES); the stall guard watches the number instead: a rise means a segment
+    finished, so the run is moving even though no row or log line was written."""
+    last: int | None = None
+    for line in vitals_text.splitlines():
+        m = _SEGMENTS_DONE_RE.match(line.strip())
+        if m:
+            last = int(m.group(1))
+    return last
 
 
 def run_output_bytes(vitals_text: str) -> int:
@@ -1180,6 +1197,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ram-source", default=None, help="Where --current-anon-mb was read (recorded in guards.log)")
     parser.add_argument("--ram-vitals-file", type=Path, default=None,
                         help="With --check-ram: read private memory from this vitals.log (host_ram_status)")
+    parser.add_argument("--segments-done", type=Path, default=None,
+                        help="Print the newest SEGMENTS_DONE value in this vitals.log (empty when none): the stall guard's per-segment heartbeat")
     parser.add_argument("--run-output-bytes", type=Path, default=None,
                         help="Print the bytes of this vitals.log that are not vitals lines (stall guard progress)")
     args = parser.parse_args(argv)
@@ -1211,6 +1230,12 @@ def main(argv: list[str] | None = None) -> int:
         if rec["tripped"]:
             print(f"REFUSED: {rec['code']}: {rec['why']}", file=sys.stderr)
             return 2
+        return 0
+
+    if args.segments_done is not None:
+        f = args.segments_done
+        seg = segments_done(f.read_text(encoding="utf-8", errors="replace")) if f.exists() else None
+        print("" if seg is None else seg)
         return 0
 
     if args.run_output_bytes is not None:

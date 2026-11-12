@@ -87,6 +87,27 @@ console.log(
 
 const start = Date.now();
 
+/**
+ * Per-segment heartbeat for a host that watches for a stalled run (the Colab lane's stall guard):
+ * one counter file per README and language, rewritten as segments finish. A counter only grows, so
+ * any increase means this language is still moving. Off unless POLYGLOT_PROGRESS_DIR is set.
+ */
+// The counter written is monotone: the larger of the segments done and the work units seen so far,
+// where every retry or re-cut call adds one (onHeartbeat), so a language that is only retrying still
+// moves the counter the stall guard watches.
+let heartbeatCount = 0;
+function writeHeartbeat(completed) {
+  heartbeatCount = Math.max(heartbeatCount, completed);
+  const dir = process.env.POLYGLOT_PROGRESS_DIR;
+  if (!dir) return;
+  try {
+    const tag = (process.env.POLYGLOT_PROGRESS_TAG || "readme").replace(/[^A-Za-z0-9_.-]/g, "_");
+    writeFileSync(resolve(dir, `${tag}.${targetCode}.txt`), `${heartbeatCount}\n`);
+  } catch {
+    // A heartbeat that cannot be written must never fail a translation.
+  }
+}
+
 let result;
 let lostSpanError;
 let untranslatedError;
@@ -98,7 +119,9 @@ try {
     filePath: absReadmePath,
     onLostSpan,
     onUntranslated,
+    onHeartbeat: () => writeHeartbeat(heartbeatCount + 1),
     onProgress: (completed, total) => {
+      writeHeartbeat(completed);
       const pct = Math.round((completed / total) * 100);
       process.stderr.write(`\r  PROGRESS:${completed}/${total} (${pct}%) segments`);
     },

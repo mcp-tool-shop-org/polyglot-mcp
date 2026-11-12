@@ -19,7 +19,8 @@ export type ErrorCode =
   | "TRANSLATE_ERROR"
   | "CONFIG_ERROR"
   | "LOST_SPAN"
-  | "UNTRANSLATED";
+  | "UNTRANSLATED"
+  | "PROMPT_EXCEEDS_CONTEXT";
 
 export class PolyglotError extends Error {
   readonly code: ErrorCode;
