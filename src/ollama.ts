@@ -7,6 +7,9 @@
 import { execSync, spawn } from "node:child_process";
 import { PolyglotError } from "./errors.js";
 import { ollamaSemaphore } from "./semaphore.js";
+import { MIN_NUM_PREDICT, estimateTokens, resolveNumCtx } from "./numCtx.js";
+
+export { DEFAULT_NUM_CTX, MIN_NUM_PREDICT, estimateTokens, numPredictFor, resolveNumCtx } from "./numCtx.js";
 
 /** Default timeout for generate calls (300s — covers cold-load + inference on large READMEs). */
 const GENERATE_TIMEOUT_MS = 300_000;
@@ -26,6 +29,7 @@ export interface OllamaGenerateRequest {
   options?: {
     temperature?: number;
     num_predict?: number;
+    num_ctx?: number;
     top_p?: number;
   };
 }
@@ -34,6 +38,8 @@ export interface OllamaGenerateResponse {
   model: string;
   response: string;
   done: boolean;
+  /** "length" when the output hit num_predict: the text is cut short. */
+  done_reason?: string;
   total_duration?: number;
   load_duration?: number;
   eval_count?: number;
@@ -81,11 +87,33 @@ export class OllamaClient {
   }
 
   /**
+   * Pin the request's window: num_ctx is always sent (so the server's own default can
+   * never decide it), and a prompt that leaves no room for the output is refused here,
+   * before any bytes go out. A request without num_predict gets what the window leaves.
+   */
+  private withContext(req: OllamaGenerateRequest): OllamaGenerateRequest {
+    const numCtx = req.options?.num_ctx ?? resolveNumCtx();
+    const promptTokens = estimateTokens(req.prompt);
+    let numPredict = req.options?.num_predict;
+    if (numPredict === undefined) numPredict = numCtx - promptTokens;
+    if (promptTokens + numPredict > numCtx || numPredict < MIN_NUM_PREDICT) {
+      throw new PolyglotError({
+        code: "PROMPT_EXCEEDS_CONTEXT",
+        message: `Prompt of about ${promptTokens} tokens plus num_predict ${numPredict} does not fit num_ctx ${numCtx}.`,
+        hint: "Use a smaller batch or raise POLYGLOT_NUM_CTX together with the server's OLLAMA_CONTEXT_LENGTH.",
+        retryable: false,
+      });
+    }
+    return { ...req, options: { ...req.options, num_ctx: numCtx, num_predict: numPredict } };
+  }
+
+  /**
    * Generate a completion with automatic retry for retryable errors.
    * Retries up to MAX_RETRIES times with exponential backoff.
    * Guarded by the global concurrency semaphore.
    */
   async generate(req: OllamaGenerateRequest): Promise<OllamaGenerateResponse> {
+    req = this.withContext(req);
     const release = await ollamaSemaphore.acquire();
     try {
       return await this._generateWithRetry(req);
@@ -190,6 +218,7 @@ export class OllamaClient {
     req: OllamaGenerateRequest,
     onToken: StreamCallback
   ): Promise<OllamaGenerateResponse> {
+    req = this.withContext(req);
     const release = await ollamaSemaphore.acquire();
     try {
       return await this._generateStreamWithRetry(req, onToken);

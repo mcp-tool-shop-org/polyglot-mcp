@@ -1005,6 +1005,11 @@ export async function translateMarkdown(
       softwareGlossary: options.softwareGlossary,
       polish: options.polish,
       batchCharLimit: options.batchCharLimit,
+      // A heartbeat per finished group of segments, so a long document shows progress
+      // before the whole call returns (the Colab stall guard reads it).
+      onItemsDone: options.onProgress
+        ? (done) => options.onProgress!(Math.min(totalItems - 1, completedItems + done), totalItems)
+        : undefined,
     });
     uniqueTranslations = result.translations;
     ollamaCalls = result.ollamaCalls;
@@ -1034,6 +1039,7 @@ export async function translateMarkdown(
       const problem = unusableReason(item.text, spans, uniqueTranslations[i], isHeading);
       if (problem === undefined && via !== "fallback") continue;
 
+      const truncated = result.details?.[i]?.truncated === true;
       const how =
         via === "fallback" ? "after a separator-count mismatch" : via === "single" ? "as a single item" : "in a batch";
       if (problem === undefined) {
@@ -1049,7 +1055,9 @@ export async function translateMarkdown(
 
       const what =
         problem === "empty"
-          ? `empty output ${how}`
+          ? truncated
+            ? `output cut off at the num_predict cap ${how}`
+            : `empty output ${how}`
           : problem === "placeholders"
             ? `code-span placeholders did not survive ${how}`
             : `echoed ${how}`;

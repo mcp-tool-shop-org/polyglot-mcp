@@ -31,23 +31,31 @@ PINNED_OLLAMA_LINUX_AMD64_SHA256="628c018404a4206493efd38e46251c154ede5141b8b8dc
 PINNED_TRANSLATEGEMMA_MODEL="translategemma:27b"
 # Ollama manifest digest (21b597a243ec) and full sha256 of the registry manifest (registry.ollama.ai/library/translategemma:27b)
 PINNED_MODEL_DIGEST="21b597a243ec4fd2f05bc0ce8ef9ef174a89b09255c330d670852dfaaaa74f72"
-# Ollama's default context length when num_ctx is not overridden by src/translate.ts or src/ollama.ts (4096; target 16384 when OLLAMA_CONTEXT_LENGTH=16384 is set)
-PINNED_TRANSLATOR_CONTEXT="4096"
+# The context window (tokens, per slot) the server is started with (OLLAMA_CONTEXT_LENGTH) and every request asks for
+# (num_ctx). src/numCtx.ts DEFAULT_NUM_CTX must equal it (a test checks). 8192, not 4096: the largest batch translate.ts
+# builds (6000 source characters, about 2000 tokens, plus its prompt, about 2200 tokens in all) cannot hold its own
+# translation in 4096, and 8192 holds the prompt plus an output of up to 3x the source. Unpinned, Ollama 0.40.15 picked
+# 131072 on a G4 (a 49,152 MiB KV cache for one slot) and the run crawled.
+PINNED_TRANSLATOR_CONTEXT="8192"
+# Parallel slots on the server (OLLAMA_NUM_PARALLEL) and languages translate-all runs at once (--concurrency). The
+# window uses fewer when the card's VRAM cannot hold that many KV caches (see the ollama_serve step); the number used is
+# recorded in fit_probe.json.
+PINNED_NUM_PARALLEL="7"
 # R&D measured peak VRAM for translategemma:27b on Ollama 0.40.15 (GPU ledger, polyglot row, 2026-11-09)
 # plus required safety headroom before translation starts (22547 + 1024 = 23571 MiB).
 PINNED_MODEL_PEAK_VRAM_MIB="22547"
 PINNED_VRAM_HEADROOM_MIB="1024"
 
-PINNED_LAUNCH_GUARDS_SHA="905b6525c4c79e19f5cab590170b8f5ffc8f9d2bf857109c538dde547eb776fa"
+PINNED_LAUNCH_GUARDS_SHA="4e6d30ee02773a23deec84fa64df056395a31730ca4b8686cc2fdc7831a0d873"
 PINNED_REMOTE_RUNNER_SHA="834e669de7f611c8d3b0e24dcd65c568c0d97a2bafb6080b235ea9a22b4f99d9"
-PINNED_COLAB_WINDOW_SHA="671886261b0ce5a60daca412084565ec6aca7560f7c39ea45aa5cb9780575eb7"
+PINNED_COLAB_WINDOW_SHA="8cf47326d30f2bf430c67a6eb881cb82a1162d3ba89c616c09ed9ed30f66787b"
 PINNED_BUNDLE_NOW_SHA="70b98ec2f6b363d3e94b7bc8283c74cee640c5229308e69c7dbf6a9482f7c536"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
-PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef05829e4194a"
-PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
+PINNED_TRANSLATE_ALL_SHA="61a203bdebb9fe832e061f1f47c59b1ecffee2d3c9098c0fc8ab9460e9a8dafa"
+PINNED_TRANSLATE_README_SHA="f6c35dd7253835939d897970a32154813682f42e1eb504a053a65ca8f12bf41b"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="5ede592a84abe1fd40b815eb52272b6a6d8e6a77c21e37ac1106fa7b12d13e6c"
+PINNED_SELF_SHA="3c4bb03798dec95ea89670b4922ce800327afc568fd7aaf1fccbdb519b8844c2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -217,6 +225,7 @@ build_remote_env() {
     "PINNED_TRANSLATEGEMMA_MODEL=${PINNED_TRANSLATEGEMMA_MODEL}"
     "PINNED_MODEL_DIGEST=${POLYGLOT_TEST_MODEL_DIGEST:-${PINNED_MODEL_DIGEST}}"
     "PINNED_TRANSLATOR_CONTEXT=${PINNED_TRANSLATOR_CONTEXT}"
+    "PINNED_NUM_PARALLEL=${PINNED_NUM_PARALLEL}"
     "PINNED_MODEL_PEAK_VRAM_MIB=${PINNED_MODEL_PEAK_VRAM_MIB}"
     "PINNED_VRAM_HEADROOM_MIB=${PINNED_VRAM_HEADROOM_MIB}"
     "COLAB_CARD=${CARD}"
@@ -253,6 +262,9 @@ build_remote_env() {
     fi
     if [ -n "${POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S:-}" ]; then
       REMOTE_ENV+=("POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S=${POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S}")
+    fi
+    if [ -n "${POLYGLOT_TEST_VITALS_STEPS:-}" ]; then
+      REMOTE_ENV+=("POLYGLOT_TEST_VITALS_STEPS=${POLYGLOT_TEST_VITALS_STEPS}")
     fi
   fi
 }
@@ -523,6 +535,7 @@ PIN_OVERRIDE_VARS=(
   POLYGLOT_TEST_ZSTD_INSTALL_TIMEOUT_S
   POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S
   POLYGLOT_TEST_SERVE_STOP_TIMEOUT_S
+  POLYGLOT_TEST_VITALS_STEPS
   SDLAB_TEST_PROBE_ERROR_MODE
 )
 colab_refuse_live_pin_overrides "${OUT_DIR}" "${TEST_MODE}" "${PIN_OVERRIDE_VARS[@]}"
@@ -930,12 +943,17 @@ fi
       grep -E '^(MemTotal|MemAvailable|AnonPages|Shmem):' /proc/meminfo | sed 's/^/MEM: /' || true
       SETUP_SZ="$(wc -c < /content/polyglot_out/setup.log 2>/dev/null | tr -d '[:space:]' || echo 0)"
       echo "SETUP_BYTES: ${SETUP_SZ:-0}"
+      # (|| true: with pipefail an absent counter dir must not end this sampler.)
+      # Segments translated so far, summed over every language's heartbeat counter (translate-readme.mjs writes
+      # one file per language and README; see POLYGLOT_PROGRESS_DIR). The rig's stall guard reads this line.
+      SEG_SUM="$(cat /content/polyglot_state/progress/*.txt 2>/dev/null | awk '{s += $1} END {print s + 0}' || true)"
+      echo "SEGMENTS_DONE: ${SEG_SUM:-0}"
       echo "PROC:"
       ps -ef | grep -E "ollama|translate-all\.mjs|translate-readme\.mjs|node" | grep -v grep || true
       CUR_PHASE="$(cat /content/polyglot_out/phase.txt 2>/dev/null || echo setup)"
       printf 'HARNESS: {"phase": "%s"}\n' "${CUR_PHASE}"
     } | tee -a /content/polyglot_out/vitals.log
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 "${POLYGLOT_TEST_VITALS_STEPS:-30}"); do
       [ -f /content/polyglot_out/.remote_done ] && exit 0
       sleep 0.5 </dev/null >/dev/null 2>&1
     done
@@ -1232,7 +1250,31 @@ trap remote_on_exit EXIT
     OLLAMA_URL="${OLLAMA_HOST:-http://127.0.0.1:11434}"
     export OLLAMA_HOST="${OLLAMA_URL}"
     printf '%s\n' "${OLLAMA_URL}" > "${POLYGLOT_STATE_DIR}/ollama_host"
-    ollama serve </dev/null > /content/polyglot_out/ollama_serve.log 2>&1 &
+    # Slots: PINNED_NUM_PARALLEL, fewer when the card cannot hold that many KV caches. KV per token is 0.375 MiB
+    # (Gemma 3 27B, fp16); the measured peak (PINNED_MODEL_PEAK_VRAM_MIB) covers the weights plus one slot at 4096.
+    NUM_PARALLEL="$(python3 - "${COLAB_CARD}" "${PINNED_NUM_PARALLEL}" "${PINNED_TRANSLATOR_CONTEXT}" "${PINNED_MODEL_PEAK_VRAM_MIB}" "${PINNED_VRAM_HEADROOM_MIB}" << 'SLOTPYEOF'
+import subprocess
+import sys
+
+card, want, ctx, peak, headroom = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+if card in ("CPU", "CPU-high-mem"):
+    print(want)
+    raise SystemExit(0)
+try:
+    out = subprocess.run(
+        ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,memory.free", "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, check=False, timeout=30,
+    ).stdout.strip().splitlines()
+    total = int(float(out[0].split(",")[2])) if out else 0
+except Exception:
+    total = 0
+# A fake or odd nvidia-smi line is parsed again, whole, by the fit probe; here an unreadable total means one slot.
+budget = total - peak - headroom + int(4096 * 0.375)
+print(max(1, min(want, int(budget // (ctx * 0.375)))) if total else 1)
+SLOTPYEOF
+)"
+    printf '%s\n' "${NUM_PARALLEL}" > "${POLYGLOT_STATE_DIR}/num_parallel"
+    OLLAMA_CONTEXT_LENGTH="${PINNED_TRANSLATOR_CONTEXT}" OLLAMA_NUM_PARALLEL="${NUM_PARALLEL}" ollama serve </dev/null > /content/polyglot_out/ollama_serve.log 2>&1 &
     OLLAMA_SERVE_PID="$!"
     printf '%s\n' "${OLLAMA_SERVE_PID}" > "${POLYGLOT_STATE_DIR}/ollama_serve.pid"
     OLLAMA_SERVE_WAIT_S="${POLYGLOT_TEST_OLLAMA_SERVE_WAIT_S:-30}"
@@ -1334,7 +1376,7 @@ DIGPYEOF
     begin_remote_step "fit_probe"
     warmup_rc=0
     curl -sf -X POST "${OLLAMA_URL}/api/generate" -H "Content-Type: application/json" \
-      -d "{\"model\":\"${PINNED_TRANSLATEGEMMA_MODEL}\",\"prompt\":\"Warmup probe.\",\"stream\":false}" > /content/polyglot_out/warmup_response.json || warmup_rc=$?
+      -d "{\"model\":\"${PINNED_TRANSLATEGEMMA_MODEL}\",\"prompt\":\"Warmup probe.\",\"stream\":false,\"options\":{\"num_ctx\":${PINNED_TRANSLATOR_CONTEXT},\"num_predict\":16}}" > /content/polyglot_out/warmup_response.json || warmup_rc=$?
     if [ "${warmup_rc}" -ne 0 ]; then
       fail_remote_step "fit_probe" "FIT_PROBE_FAILED" "warmup POST ${OLLAMA_URL}/api/generate failed (rc=${warmup_rc})" "${warmup_rc}"
     fi
@@ -1359,6 +1401,7 @@ DIGPYEOF
 
     python3 - "${PS_JSON}" "${PS_TEXT}" "${SMI_CSV}" "${PINNED_TRANSLATEGEMMA_MODEL}" "${PINNED_TRANSLATOR_CONTEXT}" "${COLAB_CARD}" "${PINNED_MODEL_PEAK_VRAM_MIB}" "${PINNED_VRAM_HEADROOM_MIB}" "${POLYGLOT_STATE_DIR}" << 'FITPYEOF'
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -1373,6 +1416,12 @@ measured_peak_vram_mib = int(sys.argv[7])
 required_headroom_mib = int(sys.argv[8])
 state_dir = Path(sys.argv[9])
 required_total_vram_mib = measured_peak_vram_mib + required_headroom_mib
+_np_file = state_dir / "num_parallel"
+num_parallel = int(_np_file.read_text(encoding="utf-8").strip()) if _np_file.is_file() else int(os.environ.get("PINNED_NUM_PARALLEL", "1"))
+# The measured peak covers the weights plus one slot at 4096 tokens; every slot beyond that is KV the peak never saw.
+kv_per_token_mib = 0.375
+extra_kv_mib = max(0, round((num_parallel * translator_ctx - 4096) * kv_per_token_mib))
+ps_context_length = None
 is_cpu_card = card in ("CPU", "CPU-high-mem")
 
 def _fail_probe(code: str, reason: str) -> None:
@@ -1416,6 +1465,7 @@ for m in ps_data.get("models", []):
         size_vram_bytes = m.get("size_vram")
         if m.get("context_length"):
             context_length = int(m["context_length"])
+            ps_context_length = context_length
         if m.get("processor"):
             processor_str = str(m["processor"])
         if m.get("kv_cache_mib") is not None:
@@ -1447,6 +1497,9 @@ probe = {
     "gpu_name": gpu_name,
     "model": model_name,
     "translator_context_tokens": context_length,
+    "pinned_context_tokens": translator_ctx,
+    "num_parallel": num_parallel,
+    "extra_kv_mib": extra_kv_mib,
     "vram_used_mib": vram_used_mib,
     "vram_total_mib": vram_total_mib,
     "vram_free_mib": vram_free_mib,
@@ -1464,6 +1517,14 @@ probe = {
 Path("/content/polyglot_out/fit_probe.json").write_text(json.dumps(probe, indent=2) + "\n", encoding="utf-8")
 print("FIT_PROBE " + json.dumps(probe), flush=True)
 
+if ps_context_length is not None and ps_context_length != translator_ctx:
+    # The server is not running at the pinned window (a KV cache sized by Ollama's own default is what made the
+    # 2026-11-12 window crawl): refuse before any translation spends units.
+    _fail_probe(
+        "CONTEXT_PIN_MISMATCH",
+        f"ollama ps reports context_length={ps_context_length} but the pin is {translator_ctx} (OLLAMA_CONTEXT_LENGTH / num_ctx not applied)",
+    )
+
 if not fully_on_gpu:
     # A GPU window refuses any CPU/GPU split immediately; a CPU stub also refuses if a split probe is injected.
     if not is_cpu_card or (processor_str and "CPU" in processor_str and processor_str != "100% CPU"):
@@ -1477,6 +1538,12 @@ if not is_cpu_card:
         _fail_probe(
             "VRAM_HEADROOM_LOW",
             f"card={card} gpu_name={gpu_name!r} vram_total_mib={vram_total_mib} < required_total_vram_mib={required_total_vram_mib} (measured_peak_vram_mib={measured_peak_vram_mib} + required_headroom_mib={required_headroom_mib})",
+        )
+
+    if vram_total_mib < required_total_vram_mib + extra_kv_mib:
+        _fail_probe(
+            "VRAM_HEADROOM_LOW",
+            f"card={card} gpu_name={gpu_name!r} vram_total_mib={vram_total_mib} cannot hold {num_parallel} slots at {translator_ctx} tokens: required_total_vram_mib={required_total_vram_mib} + extra_kv_mib={extra_kv_mib}",
         )
 FITPYEOF
 
@@ -1644,9 +1711,19 @@ for slot in slots:
     (out_root / f"pre_source_{slot.name}.md").write_text(pre_run_source_md, encoding="utf-8")
     input_sha = "sha256:" + hashlib.sha256(src_readme.read_bytes()).hexdigest()
     t0 = time.monotonic()
-    cmd = ["node", str(work_dir / "scripts" / "translate-all.mjs"), str(src_readme), "--no-cache"]
+    # One slot per language on the server, so the languages decode side by side instead of queueing on one slot.
+    num_parallel_file = state_dir / "num_parallel"
+    num_parallel = int(num_parallel_file.read_text(encoding="utf-8").strip()) if num_parallel_file.is_file() else int(os.environ.get("PINNED_NUM_PARALLEL", "1"))
+    cmd = ["node", str(work_dir / "scripts" / "translate-all.mjs"), str(src_readme), "--no-cache", f"--concurrency={num_parallel}"]
     env = dict(os.environ)
     env["POLYGLOT_MODEL"] = model_name
+    env["POLYGLOT_NUM_CTX"] = os.environ.get("PINNED_TRANSLATOR_CONTEXT", "8192")
+    env["POLYGLOT_MAX_CONCURRENCY"] = str(num_parallel)
+    # Per-segment heartbeat: translate-readme.mjs writes its segment counter here; the vitals sampler sums them.
+    progress_dir = state_dir / "progress"
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    env["POLYGLOT_PROGRESS_DIR"] = str(progress_dir)
+    env["POLYGLOT_PROGRESS_TAG"] = slot.name
     proc = subprocess.run(cmd, cwd=str(work_dir), env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     elapsed_s = round(time.monotonic() - t0, 3)
 

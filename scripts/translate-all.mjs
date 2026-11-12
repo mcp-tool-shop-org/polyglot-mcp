@@ -125,9 +125,14 @@ const ALL_LANGUAGES = [
 
 const LANGUAGES = ALL_LANGUAGES;
 
-// Parse --concurrency=N flag (default 2, max 3)
+// Parse --concurrency=N flag (default 2, max 3). A host with a server that has one Ollama slot per language
+// (the Colab lane) raises the ceiling with POLYGLOT_MAX_CONCURRENCY; it never exceeds the language count.
 const concurrencyFlag = flags.find((f) => f.startsWith("--concurrency="));
-const concurrency = Math.min(3, Math.max(1, parseInt(concurrencyFlag?.split("=")[1] ?? "2", 10)));
+const maxConcurrency = Math.min(
+  LANGUAGES.length,
+  Math.max(3, Number.parseInt(process.env.POLYGLOT_MAX_CONCURRENCY ?? "3", 10) || 3),
+);
+const concurrency = Math.min(maxConcurrency, Math.max(1, parseInt(concurrencyFlag?.split("=")[1] ?? "2", 10)));
 const noNavBar = flags.includes("--no-nav-bar");
 
 // Parse --timeout=S flag or POLYGLOT_TIMEOUT_MS env var (default 900s = 900_000ms)
