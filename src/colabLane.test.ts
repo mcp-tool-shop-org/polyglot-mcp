@@ -627,15 +627,23 @@ exec python "$@"
     chmodSync(py3Wrapper, 0o755);
   }
 
+  const vmLogSnippet = (printfCmd: string) =>
+    [
+      'if [ "${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "${FAKE_COLAB_STATE_DIR:-}" ]; then',
+      "  for _vml_i in 1 2 3 4 5; do",
+      `    if ( ${printfCmd} >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log" ) 2>/dev/null; then break; fi`,
+      "    sleep 0.02 2>/dev/null || true",
+      "  done",
+      "fi",
+    ].join("\n");
+
   // Stock Colab VM has NO pre-installed `zstd`: keep the zstd implementation in `stateDir`
   // and install it into `binDir/zstd` ONLY when `apt-get install ... zstd` runs.
   const fakeZstdImpl = join(stateDir, "fake_zstd_impl.sh");
   writeFileSync(
     fakeZstdImpl,
     `#!/usr/bin/env bash
-if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf 'zstd\\t%s\\n' "$*" >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log"
-fi
+${vmLogSnippet(`printf 'zstd\\t%s\\n' "$*"`)}
 for arg in "$@"; do
   if [ "$arg" = "--version" ] || [ "$arg" = "-V" ]; then
     echo "*** Zstandard CLI (64-bit) v1.5.5, by Yann Collet ***"
@@ -660,9 +668,7 @@ fi
   writeFileSync(
     aptGetWrapper,
     `#!/usr/bin/env bash
-if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf 'apt-get\\tDEBIAN_FRONTEND=%s %s\\n' "\${DEBIAN_FRONTEND:-}" "$*" >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log"
-fi
+${vmLogSnippet(`printf 'apt-get\\tDEBIAN_FRONTEND=%s %s\\n' "\${DEBIAN_FRONTEND:-}" "$*"`)}
 if [ "\${FAKE_APT_FAIL:-0}" = "1" ]; then
   echo "E: Unable to locate package zstd" >&2
   exit 100
@@ -710,8 +716,8 @@ exit 0
   writeFileSync(
     curlWrapper,
     `#!/usr/bin/env bash
+${vmLogSnippet(`printf 'curl\\t%s\\n' "$*"`)}
 if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf 'curl\\t%s\\n' "$*" >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log"
   if [ -n "\${FAKE_CURL_FAIL_MATCH:-}" ] && [[ "$*" == *"\${FAKE_CURL_FAIL_MATCH}"* ]]; then
     echo "curl: (22) The requested URL returned error: 503 (\${FAKE_CURL_FAIL_MATCH})" >&2
     exit 22
@@ -729,8 +735,8 @@ exec "$real_bin" "$@"
   writeFileSync(
     shaWrapper,
     `#!/usr/bin/env bash
+${vmLogSnippet(`printf 'sha256sum\\t%s\\n' "$*"`)}
 if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf 'sha256sum\\t%s\\n' "$*" >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log"
   if [ -n "\${FAKE_SHA256SUM_FAIL_MATCH:-}" ] && [[ "$*" == *"\${FAKE_SHA256SUM_FAIL_MATCH}"* ]]; then
     echo "sha256sum: simulated unexpected I/O error" >&2
     exit 42
@@ -752,8 +758,8 @@ exec "$real_bin" "$@"
   writeFileSync(
     tarWrapper,
     `#!/usr/bin/env bash
+${vmLogSnippet(`printf 'tar\\t%s\\n' "$*"`)}
 if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf 'tar\\t%s\\n' "$*" >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log"
   if [ "\${FAKE_TAR_NO_ZSTD:-0}" = "1" ] && [[ " $* " == *" --zstd "* ]]; then
     echo "tar: unrecognized option '--zstd'" >&2
     echo "Try 'tar --help' or 'tar --usage' for more information." >&2
@@ -906,16 +912,25 @@ fi
 
     const hostNodePosix = process.execPath.replace(/\\/g, "/");
     const repoRootPosix = root.replace(/\\/g, "/");
+    const stageLogSnippet = (printfCmd: string, relFile = "vm_commands.log", requireInVm = true) => {
+      const cond = requireInVm
+        ? '[ "${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "${FAKE_COLAB_STATE_DIR:-}" ]'
+        : '[ -n "${FAKE_COLAB_STATE_DIR:-}" ]';
+      return [
+        `if ${cond}; then`,
+        "  for _vml_i in 1 2 3 4 5; do",
+        `    if ( ${printfCmd} >> "\${FAKE_COLAB_STATE_DIR}/${relFile}" ) 2>/dev/null; then break; fi`,
+        "    sleep 0.02 2>/dev/null || true",
+        "  done",
+        "fi",
+      ].join("\n");
+    };
 
     writeFileSync(
       join(nodeStage, "node"),
       `#!/usr/bin/env bash
-if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf 'node\\t%s\\n' "$*" >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log"
-fi
-if [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf '%s|%s\\n' "$0" "\${OLLAMA_HOST:-}" >> "\${FAKE_COLAB_STATE_DIR}/node_marker.txt"
-fi
+${stageLogSnippet(`printf 'node\\t%s\\n' "$*"`)}
+${stageLogSnippet(`printf '%s|%s\\n' "$0" "\${OLLAMA_HOST:-}"`, "node_marker.txt", false)}
 if [ "\${FAKE_TRANSLATE_ALL_FAIL:-0}" = "1" ] && [[ "$*" == *"translate-all.mjs"* ]]; then
   echo "Fatal error in translate-all.mjs: simulated crash" >&2
   exit 17
@@ -930,9 +945,7 @@ exec "${hostNodePosix}" "$@"
       join(nodeStage, "npm"),
       `#!/usr/bin/env bash
 set -euo pipefail
-if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf 'npm\\t%s\\n' "$*" >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log"
-fi
+${stageLogSnippet(`printf 'npm\\t%s\\n' "$*"`)}
 if [ "\${1:-}" = "ci" ]; then
   if [ "\${FAKE_NPM_CI_FAIL:-0}" = "1" ]; then
     echo "npm ERR! code EINTEGRITY: simulated npm ci failure" >&2
@@ -956,6 +969,9 @@ if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "build" ]; then
     exit 2
   fi
   "${hostNodePosix}" ./node_modules/typescript/bin/tsc
+  if [ "\${FAKE_TRANSLATE_ALL_FAIL:-0}" = "1" ] && [ -f ./scripts/translate-all.mjs ]; then
+    printf '%s\n' 'console.error("Fatal error in translate-all.mjs: simulated crash"); process.exit(17);' > ./scripts/translate-all.mjs
+  fi
   echo "npm run build: tsc completed"
   exit 0
 fi
@@ -969,9 +985,7 @@ exit 0
       join(ollamaStage, "ollama"),
       `#!/usr/bin/env bash
 set -euo pipefail
-if [ "\${FAKE_COLAB_IN_VM:-0}" = "1" ] && [ -n "\${FAKE_COLAB_STATE_DIR:-}" ]; then
-  printf 'ollama\\t%s\\n' "$*" >> "\${FAKE_COLAB_STATE_DIR}/vm_commands.log"
-fi
+${stageLogSnippet(`printf 'ollama\\t%s\\n' "$*"`)}
 case "\${1:-}" in
   serve)
     if [ "\${FAKE_OLLAMA_SERVE_FAIL:-0}" = "1" ]; then
@@ -3067,7 +3081,11 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       expect(win.zstd_version).toContain("Zstandard CLI");
       expect(win.ollama_version).toBe("0.40.15");
       expect(win.translated_readmes).toBe(0);
-      expect(win.downloaded_files["polyglot_translate_bundle.tar.gz"]).toMatch(/^[0-9a-f]{64}$/);
+      const bundleDigestHex = createHash("sha256")
+        .update(readFileSync(join(outDir, "polyglot_translate_bundle.tar.gz")))
+        .digest("hex");
+      expect(win.downloaded_files["polyglot_translate_bundle.tar.gz"]).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(win.downloaded_files["polyglot_translate_bundle.tar.gz"]).toBe(`sha256:${bundleDigestHex}`);
       expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-stub-real-path");
     } finally {
       resetFakeOllama();
@@ -3164,15 +3182,17 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
       const srcReadme = join(tmp, "README.md");
       writeFileSync(srcReadme, SAMPLE_README, "utf-8");
 
-      const assertStepRefusal = (
-        outDir: string,
-        contentDir: string,
-        stateDir: string,
-        session: string,
-        expectedStep: string,
-        expectedCode: string,
-        expectedSnippet: string,
-      ) => {
+      const assertStepRefusal = (opts: {
+        outDir: string;
+        contentDir: string;
+        stateDir: string;
+        session: string;
+        expectedStep: string;
+        expectedCode: string;
+        expectedSnippet: string;
+      }) => {
+        const { outDir, contentDir, stateDir, session, expectedStep, expectedCode, expectedSnippet } = opts;
+        expect(expectedSnippet.length).toBeGreaterThan(0);
         const markerPath = join(contentDir, "polyglot_out", "remote_failure.json");
         expect(existsSync(markerPath), `missing remote_failure.json for ${expectedStep}`).toBe(true);
         const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
@@ -3222,7 +3242,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
         const outDir = join(caseDir, "out");
         const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-tok-shred"], env);
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-tok-shred", "token_shred", "TOKEN_SHRED_FAILED", "polyglot_token");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-tok-shred",
+          expectedStep: "token_shred",
+          expectedCode: "TOKEN_SHRED_FAILED",
+          expectedSnippet: "polyglot_token",
+        });
       }
 
       // 2a. node_install (download failure) -> NODE_INSTALL_FAILED
@@ -3233,14 +3261,22 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
           caseDir,
           {
             GUARD_POLL_INTERVAL_S: "0.2",
-            FAKE_CURL_FAIL_MATCH: "/fixtures/node.tar.xz",
+            FAKE_CURL_FAIL_MATCH: "fixtures/node.tar.xz",
           },
           { forStub: true },
         );
         const outDir = join(caseDir, "out");
         const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-node-dl"], env);
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-node-dl", "node_install", "NODE_INSTALL_FAILED", "curl download");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-node-dl",
+          expectedStep: "node_install",
+          expectedCode: "NODE_INSTALL_FAILED",
+          expectedSnippet: "curl download",
+        });
       }
 
       // 2b. node_install (sha256 mismatch) -> NODE_INSTALL_SHA_MISMATCH
@@ -3258,7 +3294,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
         const outDir = join(caseDir, "out");
         const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-node-sha"], env);
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-node-sha", "node_install", "NODE_INSTALL_SHA_MISMATCH", "expected");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-node-sha",
+          expectedStep: "node_install",
+          expectedCode: "NODE_INSTALL_SHA_MISMATCH",
+          expectedSnippet: "expected",
+        });
       }
 
       // 3. ollama_download (download failure) -> OLLAMA_DOWNLOAD_FAILED
@@ -3269,14 +3313,22 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
           caseDir,
           {
             GUARD_POLL_INTERVAL_S: "0.2",
-            FAKE_CURL_FAIL_MATCH: "/fixtures/ollama.tar.zst",
+            FAKE_CURL_FAIL_MATCH: "fixtures/ollama.tar.zst",
           },
           { forStub: true },
         );
         const outDir = join(caseDir, "out");
         const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-ollama-dl"], env);
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-ollama-dl", "ollama_download", "OLLAMA_DOWNLOAD_FAILED", "curl download");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-ollama-dl",
+          expectedStep: "ollama_download",
+          expectedCode: "OLLAMA_DOWNLOAD_FAILED",
+          expectedSnippet: "curl download",
+        });
       }
 
       // (4. zstd_install -> ZSTD_INSTALL_FAILED and 5. ollama_unpack -> OLLAMA_UNPACK_FAILED are covered above;
@@ -3298,15 +3350,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
         const outDir = join(caseDir, "out");
         const res = await runLauncher(["--stub", "--out-dir", outDir, "--session", "step-ollama-serve"], env);
         expect(res.code).not.toBe(0);
-        assertStepRefusal(
+        assertStepRefusal({
           outDir,
           contentDir,
           stateDir,
-          "step-ollama-serve",
-          "ollama_serve",
-          "OLLAMA_SERVE_FAILED",
-          "address already in use",
-        );
+          session: "step-ollama-serve",
+          expectedStep: "ollama_serve",
+          expectedCode: "OLLAMA_SERVE_FAILED",
+          expectedSnippet: "address already in use",
+        });
       }
 
       // 7. model_pull -> OLLAMA_PULL_FAILED
@@ -3323,7 +3375,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
           env,
         );
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-model-pull", "model_pull", "OLLAMA_PULL_FAILED", "ollama pull");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-model-pull",
+          expectedStep: "model_pull",
+          expectedCode: "OLLAMA_PULL_FAILED",
+          expectedSnippet: "ollama pull",
+        });
       }
 
       // 8. model_digest -> MODEL_DIGEST_MISMATCH
@@ -3340,7 +3400,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
           env,
         );
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-model-digest", "model_digest", "MODEL_DIGEST_MISMATCH", "translategemma:27b");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-model-digest",
+          expectedStep: "model_digest",
+          expectedCode: "MODEL_DIGEST_MISMATCH",
+          expectedSnippet: "translategemma:27b",
+        });
       }
 
       // 9. fit_probe -> FIT_PROBE_FAILED
@@ -3357,7 +3425,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
           env,
         );
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-fit-probe", "fit_probe", "FIT_PROBE_FAILED", "warmup POST");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-fit-probe",
+          expectedStep: "fit_probe",
+          expectedCode: "FIT_PROBE_FAILED",
+          expectedSnippet: "warmup POST",
+        });
       }
 
       // 10. repo_build -> REPO_BUILD_FAILED
@@ -3374,7 +3450,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
           env,
         );
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-repo-build", "repo_build", "REPO_BUILD_FAILED", "npm ci && npm run build");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-repo-build",
+          expectedStep: "repo_build",
+          expectedCode: "REPO_BUILD_FAILED",
+          expectedSnippet: "npm ci && npm run build",
+        });
       }
 
       // 11. translate -> TRANSLATION_FAILED
@@ -3391,7 +3475,15 @@ describe("zstd unpack, per-step refusal markers, real-path --stub, and --dry", (
           env,
         );
         expect(res.code).not.toBe(0);
-        assertStepRefusal(outDir, contentDir, stateDir, "step-translate", "TRANSLATION_FAILED", "translate-all.mjs exited 17");
+        assertStepRefusal({
+          outDir,
+          contentDir,
+          stateDir,
+          session: "step-translate",
+          expectedStep: "translate",
+          expectedCode: "TRANSLATION_FAILED",
+          expectedSnippet: "translate-all.mjs exited 17",
+        });
       }
     } finally {
       resetFakeOllama();
