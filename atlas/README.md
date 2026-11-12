@@ -1,15 +1,18 @@
 # polyglot-mcp: how it works
 
-Mapped at 2026-11-12 from commit 66eddd9 by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 85d20d5 by Atlas 1.26.0.
 
 ## What this is
 
 8 parts, mostly TypeScript (51 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.
 
-## What changed since 2026-11-11 (4e8216e)
+## What changed since 2026-11-12 (66eddd9)
 
-- scripts/colab/remote_runner.py is now read by scripts/colab/launch_translate.sh.
-- 6 files changed content, across 3 parts.
+- scripts/colab/colab_window.sh is now read by src/colabLane.test.ts.
+- scripts/colab/compare_translations.py is now read by src/colabLane.test.ts.
+- scripts/colab/launch_guards.py is now read by src/colabLane.test.ts.
+- And 1 more new writer or reader of a place.
+- 3 files changed content, across 2 parts.
 
 ## What comes in
 
@@ -26,7 +29,7 @@ Mapped at 2026-11-12 from commit 66eddd9 by Atlas 1.26.0.
 
 ## Who reads the results
 
-CI writes nothing in the files this map could read; 1 file could not be.
+CI writes nothing this map can see.
 
 ## The other doors
 
@@ -59,15 +62,15 @@ scripts is touched by tests only through a spawn: a test runs its files as a chi
 
 ## Written but never read
 
-No place is written by the files this map could read, so none goes unread; 1 file could not be.
+No place this map can see is written, so none goes unread.
 
 ## Helpers that look duplicated
 
-No two parts export a helper that looks alike in the files this map could read; 1 file could not be.
+No two parts export a helper that looks alike.
 
 ## Generated, never hand-edited
 
-Nothing in the files this map could read writes to a tracked place; 1 file could not be.
+Nothing in this repository writes to a tracked place this map can see.
 
 ## Hand-authored
 
@@ -83,11 +86,10 @@ Beside the path, src/translate.ts also calls src/languages.ts, src/glossary.ts, 
 
 ## What this map cannot see
 
-- 1 file uses syntax the parser cannot read (src/colabLane.test.ts), so what it imports is not known.
 - 4 writes and 14 reads use paths built at run time and are not named here.
 - 11 writes and 23 reads go to a path their caller passes, not to this repository.
 - 1 read goes to the directory the command is run in (LICENSE), not to this repository.
-- 13 commands are built at run time and not followed, 11 of them in tests.
+- 30 commands are built at run time and not followed, 28 of them in tests.
 - Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

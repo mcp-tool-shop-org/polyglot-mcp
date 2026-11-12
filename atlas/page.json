@@ -21,29 +21,50 @@
   "changes": {
     "fileCounts": {
       "added": 0,
-      "changed": 6,
+      "changed": 3,
       "moved": 0,
-      "parts": 3,
+      "parts": 2,
       "removed": 0
     },
     "items": [
       {
         "kind": "landing",
-        "sentence": "scripts/colab/remote_runner.py is now read by scripts/colab/launch_translate.sh.",
+        "sentence": "scripts/colab/colab_window.sh is now read by src/colabLane.test.ts.",
         "subjects": [
-          "scripts/colab/remote_runner.py",
-          "scripts/colab/launch_translate.sh"
+          "scripts/colab/colab_window.sh",
+          "src/colabLane.test.ts"
         ]
       },
       {
+        "kind": "landing",
+        "sentence": "scripts/colab/compare_translations.py is now read by src/colabLane.test.ts.",
+        "subjects": [
+          "scripts/colab/compare_translations.py",
+          "src/colabLane.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "scripts/colab/launch_guards.py is now read by src/colabLane.test.ts.",
+        "subjects": [
+          "scripts/colab/launch_guards.py",
+          "src/colabLane.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "And 1 more new writer or reader of a place.",
+        "subjects": []
+      },
+      {
         "kind": "counts",
-        "sentence": "6 files changed content, across 3 parts.",
+        "sentence": "3 files changed content, across 2 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "4e8216ecee1a01d82d95fa4f34f8d840ea052ef9",
-      "generatedAt": "2026-11-11T22:27:35.909Z"
+      "commit": "66eddd9d96a89970f75036d2692ba5ffdc072b30",
+      "generatedAt": "2026-11-12T17:50:51.969Z"
     },
     "unchanged": false
   },
@@ -84,7 +105,7 @@
     "Window: 180 days; a pair counts from 3 shared commits, since 0 source files reach 10 revisions; the floor rises to 10 when 25 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "66eddd9d96a89970f75036d2692ba5ffdc072b30",
+  "commit": "85d20d54faf82be9ddef53ab562c66a68bd62674",
   "defaultBranch": "main",
   "derived": "8 parts, mostly TypeScript (51 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
@@ -317,13 +338,12 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T17:50:51.969Z",
+  "generatedAt": "2026-11-12T18:02:21.201Z",
   "limits": [
-    "1 file uses syntax the parser cannot read (src/colabLane.test.ts), so what it imports is not known.",
     "4 writes and 14 reads use paths built at run time and are not named here.",
     "11 writes and 23 reads go to a path their caller passes, not to this repository.",
     "1 read goes to the directory the command is run in (LICENSE), not to this repository.",
-    "13 commands are built at run time and not followed, 11 of them in tests.",
+    "30 commands are built at run time and not followed, 28 of them in tests.",
     "Statistics confidence is low: fewer than 25 source files reach 10 revisions in the window."
   ],
   "mainDoor": ".github/workflows/ci.yml",
@@ -375,7 +395,7 @@
   "testedCodeParts": 3,
   "unnamedWrites": 4,
   "unread": [],
-  "unreadFiles": 1,
+  "unreadFiles": 0,
   "unreadNote": [],
   "untested": [
     {

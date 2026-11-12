@@ -437,7 +437,7 @@
       "externals": 0,
       "files": [
         {
-          "hash": "2cabccb0289c3af3a64b24e14b933ba3e38b095bc519386f3376bb2858640419",
+          "hash": "2ab01f8c97e185252d846578ff80cd843e4084a328ae3a635549d3371775668e",
           "path": "scripts/colab/colab_window.sh"
         },
         {
@@ -547,7 +547,7 @@
           "path": "scripts/colab/launch_guards.py"
         },
         {
-          "hash": "ab40f13ae152874fdbc03b46432aa0be86f2f8e265cf95347f8b85b88e1ddd3a",
+          "hash": "b5d4759237379c7cf10d1e9c3fee63072bacd2e40606d8203e19d8727b02370a",
           "path": "scripts/colab/launch_translate.sh"
         },
         {
@@ -760,8 +760,8 @@
     },
     {
       "dynamicReads": 2,
-      "dynamicSpawns": 13,
-      "dynamicSpawnsInTests": 11,
+      "dynamicSpawns": 30,
+      "dynamicSpawnsInTests": 28,
       "dynamicWrites": 0,
       "entryPoints": [
         "src/index.ts"
@@ -915,9 +915,15 @@
           ]
         },
         {
-          "hash": "d96dd39beee51d20ed584dd3e89646c1c28888f15e54a47e1b24933bbb56ca01",
-          "parseError": true,
-          "path": "src/colabLane.test.ts"
+          "hash": "8fe3bcdf76b41b9081a8e60231324fe423666b4a132cd7c2c17a579ed004b54b",
+          "names": [
+            "scripts/colab/compare_translations.py",
+            "scripts/colab/launch_guards.py",
+            "scripts/colab/remote_runner.py",
+            "scripts/translate-all.mjs"
+          ],
+          "path": "src/colabLane.test.ts",
+          "testFramework": "vitest"
         },
         {
           "hash": "547671a18164f295066ab274e5c2fd2621c1a904b71a22c055ce834bbf69b37f",
@@ -4958,7 +4964,7 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "66eddd9d96a89970f75036d2692ba5ffdc072b30",
+    "commit": "85d20d54faf82be9ddef53ab562c66a68bd62674",
     "tracked": 172
   },
   "landings": [
@@ -5239,6 +5245,66 @@
         }
       ],
       "target": "package.json",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        },
+        {
+          "by": "src/colabLane.test.ts",
+          "call": "readFileSync",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "scripts/colab/colab_window.sh",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "scripts/colab/compare_translations.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "scripts/colab/launch_guards.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "src/colabLane.test.ts",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        },
+        {
+          "by": "src/colabLane.test.ts",
+          "call": "readFileSync",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "scripts/colab/launch_translate.sh",
       "writers": []
     },
     {

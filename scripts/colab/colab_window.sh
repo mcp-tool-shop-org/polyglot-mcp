@@ -1469,6 +1469,11 @@ start_bal = _read_float(out_dir / "start_balance.txt")
 cur_bal = _read_float(out_dir / "end_balance.txt")
 if cur_bal is None:
     cur_bal = start_bal
+if card_class == "gpu":
+    # Parallel windows (2026-11-12): the account balance is shared, and a window queued behind its
+    # neighbours' opens sees their spend settle on it; a GPU window is priced on rate x elapsed only
+    # (priced_rate above is max(--max-rate, highest stable window rate)), the drop is never its spend.
+    cur_bal = start_bal
 err_f = out_dir / "usage_parse_error.txt"
 usage_err = err_f.read_text(encoding="utf-8").strip() if err_f.is_file() and err_f.stat().st_size > 0 else None
 
@@ -1600,18 +1605,32 @@ colab_open_session_locked() {
     return "${lock_rc}"
   fi
   printf '1\n' > "${lock_file}.held"
+  COLAB_OPEN_LOCK_HELD="${lock_mode}"
+  COLAB_OPEN_LOCK_FILE="${lock_file}"
   local under_rc=0
   colab_open_session_under_lock "${session}" "${card}" "${out_dir}" "${shape}" "${new_timeout}" "${kill_grace}" \
     "${new_args[@]}" || under_rc=$?
+  colab_release_open_lock_if_held "${out_dir}" "${session} rc=${under_rc}"
+  return "${under_rc}"
+}
+
+# colab_release_open_lock_if_held <out_dir> <note>: release the open lock if this shell holds it. Called on
+# the normal path and by a kit's EXIT/cleanup path FIRST, so no cleanup child (a bounded `colab stop`, an
+# escalation `sleep`) inherits fd 9 and holds the lock after this window is gone (PR #80 review N1).
+colab_release_open_lock_if_held() {
+  local out_dir="$1" note="${2:-}"
+  [ -n "${COLAB_OPEN_LOCK_HELD:-}" ] || return 0
+  local lock_file="${COLAB_OPEN_LOCK_FILE:-${COLAB_OPEN_LOCK:-/tmp/colab-window-open.lock}}"
   rm -f "${lock_file}.held"
-  if [ "${lock_mode}" = "flock" ]; then
+  if [ "${COLAB_OPEN_LOCK_HELD}" = "flock" ]; then
     flock -u 9 2>/dev/null || true
     exec 9>&-
   else
-    rmdir "${lock_dir}" 2>/dev/null || true
+    rmdir "${lock_file}.lockdir" 2>/dev/null || true
   fi
-  echo "OPEN_LOCK_RELEASED session=${session} rc=${under_rc}" >> "${out_dir}/guards.log"
-  return "${under_rc}"
+  COLAB_OPEN_LOCK_HELD=""
+  [ -n "${out_dir}" ] && echo "OPEN_LOCK_RELEASED session=${note}" >> "${out_dir}/guards.log"
+  return 0
 }
 
 # colab_open_session_under_lock <session> <card> <out_dir> <shape> <new_timeout> <kill_grace> <colab new args...>:
@@ -1619,10 +1638,32 @@ colab_open_session_locked() {
 colab_open_session_under_lock() {
   local session="$1" card="$2" out_dir="$3" shape="$4" new_timeout="$5" kill_grace="$6"
   shift 6
+  # The lock wait ran on the wall (PR #80 review N2): never open a paid session with too little wall left.
+  if [ -s "${out_dir}/wall_start_epoch.txt" ] && [ -s "${out_dir}/wall_limit_s.txt" ]; then
+    local w_start w_limit w_left w_min
+    w_start="$(cat "${out_dir}/wall_start_epoch.txt")"
+    w_limit="$(cat "${out_dir}/wall_limit_s.txt")"
+    w_left=$(( ${w_limit%.*} - ( $(date -u +%s) - ${w_start%.*} ) ))
+    w_min="${COLAB_MIN_WALL_AFTER_LOCK_S:-$(( ${w_limit%.*} / 2 < 600 ? ${w_limit%.*} / 2 : 600 ))}"
+    echo "WALL_AFTER_LOCK left_s=${w_left} min_s=${w_min}" >> "${out_dir}/guards.log"
+    if [ "${w_left}" -lt "${w_min}" ]; then
+      colab_refuse_logged "${out_dir}" WALL_SHORT_AFTER_LOCK "only ${w_left} s of wall left after the open-lock wait (minimum ${w_min} s); not opening a session"
+      return 2
+    fi
+  fi
   if ! colab_card_is_cpu "${card}"; then
     # A fresh pre-open read under the lock: every neighbour that opened earlier is in the baseline now.
-    colab_poll_usage_and_ram "${PY_BIN:?the kit must set PY_BIN}" "${out_dir}" >/dev/null 2>&1 || true
-    echo "PRE_OPEN_UNDER_LOCK rate=$(cat "${out_dir}/rate_measured_pre_open.txt" 2>/dev/null || echo none) assignments=$(cat "${out_dir}/pre_open_assignments.txt" 2>/dev/null || echo none)" >> "${out_dir}/guards.log"
+    # A failed or unreadable read refuses (PR #80 review N3): a stale baseline must never price a window.
+    local pre_out="" pre_rc=0 pre_err=""
+    pre_out="$(colab_poll_usage_and_ram "${PY_BIN:?the kit must set PY_BIN}" "${out_dir}" 2>/dev/null)" || pre_rc=$?
+    pre_err="$(printf '%s' "${pre_out}" | awk '{print $4}')"
+    local pre_assign=""
+    pre_assign="$(cat "${out_dir}/pre_open_assignments.txt" 2>/dev/null || true)"
+    echo "PRE_OPEN_UNDER_LOCK rate=$(cat "${out_dir}/rate_measured_pre_open.txt" 2>/dev/null || echo none) assignments=${pre_assign:-none} rc=${pre_rc} err=${pre_err:-none}" >> "${out_dir}/guards.log"
+    if [ "${pre_rc}" -ne 0 ] || [ "${pre_err}" != "NONE" ] || ! [[ "${pre_assign}" =~ ^[0-9]+$ ]]; then
+      colab_refuse_logged "${out_dir}" PRE_OPEN_READ_FAILED "the pre-open colab usage read under the open lock failed or gave no assignment count (rc=${pre_rc} err=${pre_err:-none}); not opening on a stale baseline"
+      return 2
+    fi
   fi
   printf '1\n' > "${out_dir}/session_open_started.txt"
   local new_rc=0
@@ -1681,6 +1722,9 @@ colab_run_wall_watcher() {
 
   exec >/dev/null 2>&1 </dev/null
   trap - EXIT TERM INT
+  # The wall clock this watcher enforces, for colab_open_session_under_lock's remaining-wall check.
+  date -u +%s > "${out_dir}/wall_start_epoch.txt" 2>/dev/null || true
+  printf '%s\n' "${wall_limit_s}" > "${out_dir}/wall_limit_s.txt" 2>/dev/null || true
   colab_compute_cleanup_bounds "${lane}"
   local escalate_s="${COLAB_WALL_ESCALATE_S:-30}"
   local in_flight_bound_s="${COLAB_IN_FLIGHT_BOUND_S:-310}"
@@ -2588,6 +2632,8 @@ REFUSAL_CODES = (
     "RATE_UNREAD",
     "RATE_ABOVE_MAX",
     "RATE_UNATTRIBUTABLE",
+    "PRE_OPEN_READ_FAILED",
+    "WALL_SHORT_AFTER_LOCK",
     "ASSIGNMENTS_UNREADABLE",
     "GPU_RATE_GATE_NOT_ARMED",
     "SHAPE_REQUIRED",
@@ -3041,6 +3087,11 @@ window_payload = {
     "elapsed_s": round(elapsed_window_s, 3),
     "spend_ccu": spend_ccu,
     "spend_basis": spend_basis,
+    "spend_ccu_at_priced_rate": (
+        round(max(float(priced_rate_for_cap or 0.0), float(_gpu_rate_state.get("best_stable") or 0.0))
+              * elapsed_window_s / 3600.0, 6)
+        if spend_basis == "window_rate_x_elapsed" else None
+    ),
     "account_balance_drop": round(drop_ccu, 6),
     "account_shared": bool(_gpu_rate_state.get("shared_account")),
     "pre_open_assignments": _gpu_rate_state.get("pre_open_assignments"),
