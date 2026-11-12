@@ -2938,6 +2938,13 @@ if exit_code != 0:
         refusal_why = f"[{fallback_step}] {refusal_code} (exit_code={exit_code})"
 
 final_status = "ok" if exit_code == 0 else (refusal_code or "REMOTE_STEP_FAILED")
+# A translate window in which some README or language was refused by a gate but others passed ends with
+# exit 0 and status "partial": the per-README results are in window.json (readme_results, from the VM's
+# vm_window.json). A window with no passed language exits non-zero and carries the refusal code as before.
+if exit_code == 0 and vm_facts.get("window_status") == "partial":
+    final_status = "partial"
+    refusal_code = None
+    refusal_why = vm_facts.get("window_why") or "some READMEs or languages were refused by a gate (see readme_results)"
 
 # Lane 3 (train): what the VM says about training, normalised so it cannot be read as a passed
 # training by accident. "skipped_cpu_stub" (the CPU install-path stub stopped at the import gate)

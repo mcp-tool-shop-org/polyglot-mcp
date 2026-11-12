@@ -102,7 +102,26 @@ def bundle_now(env: dict[str, str] | None = None) -> int:
             rec["remote_step"] = last_step
         if zstd_ver:
             rec["zstd_version"] = zstd_ver
+        rr = out_dir / "readme_results.json"
+        if rr.is_file():
+            try:
+                rec["readme_results"] = json.loads(rr.read_text(encoding="utf-8")).get("readmes", [])
+            except ValueError:
+                pass
         vm_win.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+    # In-flight outputs: translate-all writes README.<lang>.md next to each source README under readmes_in. A
+    # stall, the wall or a dead exec stops the run before those are verified and staged, so they exist only
+    # there. Copy them into polyglot_out (as unverified, in-flight files) so the bundle carries everything the
+    # model wrote; nothing here is published as accepted.
+    readmes_in = root / "readmes_in"
+    if readmes_in.is_dir():
+        for fp in sorted(readmes_in.rglob("README.*.md")):
+            rel = fp.relative_to(readmes_in)
+            dst = out_dir / "in_flight_outputs" / rel
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(fp.read_bytes())
 
     guards_py = root / "launch_guards.py"
     for f in out_dir.rglob("*"):

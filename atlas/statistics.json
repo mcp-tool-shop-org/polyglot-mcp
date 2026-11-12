@@ -222,7 +222,7 @@
       },
       {
         "commits": 13,
-        "lines": 562,
+        "lines": 557,
         "path": "atlas/README.md"
       },
       {
@@ -232,17 +232,17 @@
       },
       {
         "commits": 13,
-        "lines": 2097,
+        "lines": 2059,
         "path": "atlas/page.json"
       },
       {
         "commits": 13,
-        "lines": 4059,
+        "lines": 4025,
         "path": "atlas/statistics.json"
       },
       {
         "commits": 13,
-        "lines": 15188,
+        "lines": 15318,
         "path": "atlas/structure.json"
       },
       {
@@ -292,7 +292,7 @@
       },
       {
         "commits": 4,
-        "lines": 2416,
+        "lines": 2428,
         "path": "scripts/colab/launch_translate.sh"
       },
       {
@@ -317,7 +317,7 @@
       },
       {
         "commits": 9,
-        "lines": 189,
+        "lines": 195,
         "path": "scripts/translate-readme.mjs"
       },
       {
@@ -601,6 +601,11 @@
         "path": "src/translateMarkdown.concurrency.test.ts"
       },
       {
+        "commits": 1,
+        "lines": 94,
+        "path": "src/translateMarkdown.heartbeat.test.ts"
+      },
+      {
         "commits": 4,
         "lines": 630,
         "path": "src/translateMarkdown.protected.test.ts"
@@ -617,7 +622,7 @@
       },
       {
         "commits": 10,
-        "lines": 1036,
+        "lines": 1045,
         "path": "src/translateMarkdown.ts"
       },
       {
@@ -651,9 +656,9 @@
     "level": "low",
     "reason": "fewer than 25 source files reach 10 revisions in the window"
   },
-  "generatedAt": "2026-11-12T19:01:11.213Z",
+  "generatedAt": "2026-11-12T20:21:13.573Z",
   "generatedFrom": {
-    "commit": "1a5df55cab62f523cbce44499e115934798a20ed"
+    "commit": "3701108ec3b96216057c92ff9aadd08747ecef15"
   },
   "pairs": [
     {
@@ -889,7 +894,7 @@
     }
   ],
   "parameters": {
-    "appliedChangesetLimit": 45.25,
+    "appliedChangesetLimit": 45.5,
     "changeset": 50,
     "changesetFraction": 0.25,
     "cohesionDrop": 0.2,
@@ -898,16 +903,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "revision-depth",
-    "headDate": "2026-11-12T13:36:12-05:00",
-    "inScopeFiles": 181,
+    "headDate": "2026-11-12T14:06:54-05:00",
+    "inScopeFiles": 182,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 42,
+    "qualifyingCommits": 41,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-05-16T18:36:12.000Z",
+    "since": "2026-05-16T19:06:54.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

@@ -48,14 +48,14 @@ PINNED_VRAM_HEADROOM_MIB="1024"
 
 PINNED_LAUNCH_GUARDS_SHA="4e6d30ee02773a23deec84fa64df056395a31730ca4b8686cc2fdc7831a0d873"
 PINNED_REMOTE_RUNNER_SHA="834e669de7f611c8d3b0e24dcd65c568c0d97a2bafb6080b235ea9a22b4f99d9"
-PINNED_COLAB_WINDOW_SHA="8cf47326d30f2bf430c67a6eb881cb82a1162d3ba89c616c09ed9ed30f66787b"
-PINNED_BUNDLE_NOW_SHA="70b98ec2f6b363d3e94b7bc8283c74cee640c5229308e69c7dbf6a9482f7c536"
+PINNED_COLAB_WINDOW_SHA="580b5d34c73491a3625185e8d8b8572bce189cdc528bcf2c4f735eb176374f08"
+PINNED_BUNDLE_NOW_SHA="dadc1f2956cd84d357506b1397c39f83dd2ab5541081a5db3f557ba6258d1db8"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
-PINNED_TRANSLATE_ALL_SHA="61a203bdebb9fe832e061f1f47c59b1ecffee2d3c9098c0fc8ab9460e9a8dafa"
+PINNED_TRANSLATE_ALL_SHA="474d9cb9a7977ea63788793f108c2270138fab00dd401a73a5a3d1ca9c7a34af"
 PINNED_TRANSLATE_README_SHA="3b9cee469b4c75b84db26459ecfe803cc73510839caaa0b86b33abc7273a9e57"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="fdc94f98384e596d19c43c1ed325828f7f803f1db041ed21dea745ad3eea8972"
+PINNED_SELF_SHA="63216e298df46af2ac1c406f7081a569025cb2d483088804e13e894fbe5c9b6f"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -751,6 +751,67 @@ WALL_WATCHER_PID=""
 EXEC_PID=""
 EXEC_IN_FLIGHT=0
 
+translate_unpack_bundle() {
+  # <bundle.tar.gz> <out_dir>: extract into <out_dir>/bundle_extracted and publish what is in it.
+"${PY_BIN}" - "$1" "$2" << 'UNPACKPYEOF'
+import shutil
+import sys
+import tarfile
+from pathlib import Path
+
+bundle = Path(sys.argv[1])
+out_dir = Path(sys.argv[2])
+extract_dir = out_dir / "bundle_extracted"
+extract_dir.mkdir(parents=True, exist_ok=True)
+
+with tarfile.open(bundle, "r:gz") as tf:
+    try:
+        tf.extractall(extract_dir, filter="data")
+    except TypeError:
+        tf.extractall(extract_dir)
+
+for name in (
+    "manifest.json",
+    "SHA256SUMS",
+    "fit_probe.json",
+    "vm_window.json",
+    "readme_results.json",
+    "remote_failure.json",
+    "remote_step.txt",
+    "zstd_version.txt",
+    "node_version.txt",
+):
+    src = extract_dir / name
+    if src.is_file():
+        shutil.copy2(src, out_dir / name)
+
+# An accepted run publishes translations/. A run that stopped early (a refusal, a stall, the wall, a dead
+# harness) never renamed its staging directory, but every README staged there passed its gates, so it is
+# published the same way: nothing the window produced is left behind in the bundle.
+trans_dir = extract_dir / "translations"
+if not trans_dir.is_dir() and (extract_dir / "_staging_translations").is_dir():
+    trans_dir = extract_dir / "_staging_translations"
+# Raw output of every refused language, kept for a human hand-fix and a pin.
+refused_dir = extract_dir / "refused_raw"
+if refused_dir.is_dir():
+    dst_refused = out_dir / "refused_raw"
+    if dst_refused.exists():
+        shutil.rmtree(dst_refused)
+    shutil.copytree(refused_dir, dst_refused)
+for summ in sorted(extract_dir.glob("summary_*.json")):
+    shutil.copy2(summ, out_dir / summ.name)
+if trans_dir.is_dir():
+    for item in trans_dir.iterdir():
+        dst = out_dir / item.name
+        if item.is_dir():
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(item, dst)
+        elif item.is_file():
+            shutil.copy2(item, dst)
+UNPACKPYEOF
+}
+
 translate_download_bundle_after_failure() {
   local rc="$1"
   colab_salvage_bundle_after_failure \
@@ -776,6 +837,11 @@ cleanup_on_exit() {
   if [ "${rc}" -ne 0 ] && [ "${EXEC_IN_FLIGHT}" = "1" ] \
     && [ ! -s "${OUT_DIR}/polyglot_translate_bundle.tar.gz" ]; then
     translate_download_bundle_after_failure "${rc}" || true
+  fi
+  # Every exit path publishes what the bundle holds: a README that finished clean before a later refusal,
+  # a stall or the wall comes back with its summaries and logs (window polyglot-rb-d lost one this way).
+  if [ "${rc}" -ne 0 ] && [ -s "${OUT_DIR}/polyglot_translate_bundle.tar.gz" ] && [ ! -d "${OUT_DIR}/bundle_extracted" ]; then
+    translate_unpack_bundle "${OUT_DIR}/polyglot_translate_bundle.tar.gz" "${OUT_DIR}" || true
   fi
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
     sleep 3600
@@ -1671,8 +1737,10 @@ repo_commit = sys.argv[5]
 state_dir = Path(sys.argv[6])
 
 def _fail_translate(code: str, reason: str, raw_stderr: str = "") -> None:
-    shutil.rmtree(out_root / "_staging_translations", ignore_errors=True)
-    shutil.rmtree(out_root / "translations", ignore_errors=True)
+    # Nothing is deleted here: _staging_translations (every README that already passed its gates), refused_raw
+    # (the raw output of every refused language), every summary and every log stay in polyglot_out, so the
+    # bundle that comes back carries all of it. (This used to rmtree the staging directory, which threw away
+    # a README that had finished 7/7 clean when a later README was refused: window polyglot-rb-d.)
     why = reason if reason.startswith("[translate]") else f"[translate] {reason}"
     marker = {"step": "translate", "refusal_code": code, "reason": reason, "why": why, "rc": 1}
     payload = json.dumps(marker, indent=2) + "\n"
@@ -1710,6 +1778,8 @@ single_slot = len(slots) == 1 and slots[0].name == "default"
 
 readme_manifests = []
 all_sha_entries = []
+readme_results = []
+refused_root = out_root / "refused_raw"
 
 for slot in slots:
     src_readme = slot / "README.md"
@@ -1747,12 +1817,51 @@ for slot in slots:
     sys.stdout.flush()
     sys.stderr.flush()
 
+    # Failures are per README and per language: a README (or one of its languages) that a gate refuses is
+    # marked refused with its reason, its raw output is kept for a human hand-fix and a pin, and the next
+    # README still runs. Only a window with zero passed languages fails.
+    row = {
+        "slug": slot.name,
+        "status": "ok",
+        "passed": [],
+        "refused": [],
+        "refusal_code": None,
+        "reason": None,
+        "total_elapsed_s": elapsed_s,
+    }
+
+    def _keep_raw(lc: str):
+        fname = lang_file_map[lc]
+        fp = slot / fname
+        if not fp.is_file():
+            return None
+        d = refused_root / slot.name
+        d.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(fp, d / fname)
+        return f"refused_raw/{slot.name}/{fname}"
+
+    def _close_row(note_manifest: dict) -> None:
+        if row["refused"]:
+            row["status"] = "partial" if row["passed"] else "refused"
+        readme_results.append(row)
+        readme_manifests.append(note_manifest)
+        (out_root / "readme_results.json").write_text(
+            json.dumps({"complete": False, "readmes": readme_results}, indent=2) + "\n", encoding="utf-8", newline="\n")
+        print(f"README_RESULT slug={slot.name} status={row['status']} passed={len(row['passed'])} refused={len(row['refused'])}", flush=True)
+
     if proc.returncode != 0 and "POLYGLOT_COMPLETE" not in (proc.stdout or ""):
         err_snip = ((proc.stderr or "").strip().splitlines() or [""])[-1][:200]
-        _fail_translate(
-            "TRANSLATION_FAILED",
-            f"translate-all.mjs exited {proc.returncode} for {slot.name}" + (f": {err_snip}" if err_snip else ""),
-        )
+        crash = f"translate-all.mjs exited {proc.returncode} for {slot.name}" + (f": {err_snip}" if err_snip else "")
+        row["refusal_code"] = "TRANSLATION_FAILED"
+        row["reason"] = crash
+        for lc in langs:
+            row["refused"].append({"lang": lc, "file": lang_file_map[lc], "reasons": ["translate_all_crashed"], "raw": _keep_raw(lc)})
+        _close_row({
+            "slug": slot.name, "input_sha256": input_sha, "status": "refused", "output_shas": {},
+            "verified_languages": [], "refused_languages": row["refused"], "refusal_code": "TRANSLATION_FAILED",
+            "reason": crash, "total_elapsed_s": elapsed_s,
+        })
+        continue
 
     # Parse structured summary from translate-all.mjs stdout
     summary_json = {}
@@ -1766,21 +1875,38 @@ for slot in slots:
             except ValueError:
                 pass
     summary_path = out_root / f"summary_{slot.name}.json"
+    raw_summary_path = out_root / f"summary_{slot.name}.translate-all.json"
+    raw_summary_path.write_text(json.dumps(summary_json, indent=2) + "\n", encoding="utf-8")
     summary_path.write_text(json.dumps(summary_json, indent=2) + "\n", encoding="utf-8")
 
     # Optional test-only fault injection to simulate #67 unverified receipt/structural check or #65 nav-bar drop
     corrupt_lang = os.environ.get("POLYGLOT_TEST_CORRUPT_RECEIPT_LANG", "").strip()
     corrupt_slot = os.environ.get("POLYGLOT_TEST_CORRUPT_RECEIPT_SLOT", "").strip()
-    if corrupt_lang and (not corrupt_slot or corrupt_slot == slot.name) and summary_json.get("results"):
+    corrupt_set = {x.strip() for x in corrupt_lang.split(",") if x.strip()}
+    if corrupt_set and (not corrupt_slot or corrupt_slot == slot.name) and summary_json.get("results"):
         for r in summary_json["results"]:
-            if r.get("lang") == corrupt_lang:
+            if r.get("lang") in corrupt_set:
                 r["status"] = "written-unverified"
                 r["failedChecks"] = ["no_write_receipt"]
                 summary_json.setdefault("writtenUnverified", []).append({
-                    "lang": corrupt_lang,
-                    "file": lang_file_map.get(corrupt_lang, f"README.{corrupt_lang}.md"),
+                    "lang": r["lang"],
+                    "file": lang_file_map.get(r["lang"], f"README.{r['lang']}.md"),
                     "failedChecks": ["no_write_receipt"],
                 })
+        summary_path.write_text(json.dumps(summary_json, indent=2) + "\n", encoding="utf-8")
+
+    # Test-only: mark one language as lost-span in the summary (translate-all's own gate verdict), the shape of
+    # the window polyglot-rb-d refusal, where the model returned a file for every language and its summary
+    # still counted the lost-span ones as succeeded.
+    ls_lang = os.environ.get("POLYGLOT_TEST_LOST_SPAN_LANG", "").strip()
+    ls_slot = os.environ.get("POLYGLOT_TEST_LOST_SPAN_SLOT", "").strip()
+    if ls_lang and (not ls_slot or ls_slot == slot.name) and summary_json.get("results"):
+        for r in summary_json["results"]:
+            if r.get("lang") == ls_lang:
+                r["status"] = "lost-span"
+                r["lostSpans"] = 1
+        summary_json.setdefault("lostSpans", []).append(
+            {"lang": ls_lang, "segment": "[docs](docs/a.md)", "span": "docs/a.md", "kind": "link", "found": "(no links)"})
         summary_path.write_text(json.dumps(summary_json, indent=2) + "\n", encoding="utf-8")
 
     drop_lang = os.environ.get("POLYGLOT_TEST_DROP_NAV_BAR_LANG", "").strip()
@@ -1791,7 +1917,9 @@ for slot in slots:
         txt = _re.sub(rf'<a href="{_re.escape(drop_file)}">[^<]*</a>\s*\|\s*', "", txt)
         src_readme.write_text(txt, encoding="utf-8")
 
-    # Adopt #67's receipt & structural verification rule + #65 nav-bar check in the Colab lane
+    # Adopt #67's receipt & structural verification rule + #65 nav-bar check in the Colab lane. The script only
+    # reports (verified languages, unverified languages with their failed checks, the nav bar result); the
+    # caller below decides what is refused, so one bad language never stops the rest.
     verify_script = (
         "import { readFileSync } from 'node:fs';"
         "import { resolve } from 'node:path';"
@@ -1803,7 +1931,7 @@ for slot in slots:
         "const results = Array.isArray(summary.results) ? summary.results : [];"
         "const verifiedThisRun = [];"
         "const rejectedCodes = [];"
-        "const unverifiedDetails = [];"
+        "const unverified = [];"
         "for (const lang of TRANSLATE_ALL_LANGUAGES) {"
         "  const r = results.find((x) => x.lang === lang.code);"
         "  const fname = `README.${lang.file ?? lang.code}.md`;"
@@ -1811,23 +1939,22 @@ for slot in slots:
         "  if (!r || (r.status !== 'ok' && r.status !== 'done-after-silence')) {"
         "    const checks = (r && Array.isArray(r.failedChecks) && r.failedChecks.length) ? r.failedChecks : [r ? r.status : 'missing_result'];"
         "    if (checks.includes('receipt_sha_mismatch')) rejectedCodes.push(lang.code);"
-        "    unverifiedDetails.push(`${lang.code}(${fname}: ${checks.join(',')})`);"
+        "    unverified.push({ lang: lang.code, file: fname, checks });"
         "    continue;"
         "  }"
         "  let cand = '';"
-        "  try { cand = readFileSync(fpath, 'utf-8'); } catch { unverifiedDetails.push(`${lang.code}(${fname}: missing_file)`); continue; }"
+        "  try { cand = readFileSync(fpath, 'utf-8'); } catch { unverified.push({ lang: lang.code, file: fname, checks: ['missing_file'] }); continue; }"
         "  const mdCheck = verifyTranslatedMarkdown(preSrc, cand);"
         "  if (!mdCheck.verified) {"
-        "    unverifiedDetails.push(`${lang.code}(${fname}: ${mdCheck.failedChecks.join(',')})`);"
+        "    unverified.push({ lang: lang.code, file: fname, checks: mdCheck.failedChecks });"
         "    continue;"
         "  }"
         "  verifiedThisRun.push(lang.code);"
         "}"
         "const navBarLangCodes = resolveNavBarLangCodes(slotDir, preSrc, verifiedThisRun, TRANSLATE_ALL_LANGUAGES, rejectedCodes);"
         "const navRes = checkSourceNavBar(postSrc, navBarLangCodes, TRANSLATE_ALL_LANGUAGES);"
-        "console.log(JSON.stringify({ verifiedThisRun, navBarLangCodes: Array.from(navBarLangCodes), navBarCheck: navRes, unverifiedDetails }));"
-        "if (!navRes.ok) { console.error(`REFUSED: ${navRes.refusalCode}: ${navRes.why}`); process.exit(1); }"
-        "if (unverifiedDetails.length > 0) { console.error(`REFUSED: TRANSLATION_UNVERIFIED: unverified translation(s): ${unverifiedDetails.join('; ')}`); process.exit(1); }"
+        "const unverifiedDetails = unverified.map((u) => `${u.lang}(${u.file}: ${u.checks.join(',')})`);"
+        "console.log(JSON.stringify({ verifiedThisRun, navBarLangCodes: Array.from(navBarLangCodes), navBarCheck: navRes, unverified, unverifiedDetails }));"
     )
     nav_check_proc = subprocess.run(
         [
@@ -1847,35 +1974,94 @@ for slot in slots:
         errors="replace",
         check=False,
     )
-    if nav_check_proc.returncode != 0:
-        ref_m = _re.search(r"^REFUSED:\s+([A-Z0-9_]+):\s*(.*)$", nav_check_proc.stderr or "", _re.M)
-        if ref_m:
-            _fail_translate(ref_m.group(1), ref_m.group(2).strip())
-        _fail_translate(
-            "TRANSLATION_FAILED",
-            f"verification script failed (rc={nav_check_proc.returncode}) for {slot.name}",
-            nav_check_proc.stderr or "",
-        )
+    verify_payload = None
+    if nav_check_proc.returncode == 0:
+        try:
+            verify_payload = json.loads(nav_check_proc.stdout.strip())
+        except ValueError:
+            verify_payload = None
+    if verify_payload is None:
+        vfail = f"verification script failed (rc={nav_check_proc.returncode}) for {slot.name}"
+        sys.stderr.write((nav_check_proc.stderr or "") + "\n")
+        row["refusal_code"] = "TRANSLATION_FAILED"
+        row["reason"] = vfail
+        for lc in langs:
+            row["refused"].append({"lang": lc, "file": lang_file_map[lc], "reasons": ["verification_script_failed"], "raw": _keep_raw(lc)})
+        _close_row({
+            "slug": slot.name, "input_sha256": input_sha, "status": "refused", "output_shas": {},
+            "verified_languages": [], "refused_languages": row["refused"], "refusal_code": "TRANSLATION_FAILED",
+            "reason": vfail, "total_elapsed_s": elapsed_s,
+        })
+        continue
 
-    if proc.returncode != 0:
-        _fail_translate("TRANSLATION_FAILED", f"translate-all.mjs exited {proc.returncode} for {slot.name}")
-
-    verify_payload = json.loads(nav_check_proc.stdout.strip())
-    dest_dir = staging_root if single_slot else (staging_root / slot.name)
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    nav_res = verify_payload["navBarCheck"]
+    verified_langs = list(verify_payload["verifiedThisRun"])
+    unverified_by_lang = {u["lang"]: u for u in verify_payload.get("unverified", [])}
+    refused_entries = []
+    passed_langs = []
+    if not nav_res.get("ok"):
+        # The source README's nav bar is incomplete: this README is refused as a whole (its own summary and
+        # raw outputs are kept), and the other READMEs carry on.
+        nav_code = nav_res.get("refusalCode") or "NAV_BAR_INCOMPLETE"
+        nav_why = nav_res.get("why") or "source README nav bar incomplete"
+        for lc in langs:
+            u = unverified_by_lang.get(lc)
+            reasons = list(u["checks"]) if u else [f"held_back:{nav_code}"]
+            refused_entries.append({"lang": lc, "file": lang_file_map[lc], "reasons": reasons, "raw": _keep_raw(lc)})
+        row["refusal_code"] = nav_code
+        row["reason"] = nav_why
+    else:
+        for lc in langs:
+            u = unverified_by_lang.get(lc)
+            if u:
+                refused_entries.append({"lang": lc, "file": lang_file_map[lc], "reasons": list(u["checks"]), "raw": _keep_raw(lc)})
+            elif lc in verified_langs:
+                passed_langs.append(lc)
+        if refused_entries:
+            row["refusal_code"] = "TRANSLATION_UNVERIFIED"
+            row["reason"] = "unverified translation(s): " + "; ".join(
+                f"{e['lang']}({e['file']}: {','.join(e['reasons'])})" for e in refused_entries)
 
     output_shas = {}
-    copied_files = ["README.md"] + [lang_file_map[lc] for lc in verify_payload["verifiedThisRun"]]
-    for fname in copied_files:
-        fp = slot / fname
-        if not fp.is_file():
-            _fail_translate("TRANSLATION_FAILED", f"expected output file {fname} missing for {slot.name}")
-        dst_fp = dest_dir / fname
-        shutil.copy2(fp, dst_fp)
-        f_hex = hashlib.sha256(dst_fp.read_bytes()).hexdigest()
-        output_shas[fname] = f"sha256:{f_hex}"
-        rel_out = dst_fp.relative_to(staging_root).as_posix()
-        all_sha_entries.append((f_hex, rel_out))
+    dest_dir = staging_root if single_slot else (staging_root / slot.name)
+    if passed_langs:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        # The source README (with its nav bar) is staged with the passed languages.
+        for fname in ["README.md"] + [lang_file_map[lc] for lc in list(passed_langs)]:
+            fp = slot / fname
+            if not fp.is_file():
+                lc_missing = next((lc for lc in passed_langs if lang_file_map[lc] == fname), None)
+                if lc_missing:
+                    passed_langs.remove(lc_missing)
+                    refused_entries.append({"lang": lc_missing, "file": fname, "reasons": ["missing_file"], "raw": None})
+                    row["refusal_code"] = row["refusal_code"] or "TRANSLATION_UNVERIFIED"
+                    row["reason"] = (row["reason"] or "unverified translation(s): ") + f" {lc_missing}({fname}: missing_file)"
+                continue
+            dst_fp = dest_dir / fname
+            shutil.copy2(fp, dst_fp)
+            f_hex = hashlib.sha256(dst_fp.read_bytes()).hexdigest()
+            output_shas[fname] = f"sha256:{f_hex}"
+            all_sha_entries.append((f_hex, dst_fp.relative_to(staging_root).as_posix()))
+
+    # The summary counts what PASSED every gate (receipt, structure, lost spans, untranslated prose, nav bar),
+    # not what the model returned: the translate-all summary said 7/7 succeeded for a README with 12 lost spans.
+    gated = dict(summary_json)
+    gated["modelReturned"] = summary_json.get("modelReturned", summary_json.get("succeeded"))
+    gated["succeeded"] = len(passed_langs)
+    gated["refusedLanguages"] = len(refused_entries)
+    gated["gate"] = {
+        "counted": "languages that passed every gate: written receipt, structure, protected spans, untranslated prose, nav bar",
+        "passed": passed_langs,
+        "refused": refused_entries,
+        "navBarCheck": nav_res,
+    }
+    summary_path.write_text(json.dumps(gated, indent=2) + "\n", encoding="utf-8")
+
+    nav_lists_refused = []
+    staged_readme = dest_dir / "README.md"
+    if passed_langs and staged_readme.is_file():
+        staged_text = staged_readme.read_text(encoding="utf-8", errors="replace")
+        nav_lists_refused = [e["lang"] for e in refused_entries if e["file"] in staged_text]
 
     per_lang_status = {}
     per_lang_timings = {}
@@ -1885,26 +2071,35 @@ for slot in slots:
             per_lang_status[lc] = r.get("status", "ok")
             per_lang_timings[lc] = float(r.get("time", 0.0))
 
-    readme_manifests.append({
+    row["passed"] = list(passed_langs)
+    row["refused"] = refused_entries
+    _close_row({
         "slug": slot.name,
         "input_sha256": input_sha,
+        "status": "ok" if not refused_entries else ("partial" if passed_langs else "refused"),
         "output_shas": output_shas,
-        "verified_languages": verify_payload["verifiedThisRun"],
+        "verified_languages": passed_langs,
+        "refused_languages": refused_entries,
+        "refusal_code": row["refusal_code"],
+        "reason": row["reason"],
+        "nav_bar_lists_refused_languages": nav_lists_refused,
         "done_after_silence": summary_json.get("doneAfterSilence", []),
         "written_unverified": summary_json.get("writtenUnverified", []),
         "per_language_status": per_lang_status,
         "per_language_timings_s": per_lang_timings,
         "total_elapsed_s": elapsed_s,
-        "nav_bar_check": verify_payload["navBarCheck"],
+        "nav_bar_check": nav_res,
     })
+    # Test-only: die right after the first README is staged, to prove a failure exit still returns it.
+    if os.environ.get("POLYGLOT_TEST_FAIL_AFTER_FIRST_STAGED", "").strip() == "1" and passed_langs:
+        _fail_translate("TRANSLATION_FAILED", f"test fault injected after {slot.name} was staged")
 
-if outputs_root.exists():
-    shutil.rmtree(outputs_root)
-staging_root.rename(outputs_root)
-
-sha_lines = [f"{h}  {rel}\n" for h, rel in sorted(all_sha_entries, key=lambda x: x[1])]
-(outputs_root / "SHA256SUMS").write_text("".join(sha_lines), encoding="utf-8", newline="\n")
-(out_root / "SHA256SUMS").write_text("".join(sha_lines), encoding="utf-8", newline="\n")
+total_passed = sum(len(r["passed"]) for r in readme_results)
+total_refused = sum(len(r["refused"]) for r in readme_results)
+window_status = "failed" if total_passed == 0 else ("ok" if total_refused == 0 else "partial")
+window_why = None
+if total_refused:
+    window_why = "; ".join(f"{r['slug']}: {r['reason']}" for r in readme_results if r["refused"])
 
 model_digest = (out_root / "model_digest.txt").read_text(encoding="utf-8").strip() if (out_root / "model_digest.txt").is_file() else ""
 ver_data = json.loads((out_root / "ollama_version.json").read_text(encoding="utf-8")) if (out_root / "ollama_version.json").is_file() else {}
@@ -1929,8 +2124,31 @@ manifest = {
     "zstd_version": zstd_ver,
     "languages": langs,
     "fit_probe": fit_probe,
+    "window_status": window_status,
     "readmes": readme_manifests,
 }
+(out_root / "readme_results.json").write_text(
+    json.dumps({"complete": True, "window_status": window_status, "readmes": readme_results}, indent=2) + "\n",
+    encoding="utf-8", newline="\n")
+
+if total_passed == 0:
+    (out_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
+    vm_fail = {
+        "remote_step": "translate", "window_status": "failed", "readme_results": readme_results,
+        "translated_readmes": 0, "model": model_name, "repo_commit": repo_commit,
+    }
+    (out_root / "vm_window.json").write_text(json.dumps(vm_fail, indent=2) + "\n", encoding="utf-8", newline="\n")
+    first_code = next((r["refusal_code"] for r in readme_results if r["refusal_code"]), "TRANSLATION_FAILED")
+    _fail_translate(first_code, window_why or "no README passed its gates")
+
+if outputs_root.exists():
+    shutil.rmtree(outputs_root)
+staging_root.rename(outputs_root)
+
+sha_lines = [f"{h}  {rel}\n" for h, rel in sorted(all_sha_entries, key=lambda x: x[1])]
+(outputs_root / "SHA256SUMS").write_text("".join(sha_lines), encoding="utf-8", newline="\n")
+(out_root / "SHA256SUMS").write_text("".join(sha_lines), encoding="utf-8", newline="\n")
+
 (outputs_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
 (out_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
 
@@ -1943,8 +2161,14 @@ vm_win = {
     "ollama_version": ver_data.get("version", ""),
     "fit_probe": fit_probe,
     "remote_step": "translate",
-    "translated_readmes": len(readme_manifests),
+    "translated_readmes": sum(1 for r in readme_results if r["passed"]),
+    "window_status": window_status,
+    "languages_passed": total_passed,
+    "languages_refused": total_refused,
+    "readme_results": readme_results,
 }
+if window_why:
+    vm_win["window_why"] = window_why
 if zstd_ver:
     vm_win["zstd_version"] = zstd_ver
 if node_ver:
@@ -2004,47 +2228,6 @@ BUNDLE_LOCAL="${OUT_DIR}/polyglot_translate_bundle.tar.gz"
 colab_download_checked "${SESSION}" /content/polyglot_translate_bundle.tar.gz "${BUNDLE_LOCAL}" "${OUT_DIR}"
 EXEC_IN_FLIGHT=0
 
-"${PY_BIN}" - "${BUNDLE_LOCAL}" "${OUT_DIR}" << 'UNPACKPYEOF'
-import shutil
-import sys
-import tarfile
-from pathlib import Path
-
-bundle = Path(sys.argv[1])
-out_dir = Path(sys.argv[2])
-extract_dir = out_dir / "bundle_extracted"
-extract_dir.mkdir(parents=True, exist_ok=True)
-
-with tarfile.open(bundle, "r:gz") as tf:
-    try:
-        tf.extractall(extract_dir, filter="data")
-    except TypeError:
-        tf.extractall(extract_dir)
-
-for name in (
-    "manifest.json",
-    "SHA256SUMS",
-    "fit_probe.json",
-    "vm_window.json",
-    "remote_failure.json",
-    "remote_step.txt",
-    "zstd_version.txt",
-    "node_version.txt",
-):
-    src = extract_dir / name
-    if src.is_file():
-        shutil.copy2(src, out_dir / name)
-
-trans_dir = extract_dir / "translations"
-if trans_dir.is_dir():
-    for item in trans_dir.iterdir():
-        dst = out_dir / item.name
-        if item.is_dir():
-            if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(item, dst)
-        elif item.is_file():
-            shutil.copy2(item, dst)
-UNPACKPYEOF
+translate_unpack_bundle "${BUNDLE_LOCAL}" "${OUT_DIR}"
 
 colab_scrub_all_logs "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}"
