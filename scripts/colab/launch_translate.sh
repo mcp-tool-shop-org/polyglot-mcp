@@ -38,16 +38,16 @@ PINNED_TRANSLATOR_CONTEXT="4096"
 PINNED_MODEL_PEAK_VRAM_MIB="22547"
 PINNED_VRAM_HEADROOM_MIB="1024"
 
-PINNED_LAUNCH_GUARDS_SHA="0c8f9cc805bccf5ac32b65386c8072ca40e0127fc2ae235a350be27be0623d3e"
+PINNED_LAUNCH_GUARDS_SHA="905b6525c4c79e19f5cab590170b8f5ffc8f9d2bf857109c538dde547eb776fa"
 PINNED_REMOTE_RUNNER_SHA="834e669de7f611c8d3b0e24dcd65c568c0d97a2bafb6080b235ea9a22b4f99d9"
-PINNED_COLAB_WINDOW_SHA="4ad36d141e569209b5d1e64b5369559dc4bc02d1f4d603be1aadc074cfd23164"
+PINNED_COLAB_WINDOW_SHA="671886261b0ce5a60daca412084565ec6aca7560f7c39ea45aa5cb9780575eb7"
 PINNED_BUNDLE_NOW_SHA="70b98ec2f6b363d3e94b7bc8283c74cee640c5229308e69c7dbf6a9482f7c536"
 PINNED_COMPARE_SHA="1ebd61b21583133d8baa38acb333dac2b41f19dfb19df435a19e77bf8a3cda25"
 PINNED_TRANSLATE_ALL_SHA="078d13e6ecd54f111eadfaa47c3d6bbc49566b285e2e5031a1bef05829e4194a"
 PINNED_TRANSLATE_README_SHA="6afff1e87a87c6debce94b203e068984646b61aba68d2e96615d30f3f12c4078"
 PINNED_PACKAGE_JSON_SHA="914dcc28c71e43ef024c9fbc8c79e8d9a437a0f1aca77d32c5e899b20cb836fe"
 PINNED_PACKAGE_LOCK_SHA="712e9c93680b481daff0eaada8ec509da4ca025df5959561e6b3301174c00b22"
-PINNED_SELF_SHA="5fb47256d06c5cfb0e4e03895e490f4e5af6f1e2731a59feda92d100854421ba"
+PINNED_SELF_SHA="5ede592a84abe1fd40b815eb52272b6a6d8e6a77c21e37ac1106fa7b12d13e6c"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -747,6 +747,9 @@ translate_download_bundle_after_failure() {
 
 cleanup_on_exit() {
   local rc=$?
+  # Release the open lock first if an exit or signal arrived while it was held, so no cleanup child
+  # inherits fd 9 and keeps the queue blocked after this window is gone.
+  colab_release_open_lock_if_held "${OUT_DIR}" "${SESSION} on_exit rc=${rc}" 2>/dev/null || true
   colab_enter_cleanup_trap "${OUT_DIR}"
   colab_kill_tracked_pids "${OUT_DIR}" "${WALL_WATCHER_PID}"
   if [ -n "${EXEC_PID}" ]; then

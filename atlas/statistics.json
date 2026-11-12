@@ -99,7 +99,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "scripts",
-      "qualifyingSourceCommits": 9,
+      "qualifyingSourceCommits": 11,
       "rebaseline": null
     },
     {
@@ -133,7 +133,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "src",
-      "qualifyingSourceCommits": 14,
+      "qualifyingSourceCommits": 17,
       "rebaseline": null
     }
   ],
@@ -146,8 +146,8 @@
         "path": ".github/dependabot.yml"
       },
       {
-        "commits": 13,
-        "lines": 378,
+        "commits": 14,
+        "lines": 380,
         "path": ".github/workflows/ci.yml"
       },
       {
@@ -171,8 +171,8 @@
         "path": ".polyglot-pins.json"
       },
       {
-        "commits": 13,
-        "lines": 148,
+        "commits": 12,
+        "lines": 138,
         "path": "CHANGELOG.md"
       },
       {
@@ -221,8 +221,8 @@
         "path": "SECURITY.md"
       },
       {
-        "commits": 10,
-        "lines": 493,
+        "commits": 13,
+        "lines": 565,
         "path": "atlas/README.md"
       },
       {
@@ -231,18 +231,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 10,
-        "lines": 1873,
+        "commits": 13,
+        "lines": 2055,
         "path": "atlas/page.json"
       },
       {
-        "commits": 10,
-        "lines": 3701,
+        "commits": 13,
+        "lines": 3973,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 10,
-        "lines": 14640,
+        "commits": 13,
+        "lines": 14905,
         "path": "atlas/structure.json"
       },
       {
@@ -261,23 +261,23 @@
         "path": "docs/colab-rung1-request.md"
       },
       {
-        "commits": 1,
-        "lines": 162,
+        "commits": 2,
+        "lines": 208,
         "path": "docs/colab-translations.md"
       },
       {
-        "commits": 19,
-        "lines": 1832,
+        "commits": 18,
+        "lines": 1822,
         "path": "package-lock.json"
       },
       {
-        "commits": 14,
-        "lines": 70,
+        "commits": 12,
+        "lines": 65,
         "path": "package.json"
       },
       {
-        "commits": 1,
-        "lines": 2915,
+        "commits": 4,
+        "lines": 3313,
         "path": "scripts/colab/colab_window.sh"
       },
       {
@@ -286,13 +286,13 @@
         "path": "scripts/colab/compare_translations.py"
       },
       {
-        "commits": 1,
-        "lines": 1309,
+        "commits": 2,
+        "lines": 1339,
         "path": "scripts/colab/launch_guards.py"
       },
       {
-        "commits": 1,
-        "lines": 1485,
+        "commits": 4,
+        "lines": 2321,
         "path": "scripts/colab/launch_translate.sh"
       },
       {
@@ -301,8 +301,8 @@
         "path": "scripts/colab/remote_runner.py"
       },
       {
-        "commits": 1,
-        "lines": 97,
+        "commits": 2,
+        "lines": 133,
         "path": "scripts/colab/translate_bundle_now.py"
       },
       {
@@ -376,13 +376,13 @@
         "path": "src/cache.concurrency.test.ts"
       },
       {
-        "commits": 3,
-        "lines": 496,
+        "commits": 2,
+        "lines": 388,
         "path": "src/cache.test.ts"
       },
       {
-        "commits": 5,
-        "lines": 748,
+        "commits": 4,
+        "lines": 692,
         "path": "src/cache.ts"
       },
       {
@@ -396,8 +396,8 @@
         "path": "src/codeSpans.ts"
       },
       {
-        "commits": 1,
-        "lines": 2538,
+        "commits": 5,
+        "lines": 4148,
         "path": "src/colabLane.test.ts"
       },
       {
@@ -501,8 +501,8 @@
         "path": "src/ollama.test.ts"
       },
       {
-        "commits": 3,
-        "lines": 51,
+        "commits": 2,
+        "lines": 47,
         "path": "src/ollama.ts"
       },
       {
@@ -631,24 +631,31 @@
     "level": "low",
     "reason": "fewer than 25 source files reach 10 revisions in the window"
   },
-  "generatedAt": "2026-11-11T22:27:35.909Z",
+  "generatedAt": "2026-11-12T18:29:09.783Z",
   "generatedFrom": {
-    "commit": "4e8216ecee1a01d82d95fa4f34f8d840ea052ef9"
+    "commit": "cfe76331d42aff234d6a6d66455256c4217f548d"
   },
   "pairs": [
     {
       "a": "CHANGELOG.md",
       "b": "README.md",
-      "either": 13,
+      "either": 12,
       "shared": 7,
-      "strength": 0.538462
+      "strength": 0.583333
+    },
+    {
+      "a": "CHANGELOG.md",
+      "b": "scripts/translate-readme.mjs",
+      "either": 12,
+      "shared": 6,
+      "strength": 0.5
     },
     {
       "a": "CHANGELOG.md",
       "b": "src/translateMarkdown.ts",
-      "either": 13,
+      "either": 12,
       "shared": 7,
-      "strength": 0.538462
+      "strength": 0.583333
     },
     {
       "a": "README.es.md",
@@ -800,51 +807,51 @@
     {
       "a": "atlas/README.md",
       "b": "atlas/page.json",
-      "either": 6,
-      "shared": 6,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/README.md",
       "b": "atlas/statistics.json",
-      "either": 6,
-      "shared": 6,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/README.md",
       "b": "atlas/structure.json",
-      "either": 6,
-      "shared": 6,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/page.json",
       "b": "atlas/statistics.json",
-      "either": 6,
-      "shared": 6,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/page.json",
       "b": "atlas/structure.json",
-      "either": 6,
-      "shared": 6,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "atlas/statistics.json",
       "b": "atlas/structure.json",
-      "either": 6,
-      "shared": 6,
+      "either": 9,
+      "shared": 9,
       "strength": 1
     },
     {
       "a": "package-lock.json",
       "b": "package.json",
-      "either": 16,
-      "shared": 11,
-      "strength": 0.6875
+      "either": 14,
+      "shared": 10,
+      "strength": 0.714286
     },
     {
       "a": "scripts/translate-all.mjs",
@@ -871,16 +878,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "revision-depth",
-    "headDate": "2026-11-10T04:00:26-05:00",
+    "headDate": "2026-11-12T13:17:02-05:00",
     "inScopeFiles": 177,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 39,
+    "qualifyingCommits": 42,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-05-14T09:00:26.000Z",
+    "since": "2026-05-16T18:17:02.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

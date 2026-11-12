@@ -369,6 +369,22 @@ if subcmd == "usage":
     rate = os.environ.get("FAKE_COLAB_POST_OPEN_RATE_STR", default_post_rate) if has_opened else os.environ.get("FAKE_COLAB_PRE_OPEN_RATE_STR", "0.00/hr")
     bal = os.environ.get("FAKE_COLAB_BALANCE_POST_OPEN_STR", os.environ.get("FAKE_COLAB_BALANCE_STR", "99.50")) if has_opened else os.environ.get("FAKE_COLAB_BALANCE_STR", "99.50")
     assign = "1" if opened else "0"
+    # Parallel-window reproducer (2026-11-12): an account shared with neighbour sessions. Usage is
+    # account-wide: every open session, ours plus FAKE_COLAB_NEIGHBOURS neighbours, adds
+    # FAKE_COLAB_PER_SESSION_RATE. FAKE_COLAB_NEIGHBOURS_WHEN says when the neighbours appear (and stay):
+    #   "lock_held"  - once this window holds the open lock (they opened while it waited for the lock);
+    #   "after_open" - once this window's colab new has run (they opened outside its lock);
+    #   "external"   - only when the test writes neighbours_on.txt itself.
+    if os.environ.get("FAKE_COLAB_PER_SESSION_RATE"):
+        on_f = state_dir / "neighbours_on.txt"
+        when = os.environ.get("FAKE_COLAB_NEIGHBOURS_WHEN", "lock_held")
+        held_marker = Path(os.environ.get("COLAB_OPEN_LOCK", str(state_dir / "colab-window-open.lock")) + ".held")
+        if not on_f.exists() and ((when == "lock_held" and held_marker.exists()) or (when == "after_open" and opened)):
+            on_f.write_text("1", encoding="utf-8")
+        neighbours = int(os.environ.get("FAKE_COLAB_NEIGHBOURS", "0")) if on_f.exists() else 0
+        count = neighbours + len(opened)
+        rate = f"{float(os.environ['FAKE_COLAB_PER_SESSION_RATE']) * count:.2f}/hr"
+        assign = str(count)
     print(f"Current balance: {bal} compute units")
     print(f"Usage rate: {rate}")
     print(f"Active assignments: {assign}")
@@ -1685,7 +1701,8 @@ describe("polyglot-mcp Colab translation lane", () => {
       expect(win1.spend_ccu).toBeCloseTo(expectedFloor, 4);
       expect(readFileSync(join(state1, "stops.log"), "utf-8")).toContain("STOP -s polyglot-sdlab72-floor");
 
-      // Case 2: Balance drop (99.50 -> 98.00 = 1.50 CCU) exceeds rate * elapsed / 3600 -> spend_ccu == 1.50
+      // Case 2: Balance drop (99.50 -> 98.00 = 1.50 CCU) on a GPU window: since the parallel-window fix the
+      // account-wide drop is recorded as account_balance_drop and spend_ccu = window rate x elapsed.
       const outDir2 = join(tmp, "out2");
       const { stateDir: state2, env: env2 } = makeFakeColabEnv(join(tmp, "case2"), {
         FAKE_COLAB_FAIL_UPLOAD: "1",
@@ -1717,13 +1734,170 @@ describe("polyglot-mcp Colab translation lane", () => {
       const win2 = JSON.parse(readFileSync(join(outDir2, "window.json"), "utf-8"));
       expect(win2.start_balance).toBe(99.5);
       expect(win2.end_balance).toBe(98.0);
-      expect(win2.spend_ccu).toBe(1.5);
+      // Parallel-window fix (2026-11-12): the balance is account-wide, so a GPU window's spend is its own
+      // stable window rate x elapsed; the 1.50 balance drop is kept only as a record.
+      expect(win2.spend_basis).toBe("window_rate_x_elapsed");
+      expect(win2.account_balance_drop).toBe(1.5);
+      expect(win2.spend_ccu).toBeCloseTo(Number(((1.42 * win2.elapsed_s) / 3600).toFixed(6)), 4);
       expect(readFileSync(join(state2, "stops.log"), "utf-8")).toContain("STOP -s polyglot-sdlab72-drop");
     } finally {
       ollamaState.digest = PINNED_DIGEST;
       rmSync(tmp, { recursive: true, force: true });
     }
   }, 120_000);
+
+  // Parallel windows (2026-11-12, BL 107-108): w1 and w2 opened beside each other read the ACCOUNT rate
+  // (30.15 and 20.10/h for three G4s at 10.05) as their own and refused RATE_ABOVE_MAX.
+  const parallelArgs = (srcReadme: string, outDir: string, session: string) => [
+    "--readme", srcReadme, "--card", "G4", "--shape", "standard", "--max-rate", "10.5",
+    "--cap", "12.0", "--out-dir", outDir, "--session", session,
+  ];
+
+  it("(parallel.1) neighbours that opened while this window waited for the open lock are in its pre-open baseline: window rate 10.05, not the account's 30.15", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-par1-"));
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { stateDir, env } = makeFakeColabEnv(tmp, {
+        FAKE_COLAB_FAIL_UPLOAD: "1",
+        FAKE_COLAB_PER_SESSION_RATE: "10.05",
+        FAKE_COLAB_NEIGHBOURS: "2",
+        FAKE_COLAB_NEIGHBOURS_WHEN: "external",
+      });
+      // The real race: this window takes its launch-time usage read (no neighbours), then waits on the open
+      // lock while two neighbours open (a holder process owns the lock, turns the neighbours on, then
+      // releases). The old code priced from the stale launch-time read (0.00) and refused RATE_ABOVE_MAX
+      // at 30.15/h; the fix re-reads under the lock and sees 20.10 with 2 assignments.
+      const lockPath = env.COLAB_OPEN_LOCK;
+      const holdingFlag = join(stateDir, "holder_holding.txt");
+      const holderPy = [
+        "import fcntl, os, sys, time",
+        "lock, flag, on = sys.argv[1], sys.argv[2], sys.argv[3]",
+        "fh = open(lock, 'a')",
+        "fcntl.flock(fh, fcntl.LOCK_EX)",
+        "os.makedirs(lock + '.lockdir', exist_ok=True)",
+        "open(flag, 'w').write('1')",
+        "calls = sys.argv[4]",
+        "t0 = time.time()",
+        "while time.time() - t0 < 90:",
+        "    try:",
+        "        if 'CALL usage' in open(calls, encoding='utf-8').read():",
+        "            break",
+        "    except OSError:",
+        "        pass",
+        "    time.sleep(0.1)",
+        "time.sleep(1.5)",
+        "open(on, 'w').write('1')",
+        "os.rmdir(lock + '.lockdir')",
+        "fcntl.flock(fh, fcntl.LOCK_UN)",
+      ].join("\n");
+      // The holder turns the neighbours on only after the launcher's launch-time usage read (first "CALL usage"
+      // in calls.log), while the launcher waits on the lock: the race is reproduced however slow the runner is.
+      const holder = spawn(pyBin, [
+        "-c",
+        holderPy,
+        lockPath,
+        holdingFlag,
+        join(stateDir, "neighbours_on.txt"),
+        join(stateDir, "calls.log"),
+      ]);
+      const t0 = Date.now();
+      while (!existsSync(holdingFlag) && Date.now() - t0 < 10_000) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(existsSync(holdingFlag)).toBe(true);
+      await runLauncher(parallelArgs(srcReadme, outDir, "polyglot-par1"), env);
+      await new Promise<void>((r) => (holder.exitCode !== null ? r() : holder.on("exit", () => r())));
+      const rc = JSON.parse(readFileSync(join(outDir, "rate_check.json"), "utf-8"));
+      expect(rc.decision).toBe("ok");
+      expect(rc.window_rate).toBeCloseTo(10.05, 2);
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).not.toBe("RATE_ABOVE_MAX");
+      expect(win.account_shared).toBe(true);
+      expect(win.pre_open_assignments).toBe(2);
+      expect(win.spend_basis).toBe("window_rate_x_elapsed");
+      const guards = readFileSync(join(outDir, "guards.log"), "utf-8");
+      expect(guards).toContain("PRE_OPEN_UNDER_LOCK rate=20.1 assignments=2");
+      // The launch-time read (the one the old code priced from) saw no neighbours: the race was real.
+      const usage = readFileSync(join(outDir, "usage.log"), "utf-8").split("\n");
+      expect(usage.slice(0, 3)).toEqual(expect.arrayContaining(["Usage rate: 0.00/hr", "Active assignments: 0"]));
+      expect(guards).toContain("OPEN_LOCK_RELEASED session=polyglot-par1");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(parallel.2) neighbours that opened outside this window's lock (after its pre-open read) make the rate unattributable: RATE_UNATTRIBUTABLE, never a guessed rate", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-par2-"));
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { stateDir, env } = makeFakeColabEnv(tmp, {
+        FAKE_COLAB_PER_SESSION_RATE: "10.05",
+        FAKE_COLAB_NEIGHBOURS: "2",
+        FAKE_COLAB_NEIGHBOURS_WHEN: "after_open",
+      });
+      const res = await runLauncher(parallelArgs(srcReadme, outDir, "polyglot-par2"), env);
+      expect(res.code).not.toBe(0);
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).toBe("RATE_UNATTRIBUTABLE");
+      expect(win.why).toBeTruthy();
+      expect(readFileSync(join(stateDir, "stops.log"), "utf-8")).toContain("STOP -s polyglot-par2");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(parallel.3) a neighbour's spend settling on the shared balance mid-window never trips this GPU window's cap", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-par3-"));
+    try {
+      const srcReadme = join(tmp, "README.md");
+      writeFileSync(srcReadme, SAMPLE_README, "utf-8");
+      const outDir = join(tmp, "out");
+      const { env } = makeFakeColabEnv(tmp, {
+        FAKE_COLAB_FAIL_UPLOAD: "1",
+        FAKE_COLAB_BALANCE_STR: "99.50",
+        FAKE_COLAB_BALANCE_POST_OPEN_STR: "70.00",
+        FAKE_COLAB_POST_OPEN_RATE_STR: "10.05/hr",
+      });
+      await runLauncher(parallelArgs(srcReadme, outDir, "polyglot-par3"), env);
+      const win = JSON.parse(readFileSync(join(outDir, "window.json"), "utf-8"));
+      expect(win.refusal_code).not.toBe("CAP_GUARD_TRIPPED");
+      expect(win.account_balance_drop).toBe(29.5);
+      expect(win.spend_basis).toBe("window_rate_x_elapsed");
+      expect(win.spend_ccu).toBeLessThan(1.0);
+      expect(existsSync(join(outDir, "account_balance.json"))).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("(parallel.4) update_window_rate: registration lag at the pre-open count is not judged; +1 is attributed; +3 is unattributable; any other assignment marks the account shared", () => {
+    const script = [
+      "import json, sys",
+      `sys.path.insert(0, ${JSON.stringify(colabDir.replace(/\\/g, "/"))})`,
+      "import launch_guards as lg",
+      "def run(reads, pre_rate, pre_n):",
+      "    st = {}",
+      "    for i, (acc, n) in enumerate(reads):",
+      "        st = lg.update_window_rate(st, account_rate=acc, pre_open_rate=pre_rate, at='t', epoch=10.0 * i, assignments=n, pre_open_assignments=pre_n)",
+      "    return st",
+      "a = run([(20.1, 2), (30.15, 3), (30.15, 3)], 20.1, 2)",
+      "b = run([(30.15, 3), (30.15, 3)], 0.0, 0)",
+      "c = run([(10.05, 1), (10.05, 1)], 0.0, 0)",
+      "print(json.dumps({'a': [a.get('best_stable'), a['readings'][0].get('not_registered'), a.get('shared_account'), lg.window_rate_decision(a, 10.5)],",
+      "                  'b': [b.get('best_stable'), lg.window_rate_decision(b, 10.5)],",
+      "                  'c': [c.get('best_stable'), bool(c.get('shared_account')), lg.window_rate_decision(c, 10.5)]}))",
+    ].join("\n");
+    const r = spawnSync(pyBin, ["-c", script], { encoding: "utf-8" });
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.a).toEqual([10.05, true, true, "ok"]);
+    expect(out.b).toEqual([null, "unattributable"]);
+    expect(out.c).toEqual([10.05, false, "ok"]);
+  });
 
   it("(ask3.1) mutation 1 — launcher killed pre-trip: wall watcher polls liveness every ~1s, stops session on launcher_gone_pre_trip, and logs STOP", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "polyglot-colab-mut1-pretrip-"));
@@ -2016,15 +2190,19 @@ describe("polyglot-mcp Colab translation lane", () => {
       const guardsA = readFileSync(join(outDirA, "guards.log"), "utf-8");
       expect(guardsA).toContain("REFUSED: CAP_TOO_SMALL_FOR_CLEANUP:");
 
-      // 4b. Pre-exec cap trip between `colab new` and `colab exec`:
-      // cleanup_reserve = (1290 / 3600) * 2.50 = 0.895833 CCU; cap = 0.92, margin = 0.01 -> effective_trip = 0.014167 CCU.
-      // Post-open balance drops from 99.50 to 99.47 (spend = 0.03 > 0.014167), so colab_check_pre_exec_cap refuses
-      // BEFORE `colab exec` (zero `CALL exec`) and stops the session (`STOP -s` in stops.log).
+      // 4b. Pre-exec cap trip between `colab new` and `colab exec`, priced on RATE (parallel-window fix
+      // 2026-11-12: a GPU window's spend is rate x elapsed; the account balance is shared and never its spend).
+      // cleanup_reserve = (1290 / 3600) * 2.50 = 0.895833 CCU; cap = 0.906, margin = 0.01 -> effective_trip =
+      // 0.000167 CCU, about 0.24 s at the priced 2.50/h. The post-open rate read needs two counted reads at
+      // least SDLAB_TEST_RATE_READ_INTERVAL_S = 2 s apart, so colab_check_pre_exec_cap refuses during those
+      // polls, BEFORE `colab exec` (zero `CALL exec`), and stops the session. The balance does not move, so
+      // only the rate can have tripped it.
       const outDirB = join(tmp, "outB");
       const { stateDir: stateB, env: envB } = makeFakeColabEnv(join(tmp, "caseB"), {
         FAKE_COLAB_BALANCE_STR: "99.50",
-        FAKE_COLAB_BALANCE_POST_OPEN_STR: "99.47",
+        FAKE_COLAB_BALANCE_POST_OPEN_STR: "99.50",
         FAKE_COLAB_POST_OPEN_RATE_STR: "1.42/hr",
+        SDLAB_TEST_RATE_READ_INTERVAL_S: "2",
       });
       const resB = await runLauncher(
         [
@@ -2037,7 +2215,7 @@ describe("polyglot-mcp Colab translation lane", () => {
           "--max-rate",
           "2.50",
           "--cap",
-          "0.92",
+          "0.906",
           "--margin",
           "0.01",
           "--out-dir",
