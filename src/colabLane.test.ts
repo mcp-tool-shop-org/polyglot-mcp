@@ -2171,15 +2171,17 @@ describe("polyglot-mcp Colab translation lane", () => {
 
       // 4b. Pre-exec cap trip between `colab new` and `colab exec`, priced on RATE (parallel-window fix
       // 2026-11-12: a GPU window's spend is rate x elapsed; the account balance is shared and never its spend).
-      // cleanup_reserve = (1290 / 3600) * 2.50 = 0.895833 CCU; cap = 0.907, margin = 0.01 -> effective_trip =
-      // 0.001167 CCU, about 1.7 s at the priced 2.50/h, so colab_check_pre_exec_cap refuses during the post-open
-      // rate polls (which sleep 5 s), BEFORE `colab exec` (zero `CALL exec`), and stops the session. The balance
-      // does not move, so only the rate can have tripped it.
+      // cleanup_reserve = (1290 / 3600) * 2.50 = 0.895833 CCU; cap = 0.906, margin = 0.01 -> effective_trip =
+      // 0.000167 CCU, about 0.24 s at the priced 2.50/h. The post-open rate read needs two counted reads at
+      // least SDLAB_TEST_RATE_READ_INTERVAL_S = 2 s apart, so colab_check_pre_exec_cap refuses during those
+      // polls, BEFORE `colab exec` (zero `CALL exec`), and stops the session. The balance does not move, so
+      // only the rate can have tripped it.
       const outDirB = join(tmp, "outB");
       const { stateDir: stateB, env: envB } = makeFakeColabEnv(join(tmp, "caseB"), {
         FAKE_COLAB_BALANCE_STR: "99.50",
         FAKE_COLAB_BALANCE_POST_OPEN_STR: "99.50",
         FAKE_COLAB_POST_OPEN_RATE_STR: "1.42/hr",
+        SDLAB_TEST_RATE_READ_INTERVAL_S: "2",
       });
       const resB = await runLauncher(
         [
@@ -2192,7 +2194,7 @@ describe("polyglot-mcp Colab translation lane", () => {
           "--max-rate",
           "2.50",
           "--cap",
-          "0.907",
+          "0.906",
           "--margin",
           "0.01",
           "--out-dir",
