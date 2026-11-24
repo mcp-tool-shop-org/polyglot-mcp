@@ -755,18 +755,47 @@ export function splitSpanBounded(
   sentence: string,
   maxSpans: number,
 ): Array<{ piece: string; sep: string }> {
-  const placeholders = [...sentence.matchAll(new RegExp(PLACEHOLDER_PATTERN.source, "g"))]
+  const placeholders = [...sentence.matchAll(PLACEHOLDER_PATTERN)]
     .map((m) => [m.index!, m.index! + m[0].length] as [number, number]);
   if (placeholders.length <= maxSpans) return [{ piece: sentence, sep: "" }];
 
   const rawAtomic: Array<[number, number]> = [...linkRanges(sentence), ...placeholders];
-  for (const m of sentence.matchAll(/<\/?[A-Za-z][^>\n]*>/g)) {
-    rawAtomic.push([m.index!, m.index! + m[0].length]);
+  const isAsciiAlpha = (ch: string): boolean => (ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z");
+  let scan = 0;
+  while (scan < sentence.length) {
+    if (sentence[scan] === "<") {
+      const nameIdx = sentence[scan + 1] === "/" ? scan + 2 : scan + 1;
+      if (nameIdx < sentence.length && isAsciiAlpha(sentence[nameIdx]!)) {
+        let close = nameIdx + 1;
+        while (close < sentence.length && sentence[close] !== ">" && sentence[close] !== "<" && sentence[close] !== "\n") {
+          close++;
+        }
+        if (close < sentence.length && sentence[close] === ">") {
+          rawAtomic.push([scan, close + 1]);
+          scan = close + 1;
+          continue;
+        }
+        scan = close;
+        continue;
+      }
+    }
+    scan++;
   }
-  for (const m of sentence.matchAll(/\*\*[^*\n]{1,120}\*\*/g)) {
-    const innerCount = placeholders.filter(([s, e]) => s >= m.index! && e <= m.index! + m[0].length).length;
-    if (innerCount <= maxSpans) {
-      rawAtomic.push([m.index!, m.index! + m[0].length]);
+  let boldPos = 0;
+  while (boldPos < sentence.length) {
+    const open = sentence.indexOf("**", boldPos);
+    if (open === -1) break;
+    const close = sentence.indexOf("**", open + 2);
+    if (close === -1) break;
+    if (close - open <= 120 && !sentence.slice(open + 2, close).includes("\n")) {
+      const end = close + 2;
+      const innerCount = placeholders.filter(([s, e]) => s >= open && e <= end).length;
+      if (innerCount <= maxSpans) {
+        rawAtomic.push([open, end]);
+      }
+      boldPos = end;
+    } else {
+      boldPos = open + 2;
     }
   }
   rawAtomic.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -782,6 +811,54 @@ export function splitSpanBounded(
   const atomicContaining = (pos: number): [number, number] | undefined =>
     atomic.find(([s, e]) => s <= pos && pos < e);
   const insideAtomic = (pos: number): boolean => atomicContaining(pos) !== undefined;
+
+  const isHorizWs = (ch: string | undefined): boolean => ch === " " || ch === "\t";
+  const wsEnd = (from: number, hi: number): number => {
+    let p = from;
+    while (p < hi && isHorizWs(sentence[p])) p++;
+    return p;
+  };
+  const findClauseCut = (lo: number, hi: number): { pieceEnd: number; nextStart: number } | null => {
+    let best: { pieceEnd: number; nextStart: number } | null = null;
+    for (let idx = lo; idx < hi; idx++) {
+      const ch = sentence[idx];
+      if ((ch === ";" || ch === ":") && !insideAtomic(idx)) {
+        const end = wsEnd(idx + 1, hi);
+        if (end > idx + 1 && !insideAtomic(end - 1)) best = { pieceEnd: idx + 1, nextStart: end };
+      } else if (
+        idx + 3 <= hi &&
+        ch === " " &&
+        sentence[idx + 1] === "—" &&
+        sentence[idx + 2] === " " &&
+        !insideAtomic(idx) &&
+        !insideAtomic(idx + 2)
+      ) {
+        best = { pieceEnd: idx, nextStart: idx + 3 };
+      }
+    }
+    return best;
+  };
+  const findCommaCut = (lo: number, hi: number): { pieceEnd: number; nextStart: number } | null => {
+    let best: { pieceEnd: number; nextStart: number } | null = null;
+    for (let idx = lo; idx < hi; idx++) {
+      if (sentence[idx] === "," && !insideAtomic(idx)) {
+        const end = wsEnd(idx + 1, hi);
+        if (end > idx + 1 && !insideAtomic(end - 1)) best = { pieceEnd: idx + 1, nextStart: end };
+      }
+    }
+    return best;
+  };
+  const findSpaceCut = (lo: number, hi: number): { pieceEnd: number; nextStart: number } | null => {
+    let best: { pieceEnd: number; nextStart: number } | null = null;
+    for (let idx = lo; idx < hi; idx++) {
+      if (isHorizWs(sentence[idx]) && !insideAtomic(idx)) {
+        const end = wsEnd(idx, hi);
+        if (!insideAtomic(end - 1)) best = { pieceEnd: idx, nextStart: end };
+        idx = end - 1;
+      }
+    }
+    return best;
+  };
 
   const out: Array<{ piece: string; sep: string }> = [];
   let cursor = 0;
@@ -822,27 +899,12 @@ export function splitSpanBounded(
       break;
     }
 
-    const findLastOutside = (re: RegExp, lo: number, hi: number): { pieceEnd: number; nextStart: number } | null => {
-      let best: { pieceEnd: number; nextStart: number } | null = null;
-      for (const m of sentence.matchAll(re)) {
-        const start = m.index!;
-        const end = start + m[0].length;
-        if (start < lo || end > hi) continue;
-        if (insideAtomic(start) || insideAtomic(end - 1)) continue;
-        // Keep punctuation on left piece when pattern ends with whitespace; put whitespace in sep.
-        const wsMatch = /\s+$/.exec(m[0]);
-        const pieceEnd = wsMatch ? end - wsMatch[0].length : start;
-        best = { pieceEnd, nextStart: end };
-      }
-      return best;
-    };
-
     const cut =
-      findLastOutside(/(?:[;:]\s+| — )/g, minCut, maxCut) ??
-      findLastOutside(/,\s+/g, tightMin, maxCut) ??
-      findLastOutside(/,\s+/g, minCut, maxCut) ??
-      findLastOutside(/\s+/g, tightMin, maxCut) ??
-      findLastOutside(/\s+/g, minCut, maxCut);
+      findClauseCut(minCut, maxCut) ??
+      findCommaCut(tightMin, maxCut) ??
+      findCommaCut(minCut, maxCut) ??
+      findSpaceCut(tightMin, maxCut) ??
+      findSpaceCut(minCut, maxCut);
 
     if (cut) {
       out.push({ piece: sentence.slice(cursor, cut.pieceEnd), sep: sentence.slice(cut.pieceEnd, cut.nextStart) });
@@ -927,7 +989,7 @@ async function translatePiece(
   targetLang: string,
   batchOptions: Omit<TranslateBatchOptions, "batchCharLimit">,
   onHeartbeat?: () => void,
-): Promise<{ text: string | undefined; calls: number }> {
+): Promise<{ text: string | undefined; reason?: UnusableReason; calls: number }> {
   if (!/\p{L}/u.test(piece.replace(PLACEHOLDER_PATTERN, ""))) {
     return { text: piece, calls: 0 };
   }
@@ -938,8 +1000,9 @@ async function translatePiece(
   });
   onHeartbeat?.();
   const answer = r.translations[0] ?? "";
-  if (unusableReason(local.text, local.spans, answer, false) !== undefined) {
-    return { text: undefined, calls: r.ollamaCalls };
+  const reason = unusableReason(local.text, local.spans, answer, false);
+  if (reason !== undefined) {
+    return { text: undefined, reason, calls: r.ollamaCalls };
   }
   const restoredNum = cleanTranslation(answer).replace(
     PLACEHOLDER_PATTERN,
@@ -969,8 +1032,9 @@ async function translateSentenceSpanBounded(
   targetLang: string,
   batchOptions: Omit<TranslateBatchOptions, "batchCharLimit">,
   onHeartbeat?: () => void,
-): Promise<{ text: string | undefined; calls: number }> {
+): Promise<{ text: string | undefined; sawPlaceholderFailure?: boolean; calls: number }> {
   let calls = 0;
+  let sawPlaceholderFailure = false;
   const clauses = splitSpanBounded(sentence, 3);
   const primaryParts = clauses.length > 1 ? clauses : splitSpanBounded(sentence, 1);
   if (primaryParts.length <= 1) return { text: undefined, calls };
@@ -983,20 +1047,26 @@ async function translateSentenceSpanBounded(
       outParts.push(res.text + part.sep);
       continue;
     }
+    if (res.reason === "placeholders") sawPlaceholderFailure = true;
     const subParts = splitSpanBounded(part.piece, 1);
-    if (subParts.length <= 1) return { text: undefined, calls };
+    if (subParts.length <= 1) return { text: undefined, sawPlaceholderFailure, calls };
     let subOut = "";
     for (const sub of subParts) {
       const subRes = await translatePiece(sub.piece, spans, kind, sourceLang, targetLang, batchOptions, onHeartbeat);
       calls += subRes.calls;
-      if (subRes.text === undefined) return { text: undefined, calls };
+      if (subRes.text === undefined) {
+        if (subRes.reason === "placeholders") sawPlaceholderFailure = true;
+        return { text: undefined, sawPlaceholderFailure, calls };
+      }
       subOut += subRes.text + sub.sep;
     }
     outParts.push(subOut + part.sep);
   }
 
   const assembled = outParts.join("");
-  return isPieceUsableInGlobal(sentence, assembled, spans) ? { text: assembled, calls } : { text: undefined, calls };
+  return isPieceUsableInGlobal(sentence, assembled, spans)
+    ? { text: assembled, calls }
+    : { text: undefined, sawPlaceholderFailure, calls };
 }
 
 /**
@@ -1384,7 +1454,7 @@ export async function translateMarkdown(
               ollamaCalls += r.calls;
               if (r.text === undefined) {
                 allLinesOk = false;
-                sawPlaceholderFailure = true;
+                if (r.reason === "placeholders") sawPlaceholderFailure = true;
               }
               resLines.push(r.text);
             }
@@ -1439,7 +1509,7 @@ export async function translateMarkdown(
               );
               ollamaCalls += r.calls;
               if (r.text === undefined) {
-                sawPlaceholderFailure = true;
+                if (r.reason === "placeholders") sawPlaceholderFailure = true;
               } else {
                 sentenceDone[b]![sIdx] = r.text;
               }
@@ -1470,6 +1540,7 @@ export async function translateMarkdown(
         // Rung 3: span by span (split dense sentences down to <=3 then <=1 placeholders)
         const hasDenseSentence =
           !recovered &&
+          (sawPlaceholderFailure || isOversize || truncated) &&
           blocks.some(
             (blk, b) =>
               blockDone[b] === undefined &&
@@ -1496,7 +1567,7 @@ export async function translateMarkdown(
               );
               ollamaCalls += r.calls;
               if (r.text === undefined) {
-                sawPlaceholderFailure = true;
+                if (r.sawPlaceholderFailure) sawPlaceholderFailure = true;
               } else {
                 sentenceDone[b]![sIdx] = r.text;
               }

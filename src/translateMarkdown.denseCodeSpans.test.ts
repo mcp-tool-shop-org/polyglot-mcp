@@ -41,6 +41,9 @@ function detectTargetLang(prompt: string): string {
 }
 
 function fakeModelTranslatePart(part: string, lang: string): string {
+  if (part.includes("zzechoalways")) {
+    return part;
+  }
   // Explicit safety test markers (independent of placeholder density).
   if (part.includes("zzalterbacktick")) {
     return `[${lang}] ${part.replace(/⟦0⟧/, "`⟦0⟧`")}`;
@@ -250,6 +253,22 @@ describe("dense inline code-span lines — ai-rpg-engine README fixture", () => 
 
     // Unmasked text (spans = []) still rejects altered code spans.
     expect(unusableReason("Footnote ⟦1⟧ and `run`.", [], "Nota ⟦1⟧ y `correr`.", false)).toBe("placeholders");
+
+    // Linear-time guard against unclosed "<A" and long whitespace runs.
+    const hostile = "⟦0⟧ " + "<A".repeat(25_000) + " " + " ".repeat(25_000) + " ⟦1⟧; ⟦2⟧ — ⟦3⟧";
+    const t0 = Date.now();
+    const hostileParts = splitSpanBounded(hostile, 1);
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(hostileParts.map((p) => p.piece + p.sep).join("")).toBe(hostile);
+  }, 30_000);
+
+  it("does not split an echoed single sentence across protected terms in span by span", async () => {
+    const echoed = "The model Kimi-K3 uses DepositAuth today zzechoalways";
+    const result = await translateMarkdown(echoed, "en", "es", { cache: false });
+
+    expect(result.retries).toBe(1);
+    expect(result.untranslated).toHaveLength(1);
+    expect(result.markdown).toBe(echoed);
   }, 30_000);
 });
 
