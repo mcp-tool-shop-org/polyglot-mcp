@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Span-bounded fallback rung and `pt-BR` CLI alias** (`splitSpanBounded`, `translateSentenceSpanBounded` in `src/translateMarkdown.ts`; `scripts/translate-readme.mjs`) — dense prose sentences carrying many inline code spans now fall back past `sentence by sentence` into span-bounded clauses (`<= 3` then `<= 1` placeholder per call, cutting outside links, HTML tags, placeholders, and short bold spans), while multi-block segments that exceed the single-call context window go straight into the piecewise ladder. `scripts/translate-readme.mjs` now accepts `pt-BR` as an alias of `pt`, writing `README.pt-BR.md` while sharing canonical `pt` cache and pin entries.
+
+### Fixed
+
+- **Dense inline code-span prose lists no longer fall back whole-list to English, and restored code spans are verified byte-equal in order** (`extractCodeSpans`, `strayBacktickCount`, `codeSpansMatch`, `restoreCodeSpans` in `src/codeSpans.ts`; `unusableReason` and per-block piecewise retention in `src/translateMarkdown.ts`) — `restoreCodeSpans` and `unusableReason` now verify that restored inline code spans match the source spans byte-for-byte in exact order with no stray or wrapper backticks, rejecting wrapped (`\`⟦0⟧\``), injected, or reordered spans instead of trusting placeholder counts alone. Piecewise recovery retains each block that passes rather than discarding an entire multi-bullet segment when a single line fails.
+
 ### Fixed
 
 - **Colab translate lane: refusals are per README and per language, and every exit path returns what was written (windows polyglot-rb-a, rb-b, rb-d)** — a README that finished 7/7 clean was thrown away because `_fail_translate` removed `_staging_translations` when a later README was refused, and the first refusal ended the window with the rest unreached. Now a gate refusal marks that README and language refused with its reasons, keeps its raw output in `refused_raw/<slug>/` for a hand-fix and a pin, and the next README runs; the window ends `partial` (exit 0, per-README results in `window.json` `readme_results` and `manifest.json`), and only a window with zero passed languages fails. A failure or salvage bundle is unpacked and published like a success (staged translations, refused raw output, every summary and log), and `translate_bundle_now.py` also collects in-flight `README.<lang>.md` files from `readmes_in` and the per-README results. The summary counts languages that passed every gate (`succeeded`, with `modelReturned` and `gate.refused`), and `translate-all.mjs` no longer counts a `lost-span` language as succeeded (fx-dub reported 7/7 with 12 lost spans; offrig reported 6 with 1 usable).

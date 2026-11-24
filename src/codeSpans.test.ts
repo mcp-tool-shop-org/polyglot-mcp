@@ -14,6 +14,9 @@ import {
   containsCodePlaceholder,
   codePlaceholder,
   CODE_SPAN_PATTERN,
+  extractCodeSpans,
+  strayBacktickCount,
+  codeSpansMatch,
 } from "./codeSpans.js";
 
 // ─── maskCodeSpans ─────────────────────────────────────────────────
@@ -165,5 +168,23 @@ describe("placeholder patterns — linear time", () => {
     expect(restoreCodeSpans("a ⟦ 0 ⟧ b ⟦x1y⟧", ["`p`", "`q`"])).toEqual({ text: "a `p` b `q`", intact: true });
     expect(containsCodePlaceholder("⟦12⟧")).toBe(true);
     expect(containsCodePlaceholder("⟦ab⟧")).toBe(false);
+  });
+
+  it("reports NOT intact when placeholders are reordered, wrapped in backticks, or an extra span appears", () => {
+    const { spans } = maskCodeSpans("Run `first` before `second`.");
+    expect(restoreCodeSpans("Execute `⟦0⟧` antes de ⟦1⟧.", spans).intact).toBe(false);
+    expect(restoreCodeSpans("Execute ⟦1⟧ antes de ⟦0⟧.", spans).intact).toBe(false);
+    expect(restoreCodeSpans("Execute ⟦0⟧ antes de ⟦1⟧ y `extra`.", spans).intact).toBe(false);
+  });
+
+  it("extracts code spans, counts stray backticks, and compares spans in order", () => {
+    expect(extractCodeSpans("Use `a` and `b`.")).toEqual(["`a`", "`b`"]);
+    expect(extractCodeSpans("Plain prose.")).toEqual([]);
+    expect(strayBacktickCount("An unclosed ` tick and `real` here.")).toBe(1);
+    expect(codeSpansMatch(["`a`", "`b`"], "Usa `a` y `b`.", 0)).toBe(true);
+    expect(codeSpansMatch(["`a`", "`b`"], "Usa `b` y `a`.", 0)).toBe(false);
+    expect(codeSpansMatch(["`a`"], "Usa `a` y `.", 0)).toBe(false);
+    expect(codeSpansMatch([], "Usa `a`.", 1)).toBe(false);
+    expect(codeSpansMatch([], "Usa `a`.", 0)).toBe(true);
   });
 });

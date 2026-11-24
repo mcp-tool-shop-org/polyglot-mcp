@@ -115,20 +115,64 @@ export interface RestoreResult {
   /** Text with every recognised placeholder swapped back to its code span. */
   text: string;
   /**
-   * True only when every masked span came back exactly once and no unknown
-   * placeholder appeared. False means the translation cannot be trusted to
-   * carry the identifiers, and the caller should fall back to the source.
+   * True only when every masked span came back exactly once, no unknown
+   * placeholder appeared, and every inline code span in the restored text
+   * matches the source code spans byte-for-byte in order. False means the
+   * translation cannot be trusted to carry the identifiers, and the caller
+   * should fall back to the source.
    */
   intact: boolean;
+}
+
+const EXACT_CODE_SPAN_RE = /^`[^`\n]+`$/;
+
+/** Return all inline code spans in `text`, in order (backticks included). */
+export function extractCodeSpans(text: string): string[] {
+  return text.match(CODE_SPAN_PATTERN) ?? [];
+}
+
+/** Count backtick characters in `text` outside valid inline code spans. */
+export function strayBacktickCount(text: string): number {
+  const outside = text.replace(CODE_SPAN_PATTERN, "");
+  let count = 0;
+  for (let i = 0; i < outside.length; i++) {
+    if (outside[i] === "`") count++;
+  }
+  return count;
+}
+
+/**
+ * True when `restoredText` carries the exact same inline code spans as
+ * `expectedSpans`, byte-for-byte and in the same order, and (when provided)
+ * the same number of stray backticks outside code spans.
+ */
+export function codeSpansMatch(
+  expectedSpans: readonly string[],
+  restoredText: string,
+  expectedStrayBackticks?: number,
+): boolean {
+  if (expectedSpans.length === 0) {
+    return expectedStrayBackticks === undefined || strayBacktickCount(restoredText) === expectedStrayBackticks;
+  }
+  const actual = extractCodeSpans(restoredText);
+  if (actual.length !== expectedSpans.length) return false;
+  for (let i = 0; i < expectedSpans.length; i++) {
+    if (actual[i] !== expectedSpans[i]) return false;
+  }
+  if (expectedStrayBackticks !== undefined && strayBacktickCount(restoredText) !== expectedStrayBackticks) {
+    return false;
+  }
+  return true;
 }
 
 /**
  * Swap placeholders in `text` back to the code spans they stand for.
  *
  * `intact` is the load-bearing half of the return value. A model that drops,
- * duplicates, or invents a placeholder produces a sentence that has silently
- * lost or doubled an identifier — which is the same class of defect as
- * transliterating it. Callers are expected to fail closed on `intact: false`.
+ * duplicates, invents, reorders, or wraps a placeholder in extra backticks
+ * produces a sentence that has silently lost, doubled, or mangled an
+ * identifier — which is the same class of defect as transliterating it.
+ * Callers are expected to fail closed on `intact: false`.
  */
 export function restoreCodeSpans(text: string, spans: string[]): RestoreResult {
   if (spans.length === 0) {
@@ -140,16 +184,29 @@ export function restoreCodeSpans(text: string, spans: string[]): RestoreResult {
 
   const seen = new Array<number>(spans.length).fill(0);
   let unknown = false;
+  let wrappedInBackticks = false;
 
-  const restored = text.replace(PLACEHOLDER_PATTERN, (whole, digits: string) => {
+  const restored = text.replace(PLACEHOLDER_PATTERN, (whole, digits: string, offset: number, str: string) => {
     const index = Number(digits);
     if (!Number.isInteger(index) || index < 0 || index >= spans.length) {
       unknown = true;
       return whole;
     }
     seen[index]++;
-    return spans[index];
+    const replacement = spans[index];
+    if (EXACT_CODE_SPAN_RE.test(replacement)) {
+      const before = offset > 0 ? str[offset - 1] : "";
+      const after = offset + whole.length < str.length ? str[offset + whole.length] : "";
+      if (before === "`" || after === "`") {
+        wrappedInBackticks = true;
+      }
+    }
+    return replacement;
   });
 
-  return { text: restored, intact: !unknown && seen.every((count) => count === 1) };
+  const expectedCode = spans.filter((s) => EXACT_CODE_SPAN_RE.test(s));
+  const placeholdersIntact = !unknown && !wrappedInBackticks && seen.every((count) => count === 1);
+  const spansIntact = codeSpansMatch(expectedCode, restored);
+
+  return { text: restored, intact: placeholdersIntact && spansIntact };
 }
