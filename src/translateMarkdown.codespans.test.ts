@@ -31,9 +31,10 @@ vi.mock("./translate.js", () => ({
 
 import { translateMarkdown } from "./translateMarkdown.js";
 import { translateBatch } from "./translate.js";
+import { extractCodeSpans } from "./codeSpans.js";
 
 const DEVANAGARI = /[ऀ-ॿ]/;
-const inlineSpans = (md: string) => md.match(/`[^`\n]+`/g) ?? [];
+const inlineSpans = (md: string) => extractCodeSpans(md);
 
 describe("translateMarkdown — inline code-span protection", () => {
   beforeEach(() => {
@@ -174,5 +175,35 @@ describe("translateMarkdown — inline code-span protection", () => {
     expect(result.deduplicated).toBe(1);
     expect(result.markdown).toContain("`--checkpoint`");
     expect(result.markdown).toContain("`--list-checkpoints`");
+  });
+
+  it("keeps source text when the model wraps a placeholder in backticks", async () => {
+    const md = "Run `first_cmd` in sequence.";
+    for (let i = 0; i < 2; i++) {
+      vi.mocked(translateBatch).mockResolvedValueOnce({
+        translations: ["चलाएँ `⟦0⟧` क्रम में।"],
+        model: "mock",
+        ollamaCalls: 1,
+        durationMs: 0,
+      });
+    }
+
+    const result = await translateMarkdown(md, "en", "hi", { cache: false });
+
+    expect(result.markdown).toBe(md);
+    expect(result.warnings.join("\n")).toMatch(/placeholders did not survive/);
+  });
+
+  it("translates lines containing double-backtick code spans with spans byte-equal", async () => {
+    const md = "Use ``x`` and ``foo `bar` baz`` to start the local server today.";
+    const result = await translateMarkdown(md, "en", "hi", { cache: false });
+
+    expect(result.untranslated).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.markdown).toContain("``x``");
+    expect(result.markdown).toContain("``foo `bar` baz``");
+    expect(inlineSpans(result.markdown)).toEqual(["``x``", "``foo `bar` baz``"]);
+    expect(inlineSpans(result.markdown).filter((s) => DEVANAGARI.test(s))).toEqual([]);
+    expect(DEVANAGARI.test(result.markdown)).toBe(true);
   });
 });

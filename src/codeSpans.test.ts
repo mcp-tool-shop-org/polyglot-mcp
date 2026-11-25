@@ -14,6 +14,12 @@ import {
   containsCodePlaceholder,
   codePlaceholder,
   CODE_SPAN_PATTERN,
+  extractCodeSpans,
+  strayBacktickCount,
+  codeSpansMatch,
+  escapeForTerminal,
+  diffCandidateSpans,
+  formatSpanDiff,
 } from "./codeSpans.js";
 
 // ─── maskCodeSpans ─────────────────────────────────────────────────
@@ -58,6 +64,16 @@ describe("maskCodeSpans", () => {
     const { text, spans } = maskCodeSpans(md);
     expect(text).toBe(md);
     expect(spans).toEqual([]);
+  });
+
+  it("masks CommonMark multi-backtick code spans whole", () => {
+    const simple = maskCodeSpans("Use ``x`` to start.");
+    expect(simple.text).toBe("Use ⟦0⟧ to start.");
+    expect(simple.spans).toEqual(["``x``"]);
+
+    const nested = maskCodeSpans("Use ``foo `bar` baz`` to inspect.");
+    expect(nested.text).toBe("Use ⟦0⟧ to inspect.");
+    expect(nested.spans).toEqual(["``foo `bar` baz``"]);
   });
 });
 
@@ -165,5 +181,129 @@ describe("placeholder patterns — linear time", () => {
     expect(restoreCodeSpans("a ⟦ 0 ⟧ b ⟦x1y⟧", ["`p`", "`q`"])).toEqual({ text: "a `p` b `q`", intact: true });
     expect(containsCodePlaceholder("⟦12⟧")).toBe(true);
     expect(containsCodePlaceholder("⟦ab⟧")).toBe(false);
+  });
+
+  it("reports NOT intact when placeholders are reordered, wrapped in backticks, or an extra span appears", () => {
+    const { spans } = maskCodeSpans("Run `first` before `second`.");
+    expect(restoreCodeSpans("Execute `⟦0⟧` antes de ⟦1⟧.", spans).intact).toBe(false);
+    expect(restoreCodeSpans("Execute ⟦1⟧ antes de ⟦0⟧.", spans).intact).toBe(false);
+    expect(restoreCodeSpans("Execute ⟦0⟧ antes de ⟦1⟧ y `extra`.", spans).intact).toBe(false);
+  });
+
+  it("extracts code spans, counts stray backticks, and compares spans in order", () => {
+    expect(extractCodeSpans("Use `a` and `b`.")).toEqual(["`a`", "`b`"]);
+    expect(extractCodeSpans("Plain prose.")).toEqual([]);
+    expect(strayBacktickCount("An unclosed ` tick and `real` here.")).toBe(1);
+    expect(codeSpansMatch(["`a`", "`b`"], "Usa `a` y `b`.", 0)).toBe(true);
+    expect(codeSpansMatch(["`a`", "`b`"], "Usa `b` y `a`.", 0)).toBe(false);
+    expect(codeSpansMatch(["`a`"], "Usa `a` y `.", 0)).toBe(false);
+    expect(codeSpansMatch([], "Usa `a`.", 1)).toBe(false);
+    expect(codeSpansMatch([], "Usa `a`.", 0)).toBe(true);
+  });
+
+  it("restores clean multi-backtick spans and rejects wrapped, downgraded, or substituted ones", () => {
+    const { spans } = maskCodeSpans("Use ``x`` and ``foo `bar` baz`` here.");
+    expect(restoreCodeSpans("Usa ⟦0⟧ y ⟦1⟧ aquí.", spans)).toEqual({
+      text: "Usa ``x`` y ``foo `bar` baz`` aquí.",
+      intact: true,
+    });
+    expect(restoreCodeSpans("Usa `⟦0⟧` y ⟦1⟧ aquí.", spans).intact).toBe(false);
+    expect(restoreCodeSpans("Usa ``y`` y ⟦1⟧ aquí.", spans).intact).toBe(false);
+    expect(restoreCodeSpans("Usa `x` y ⟦1⟧ aquí.", spans).intact).toBe(false);
+    expect(strayBacktickCount("Use ``foo `bar` baz`` here.")).toBe(0);
+    expect(strayBacktickCount("An unclosed `` tick here.")).toBe(2);
+  });
+
+  it("handles many unmatched multi-backtick runs in linear time", () => {
+    const hostile = Array.from({ length: 1_000 }, (_, i) => "`".repeat(i + 1)).join(" ");
+    const start = Date.now();
+    expect(extractCodeSpans(hostile)).toEqual([]);
+    expect(strayBacktickCount(hostile)).toBe(500_500);
+    expect(Date.now() - start).toBeLessThan(500);
+  });
+
+  it("escapes control characters and caps length for terminal span-diff display", () => {
+    const dirty = "a\x1b[31m\n\r\t\x00\u200bb\"c\\d";
+    const escaped = escapeForTerminal(dirty, 80);
+    expect(escaped).toBe("a\\x1b[31m\\n\\r\\t\\x00\\u200bb\\\"c\\\\d");
+    expect(escaped).not.toMatch(/[\x00-\x1f\u200b]/);
+    const capped = escapeForTerminal("x".repeat(120), 20);
+    expect(capped.length).toBeLessThanOrEqual(20);
+    expect(capped.endsWith("…")).toBe(true);
+  });
+
+  it("computes and formats span diffs for missing, extra, swapped, wrapped, and unmasked mismatches", () => {
+    const masked = "Run ⟦0⟧ with ⟦1⟧ today.";
+    const spans = ["`first`", "`second`"];
+
+    const dropped = diffCandidateSpans(masked, spans, "Ejecuta ⟦0⟧ hoy.");
+    expect(dropped).toMatchObject({
+      spanIndex: 1,
+      expected: "`second`",
+      received: "missing",
+      expectedStrayBackticks: 0,
+      receivedStrayBackticks: 0,
+    });
+    expect(dropped?.candidate).toContain("Ejecuta");
+    expect(formatSpanDiff(dropped!)).toContain('span[1] expected "`second`", received missing');
+
+    const wrapped = diffCandidateSpans(masked, spans, "Ejecuta `⟦0⟧` con ⟦1⟧ hoy.");
+    expect(wrapped).toMatchObject({
+      spanIndex: 0,
+      expected: "`first`",
+      received: "``first``",
+      expectedStrayBackticks: 0,
+      receivedStrayBackticks: 0,
+    });
+
+    const swapped = diffCandidateSpans(masked, spans, "Ejecuta ⟦1⟧ con ⟦0⟧ hoy.");
+    expect(swapped).toMatchObject({
+      spanIndex: 0,
+      expected: "`first`",
+      received: "`second`",
+    });
+
+    const extra = diffCandidateSpans(masked, spans, "Ejecuta ⟦0⟧ con ⟦1⟧ y `extra` hoy.");
+    expect(extra).toMatchObject({
+      spanIndex: 2,
+      expected: "none",
+      received: "extra: `extra`",
+    });
+
+    const stray = diffCandidateSpans("plain prose", [], "texto `suelto");
+    expect(stray).toMatchObject({
+      spanIndex: 0,
+      expected: "none",
+      received: "missing",
+      expectedStrayBackticks: 0,
+      receivedStrayBackticks: 1,
+    });
+
+    const unmasked = diffCandidateSpans("Literal ⟦7⟧ and `foo_bar`.", [], "Literal ⟦7⟧ y `foo-bar`.");
+    expect(unmasked).toMatchObject({
+      spanIndex: 0,
+      expected: "`foo_bar`",
+      received: "`foo-bar`",
+    });
+
+    // Protected-term (non-code-span) placeholder issues still produce structured diffs.
+    expect(diffCandidateSpans("Run ⟦0⟧ now.", ["Node.js"], "Ejecuta hoy.")).toMatchObject({
+      spanIndex: 0,
+      expected: "Node.js",
+      received: "missing",
+    });
+    expect(diffCandidateSpans("Run ⟦0⟧ now.", ["Node.js"], "Ejecuta ⟦0⟧ y ⟦5⟧ hoy.")).toMatchObject({
+      spanIndex: 5,
+      expected: "none",
+      received: "extra: ⟦5⟧",
+    });
+    expect(diffCandidateSpans("Run ⟦0⟧ now.", ["Node.js"], "Ejecuta ⟦0⟧ y ⟦0⟧ hoy.")).toMatchObject({
+      spanIndex: 0,
+      expected: "Node.js",
+      received: "extra: Node.js",
+    });
+    expect(formatSpanDiff(extra!)).toContain('extra "`extra`"');
+    expect(escapeForTerminal("plain", 0)).toBe("");
+    expect(escapeForTerminal("ab", 1)).toBe("…");
   });
 });

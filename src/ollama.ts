@@ -92,7 +92,7 @@ export class OllamaClient {
    * before any bytes go out. A request without num_predict gets what the window leaves.
    */
   private withContext(req: OllamaGenerateRequest): OllamaGenerateRequest {
-    const numCtx = req.options?.num_ctx ?? resolveNumCtx();
+    const numCtx = req.options?.num_ctx ?? resolveNumCtx(req.model);
     const promptTokens = estimateTokens(req.prompt);
     let numPredict = req.options?.num_predict;
     if (numPredict === undefined) numPredict = numCtx - promptTokens;

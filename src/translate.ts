@@ -4,7 +4,7 @@
  */
 
 import { OllamaClient, type StreamCallback } from "./ollama.js";
-import { numPredictFor } from "./numCtx.js";
+import { buildSinglePrompt, numPredictFor, PLACEHOLDER_INSTRUCTION_LINE, resolveGlossaryEntries, resolveNumCtx } from "./numCtx.js";
 import { resolveLanguage, type Language } from "./languages.js";
 import {
   buildGlossaryHint,
@@ -104,8 +104,7 @@ export interface TranslateBatchResult {
  * Restore is tolerant and fails closed regardless — this instruction just makes
  * the round trip succeed more often, so fewer segments fall back to source.
  */
-export const PLACEHOLDER_INSTRUCTION =
-  '\nIMPORTANT: The text contains placeholders like "⟦0⟧" that stand for code. Keep each one exactly as-is in your output, in the position the meaning requires. Do NOT translate, transliterate, renumber, drop, or duplicate them.';
+export const PLACEHOLDER_INSTRUCTION = PLACEHOLDER_INSTRUCTION_LINE;
 
 /** @internal Build the TranslateGemma prompt — two blank lines before text is critical. */
 export function buildPrompt(
@@ -114,12 +113,7 @@ export function buildPrompt(
   text: string,
   glossaryHint: string
 ): string {
-  const placeholderHint = containsCodePlaceholder(text) ? PLACEHOLDER_INSTRUCTION : "";
-  return `You are a professional ${source.name} (${source.code}) to ${target.name} (${target.code}) translator. Your goal is to accurately convey the meaning and nuances of the original ${source.name} text while adhering to ${target.name} grammar, vocabulary, and cultural sensitivities.
-Produce only the ${target.name} translation, without any additional explanations or commentary.${placeholderHint}${glossaryHint} Please translate the following ${source.name} text into ${target.name}:
-
-
-${text}`;
+  return buildSinglePrompt(source, target, text, glossaryHint);
 }
 
 /** @internal Build a batch prompt with separator instructions. */
@@ -230,13 +224,7 @@ async function resolveSetup(
     });
   }
 
-  const glossaryEntries: GlossaryEntry[] = [];
-  if (options.softwareGlossary !== false) {
-    glossaryEntries.push(...SOFTWARE_GLOSSARY);
-  }
-  if (options.glossary) {
-    glossaryEntries.push(...options.glossary);
-  }
+  const glossaryEntries = resolveGlossaryEntries(options);
 
   return { source, target, model, client, glossaryEntries };
 }
@@ -264,17 +252,18 @@ export async function translate(
     const glossaryHint = buildGlossaryHint(chunk, target.code, glossaryEntries);
     const prompt = buildPrompt(source, target, chunk, glossaryHint);
 
+    const numCtx = resolveNumCtx(model);
     let response;
     if (useStream) {
       response = await client.generateStream(
-        { model, prompt, options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk) } },
+        { model, prompt, options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk, numCtx) } },
         options.onToken!
       );
     } else {
       response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk) },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk, numCtx) },
       });
     }
 
@@ -354,6 +343,7 @@ export async function translateBatch(
       batchSize += addedSize;
     }
 
+    const numCtx = resolveNumCtx(model);
     if (batchItems.length === 1) {
       // Single item — use normal prompt (no separator overhead)
       const item = batchItems[0];
@@ -362,7 +352,7 @@ export async function translateBatch(
       const response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, item.text) },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, item.text, numCtx) },
       });
       ollamaCalls++;
       const truncated = response.done_reason === "length";
@@ -380,7 +370,7 @@ export async function translateBatch(
       const response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, joinedText) },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, joinedText, numCtx) },
       });
       ollamaCalls++;
 
@@ -403,7 +393,7 @@ export async function translateBatch(
           const fallbackResponse = await client.generate({
             model,
             prompt: fallbackPrompt,
-            options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(fallbackPrompt, item.text) },
+            options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(fallbackPrompt, item.text, numCtx) },
           });
           ollamaCalls++;
           const truncated = fallbackResponse.done_reason === "length";

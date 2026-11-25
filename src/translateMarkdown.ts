@@ -14,7 +14,8 @@ import GithubSlugger from "github-slugger";
 import { translateBatch, type TranslateBatchOptions, type BatchItem } from "./translate.js";
 import { resolveLanguage } from "./languages.js";
 import { validateTranslation } from "./validate.js";
-import { PLACEHOLDER_PATTERN, maskCodeSpans, restoreCodeSpans } from "./codeSpans.js";
+import { PLACEHOLDER_PATTERN, codeSpansMatch, diffCandidateSpans, extractCodeSpans, maskCodeSpans, restoreCodeSpans, strayBacktickCount, type SpanDiff } from "./codeSpans.js";
+import { MIN_NUM_PREDICT, buildSingleItemPrompt, estimateTokens, resolveNumCtx } from "./numCtx.js";
 import { anchorsEnabled, DEFAULT_PROTECTED_TERMS, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
 import { createPins, getPin, loadPins, type PinFile } from "./pins.js";
 import {
@@ -744,44 +745,365 @@ function pieces(text: string, mode: "line" | "sentence"): string[][] {
 }
 
 /**
- * Translate a masked segment a line, or a sentence, at a time, each piece with
- * its own placeholders numbered from 0, and join the pieces back in the
- * segment's own numbering. A long, code-dense segment is the one a model drops a
- * placeholder from; a single line or sentence is a task it does well. Returns
- * undefined when any piece is still unusable. Every piece goes out as its own call.
- * The caller checks the reassembled segment, which a piece-by-piece check cannot
- * see (a sentence of six words can be wrapped over two lines of three).
+ * Split `sentence` into pieces each carrying at most `maxSpans` placeholders
+ * (unless an indivisible atomic construct such as `[label](url)` holds more).
+ * Cuts only outside atomic ranges (links, HTML tags, placeholders, short bold
+ * spans), preferring `; ` / `: ` / ` — `, then `, `, then whitespace, then
+ * inline punctuation such as `/` so reassembly restores exact spacing.
+ * Scans in time bounded by `n × atomic ranges` without regex backtracking.
  */
-async function translateByPieces(
-  item: BatchItem,
+export function splitSpanBounded(
+  sentence: string,
+  maxSpans: number,
+): Array<{ piece: string; sep: string }> {
+  const placeholders = [...sentence.matchAll(PLACEHOLDER_PATTERN)]
+    .map((m) => [m.index!, m.index! + m[0].length] as [number, number]);
+  if (placeholders.length <= maxSpans) return [{ piece: sentence, sep: "" }];
+
+  const rawAtomic: Array<[number, number]> = [...linkRanges(sentence), ...placeholders];
+  const isAsciiAlpha = (ch: string): boolean => (ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z");
+  let scan = 0;
+  while (scan < sentence.length) {
+    if (sentence[scan] === "<") {
+      const nameIdx = sentence[scan + 1] === "/" ? scan + 2 : scan + 1;
+      if (nameIdx < sentence.length && isAsciiAlpha(sentence[nameIdx]!)) {
+        let close = nameIdx + 1;
+        while (close < sentence.length && sentence[close] !== ">" && sentence[close] !== "<" && sentence[close] !== "\n") {
+          close++;
+        }
+        if (close < sentence.length && sentence[close] === ">") {
+          rawAtomic.push([scan, close + 1]);
+          scan = close + 1;
+          continue;
+        }
+        scan = close;
+        continue;
+      }
+    }
+    scan++;
+  }
+  let boldPos = 0;
+  while (boldPos < sentence.length) {
+    const open = sentence.indexOf("**", boldPos);
+    if (open === -1) break;
+    const close = sentence.indexOf("**", open + 2);
+    if (close === -1) break;
+    if (close - open <= 120 && !sentence.slice(open + 2, close).includes("\n")) {
+      const end = close + 2;
+      const innerCount = placeholders.filter(([s, e]) => s >= open && e <= end).length;
+      if (innerCount <= maxSpans) {
+        rawAtomic.push([open, end]);
+      }
+      boldPos = end;
+    } else {
+      boldPos = open + 2;
+    }
+  }
+  rawAtomic.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const atomic: Array<[number, number]> = [];
+  for (const r of rawAtomic) {
+    const last = atomic[atomic.length - 1];
+    if (last && r[0] < last[1]) {
+      last[1] = Math.max(last[1], r[1]);
+    } else {
+      atomic.push([r[0], r[1]]);
+    }
+  }
+  const atomicContaining = (pos: number): [number, number] | undefined =>
+    atomic.find(([s, e]) => s <= pos && pos < e);
+  const insideAtomic = (pos: number): boolean => atomicContaining(pos) !== undefined;
+
+  const isHorizWs = (ch: string | undefined): boolean => ch === " " || ch === "\t";
+  const wsEnd = (from: number, hi: number): number => {
+    let p = from;
+    while (p < hi && isHorizWs(sentence[p])) p++;
+    return p;
+  };
+  const findClauseCut = (lo: number, hi: number): { pieceEnd: number; nextStart: number } | null => {
+    let best: { pieceEnd: number; nextStart: number } | null = null;
+    for (let idx = lo; idx < hi; idx++) {
+      const ch = sentence[idx];
+      if ((ch === ";" || ch === ":") && !insideAtomic(idx)) {
+        const end = wsEnd(idx + 1, hi);
+        if (end > idx + 1 && !insideAtomic(end - 1)) best = { pieceEnd: idx + 1, nextStart: end };
+      } else if (
+        idx + 3 <= hi &&
+        ch === " " &&
+        sentence[idx + 1] === "—" &&
+        sentence[idx + 2] === " " &&
+        !insideAtomic(idx) &&
+        !insideAtomic(idx + 2)
+      ) {
+        best = { pieceEnd: idx, nextStart: idx + 3 };
+      }
+    }
+    return best;
+  };
+  const findCommaCut = (lo: number, hi: number): { pieceEnd: number; nextStart: number } | null => {
+    let best: { pieceEnd: number; nextStart: number } | null = null;
+    for (let idx = lo; idx < hi; idx++) {
+      if (sentence[idx] === "," && !insideAtomic(idx)) {
+        const end = wsEnd(idx + 1, hi);
+        if (end > idx + 1 && !insideAtomic(end - 1)) best = { pieceEnd: idx + 1, nextStart: end };
+      }
+    }
+    return best;
+  };
+  const findSpaceCut = (lo: number, hi: number): { pieceEnd: number; nextStart: number } | null => {
+    let best: { pieceEnd: number; nextStart: number } | null = null;
+    for (let idx = lo; idx < hi; idx++) {
+      if (isHorizWs(sentence[idx]) && !insideAtomic(idx)) {
+        const end = wsEnd(idx, hi);
+        if (!insideAtomic(end - 1)) best = { pieceEnd: idx, nextStart: end };
+        idx = end - 1;
+      }
+    }
+    return best;
+  };
+
+  const out: Array<{ piece: string; sep: string }> = [];
+  let cursor = 0;
+
+  while (true) {
+    const remaining = placeholders.filter(([s]) => s >= cursor);
+    if (remaining.length <= maxSpans) {
+      const tail = sentence.slice(cursor);
+      if (tail !== "" || out.length === 0) out.push({ piece: tail, sep: "" });
+      break;
+    }
+
+    let limitIdx = maxSpans - 1;
+    while (limitIdx + 1 < remaining.length) {
+      const curBox = atomicContaining(remaining[limitIdx]![0]);
+      const nextBox = atomicContaining(remaining[limitIdx + 1]![0]);
+      if (curBox && nextBox && curBox[0] === nextBox[0] && curBox[1] === nextBox[1]) {
+        limitIdx++;
+      } else {
+        break;
+      }
+    }
+    if (limitIdx + 1 >= remaining.length) {
+      out.push({ piece: sentence.slice(cursor), sep: "" });
+      break;
+    }
+
+    const firstBox = atomicContaining(remaining[0]![0]);
+    const limitBox = atomicContaining(remaining[limitIdx]![0]);
+    const nextBox = atomicContaining(remaining[limitIdx + 1]![0]);
+    const minCut = Math.max(remaining[0]![1], firstBox ? firstBox[1] : 0);
+    const tightMin = Math.max(remaining[limitIdx]![1], limitBox ? limitBox[1] : 0);
+    const maxCut = Math.min(remaining[limitIdx + 1]![0], nextBox ? nextBox[0] : sentence.length);
+
+    if (tightMin > maxCut) {
+      // Unreachable unless atomic boxes overlapped inconsistently; fail safe without splitting.
+      out.push({ piece: sentence.slice(cursor), sep: "" });
+      break;
+    }
+
+    const cut =
+      findClauseCut(minCut, maxCut) ??
+      findCommaCut(tightMin, maxCut) ??
+      findCommaCut(minCut, maxCut) ??
+      findSpaceCut(tightMin, maxCut) ??
+      findSpaceCut(minCut, maxCut);
+
+    if (cut) {
+      out.push({ piece: sentence.slice(cursor, cut.pieceEnd), sep: sentence.slice(cut.pieceEnd, cut.nextStart) });
+      cursor = cut.nextStart;
+    } else if (tightMin < maxCut) {
+      // Non-whitespace separator between spans (e.g. `⟦0⟧/⟦1⟧`).
+      out.push({ piece: sentence.slice(cursor, tightMin), sep: sentence.slice(tightMin, maxCut) });
+      cursor = maxCut;
+    } else {
+      out.push({ piece: sentence.slice(cursor, maxCut), sep: "" });
+      cursor = maxCut;
+    }
+  }
+
+  return out;
+}
+
+interface SegmentBlock {
+  rawLines: string[];
+  joined: string;
+  sentences: string[];
+}
+
+function splitSentences(block: string): string[] {
+  const inside = insideAny(linkRanges(block));
+  const out: string[] = [];
+  let from = 0;
+  for (let i = 0; i < block.length; i++) {
+    if (".!?。！？".includes(block[i]!) && i + 1 < block.length && /\s/.test(block[i + 1]!) && !inside(i)) {
+      out.push(block.slice(from, i + 1));
+      from = i + 2;
+    }
+  }
+  if (from < block.length) out.push(block.slice(from));
+  const sentences = out.map((x) => x.trim()).filter((x) => x !== "");
+  return sentences.length > 0 ? sentences : [block];
+}
+
+function buildSegmentBlocks(text: string): SegmentBlock[] {
+  const inLink = insideAny(linkRanges(text));
+  const rawLines: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n" && !inLink(i)) {
+      rawLines.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  rawLines.push(text.slice(start));
+
+  const grouped: string[][] = [];
+  for (const line of rawLines) {
+    if (
+      grouped.length === 0 ||
+      line.trim() === "" ||
+      BLOCK_START.test(line) ||
+      grouped[grouped.length - 1]![0]!.trim() === ""
+    ) {
+      grouped.push([line]);
+    } else {
+      grouped[grouped.length - 1]!.push(line);
+    }
+  }
+
+  return grouped.map((linesInBlock) => {
+    const joined = linesInBlock
+      .map((l, idx) => (idx === 0 ? l : l.trim()))
+      .join(linesInBlock.length > 1 ? " " : "");
+    return {
+      rawLines: linesInBlock,
+      joined,
+      sentences: splitSentences(joined),
+    };
+  });
+}
+
+async function translatePiece(
+  piece: string,
   spans: readonly string[],
-  mode: "line" | "sentence",
+  kind: BatchItem["kind"],
   sourceLang: string,
   targetLang: string,
   batchOptions: Omit<TranslateBatchOptions, "batchCharLimit">,
-): Promise<{ translation: string | undefined; calls: number }> {
-  const lines: string[] = [];
-  let calls = 0;
-  for (const line of pieces(item.text, mode)) {
-    const out: string[] = [];
-    for (const piece of line.length > 0 ? line : [""]) {
-      if (!/\p{L}/u.test(piece.replace(PLACEHOLDER_PATTERN, ""))) {
-        out.push(piece);
-        continue;
-      }
-      const local = localiseLine(piece, spans);
-      const r = await translateBatch([{ text: local.text, kind: item.kind }], sourceLang, targetLang, {
-        ...batchOptions,
-        batchCharLimit: 1,
-      });
-      calls += r.ollamaCalls;
-      const answer = r.translations[0] ?? "";
-      if (unusableReason(local.text, local.spans, answer, false) !== undefined) return { translation: undefined, calls };
-      out.push(cleanTranslation(answer).replace(PLACEHOLDER_PATTERN, (_m, k: string) => `⟦${local.order[Number(k)]}⟧`));
-    }
-    lines.push(out.join(" "));
+  onHeartbeat?: () => void,
+  onSpanDiff?: (diff: SpanDiff) => void,
+  stage = "piece",
+): Promise<{ text: string | undefined; reason?: UnusableReason; calls: number }> {
+  if (!/\p{L}/u.test(piece.replace(PLACEHOLDER_PATTERN, ""))) {
+    return { text: piece, calls: 0 };
   }
-  return { translation: lines.join(String.fromCharCode(10)), calls };
+  const local = localiseLine(piece, spans);
+  const r = await translateBatch([{ text: local.text, kind }], sourceLang, targetLang, {
+    ...batchOptions,
+    batchCharLimit: 1,
+  });
+  onHeartbeat?.();
+  const answer = r.translations[0] ?? "";
+  const reason = unusableReason(local.text, local.spans, answer, false);
+  if (reason !== undefined) {
+    if (reason === "placeholders" && onSpanDiff) {
+      const diff = diffCandidateSpans(local.text, local.spans, cleanTranslation(answer, false));
+      if (diff) onSpanDiff({ ...diff, stage, piece: segmentLabel(piece) });
+    }
+    return { text: undefined, reason, calls: r.ollamaCalls };
+  }
+  const restoredNum = cleanTranslation(answer).replace(
+    PLACEHOLDER_PATTERN,
+    (_m, k: string) => `⟦${local.order[Number(k)]}⟧`,
+  );
+  return { text: restoredNum, calls: r.ollamaCalls };
+}
+
+function isPieceUsableInGlobal(
+  sourcePiece: string,
+  outputWithGlobalPlaceholders: string,
+  spans: readonly string[],
+  onSpanDiff?: (diff: SpanDiff) => void,
+  stage = "block reassembly",
+): boolean {
+  const local = localiseLine(sourcePiece, spans);
+  const localOut = outputWithGlobalPlaceholders.replace(PLACEHOLDER_PATTERN, (m, g: string) => {
+    const idx = local.order.indexOf(Number(g));
+    return idx >= 0 ? `⟦${idx}⟧` : m;
+  });
+  const reason = unusableReason(local.text, local.spans, localOut, false);
+  if (reason === "placeholders" && onSpanDiff) {
+    const diff = diffCandidateSpans(local.text, local.spans, cleanTranslation(localOut, false));
+    if (diff) onSpanDiff({ ...diff, stage, piece: segmentLabel(sourcePiece) });
+  }
+  return reason === undefined;
+}
+
+async function translateSentenceSpanBounded(
+  sentence: string,
+  spans: readonly string[],
+  kind: BatchItem["kind"],
+  sourceLang: string,
+  targetLang: string,
+  batchOptions: Omit<TranslateBatchOptions, "batchCharLimit">,
+  onHeartbeat?: () => void,
+  onSpanDiff?: (diff: SpanDiff) => void,
+): Promise<{ text: string | undefined; sawPlaceholderFailure?: boolean; calls: number }> {
+  let calls = 0;
+  let sawPlaceholderFailure = false;
+  const clauses = splitSpanBounded(sentence, 3);
+  const primaryParts = clauses.length > 1 ? clauses : splitSpanBounded(sentence, 1);
+  if (primaryParts.length <= 1) return { text: undefined, calls };
+
+  const outParts: string[] = [];
+  for (const part of primaryParts) {
+    const res = await translatePiece(part.piece, spans, kind, sourceLang, targetLang, batchOptions, onHeartbeat, onSpanDiff, "span-clause");
+    calls += res.calls;
+    if (res.text !== undefined) {
+      outParts.push(res.text + part.sep);
+      continue;
+    }
+    if (res.reason === "placeholders") sawPlaceholderFailure = true;
+    const subParts = splitSpanBounded(part.piece, 1);
+    if (subParts.length <= 1) return { text: undefined, sawPlaceholderFailure, calls };
+    let subOut = "";
+    for (const sub of subParts) {
+      const subRes = await translatePiece(sub.piece, spans, kind, sourceLang, targetLang, batchOptions, onHeartbeat, onSpanDiff, "span-single");
+      calls += subRes.calls;
+      if (subRes.text === undefined) {
+        if (subRes.reason === "placeholders") sawPlaceholderFailure = true;
+        return { text: undefined, sawPlaceholderFailure, calls };
+      }
+      subOut += subRes.text + sub.sep;
+    }
+    outParts.push(subOut + part.sep);
+  }
+
+  const assembled = outParts.join("");
+  return isPieceUsableInGlobal(sentence, assembled, spans, onSpanDiff, "span sentence reassembly")
+    ? { text: assembled, calls }
+    : { text: undefined, sawPlaceholderFailure, calls };
+}
+
+/**
+ * True when sending `text` as a single whole-segment request would fail
+ * `numPredictFor`'s context budget before reaching Ollama. Resolves `numCtx`
+ * from `POLYGLOT_NUM_CTX` or `-<N>k` model tag and counts the real single-item
+ * prompt (including any language-specific glossary hint).
+ */
+export function exceedsSingleCallContext(
+  text: string,
+  sourceLang = "en",
+  targetLang = "es",
+  options: TranslateBatchOptions = {},
+): boolean {
+  const source = resolveLanguage(sourceLang);
+  const target = resolveLanguage(targetLang);
+  const modelStr = options.model ?? process.env.POLYGLOT_MODEL ?? "translategemma:12b";
+  const numCtx = resolveNumCtx(modelStr);
+  const srcTokens = estimateTokens(text);
+  const promptTokens =
+    source && target ? estimateTokens(buildSingleItemPrompt(text, source, target, options)) : srcTokens + 400;
+  return numCtx - promptTokens < Math.max(MIN_NUM_PREDICT, srcTokens);
 }
 
 // ─── Is a translation usable? ─────────────────────────────────────
@@ -791,10 +1113,11 @@ export type UnusableReason = "empty" | "placeholders" | "english";
 
 /**
  * Whether `raw`, the model's answer for the masked segment `masked`, can be
- * used: it is not empty, every code-span placeholder came back so the spans
- * can be restored, and no prose sentence of the English is still in it. The
- * English is compared with the spans restored on both sides, so a protected
- * term or an "N of M" count counts as the words it is on the page.
+ * used: it is not empty, every code-span placeholder came back and restores
+ * byte-equal inline code spans in order, and no prose sentence of the English
+ * is still in it. The English is compared with the spans restored on both
+ * sides, so a protected term or an "N of M" count counts as the words it is
+ * on the page.
  *
  * This one test gates the retry, the cache write and the cache read, so a
  * segment is retried, cached or served from the cache on the same grounds.
@@ -807,10 +1130,21 @@ export function unusableReason(
 ): UnusableReason | undefined {
   const cleaned = cleanTranslation(raw, isHeading);
   if (cleaned === "") return "empty";
-  if (spans.length === 0) return survivingProse(masked, cleaned).length > 0 ? "english" : undefined;
+  if (spans.length === 0) {
+    const srcCode = extractCodeSpans(masked);
+    if (srcCode.length > 0 && !codeSpansMatch(srcCode, cleaned, strayBacktickCount(masked))) {
+      return "placeholders";
+    }
+    return survivingProse(masked, cleaned).length > 0 ? "english" : undefined;
+  }
   const restored = restoreCodeSpans(cleaned, [...spans]);
   if (!restored.intact) return "placeholders";
-  return survivingProse(restoreCodeSpans(masked, [...spans]).text, restored.text).length > 0 ? "english" : undefined;
+  const expected = restoreCodeSpans(masked, [...spans]).text;
+  const expectedCode = extractCodeSpans(expected);
+  if (expectedCode.length > 0 && !codeSpansMatch(expectedCode, restored.text, strayBacktickCount(expected))) {
+    return "placeholders";
+  }
+  return survivingProse(expected, restored.text).length > 0 ? "english" : undefined;
 }
 
 // ─── Core translate function ──────────────────────────────────────
@@ -1001,32 +1335,80 @@ export async function translateMarkdown(
   /** Why a masked segment left the plain path, and whether it was retried. */
   const reasonByMasked = new Map<string, string>();
   const retriedMasked = new Set<string>();
+  const partialPlaceholderFallback = new Set<string>();
+  const diffsByMasked = new Map<string, SpanDiff[]>();
+  const pushSpanDiff = (maskedKey: string, diff: SpanDiff | undefined) => {
+    if (!diff) return;
+    let list = diffsByMasked.get(maskedKey);
+    if (!list) {
+      list = [];
+      diffsByMasked.set(maskedKey, list);
+    }
+    if (list.length >= 32) return;
+    const dup = list.some(
+      (d) =>
+        d.stage === diff.stage &&
+        d.piece === diff.piece &&
+        d.spanIndex === diff.spanIndex &&
+        d.expected === diff.expected &&
+        d.received === diff.received &&
+        d.expectedStrayBackticks === diff.expectedStrayBackticks &&
+        d.receivedStrayBackticks === diff.receivedStrayBackticks,
+    );
+    if (!dup) list.push(diff);
+  };
   let retries = 0;
 
   if (uniqueItems.length > 0) {
-    const result = await translateBatch(uniqueItems, sourceLang, targetLang, {
-      model: options.model,
-      temperature: options.temperature,
-      ollamaUrl: options.ollamaUrl,
-      glossary: options.glossary,
-      softwareGlossary: options.softwareGlossary,
-      polish: options.polish,
-      batchCharLimit: options.batchCharLimit,
-      // A heartbeat per finished group of segments, so a long document shows progress
-      // before the whole call returns (the Colab stall guard reads it).
-      onItemsDone: options.onProgress
-        ? (done) => options.onProgress!(Math.min(totalItems - 1, completedItems + done), totalItems)
-        : undefined,
-    });
-    uniqueTranslations = result.translations;
-    ollamaCalls = result.ollamaCalls;
+    const oversizeIndices = new Set<number>();
+    const normalItems: BatchItem[] = [];
+    const normalMap: number[] = [];
+    for (let i = 0; i < uniqueItems.length; i++) {
+      if (
+        exceedsSingleCallContext(uniqueItems[i].text, sourceLang, targetLang, options) &&
+        pieces(uniqueItems[i].text, "line").length > 1
+      ) {
+        oversizeIndices.add(i);
+      } else {
+        normalMap.push(i);
+        normalItems.push(uniqueItems[i]);
+      }
+    }
+
+    uniqueTranslations = new Array(uniqueItems.length).fill("");
+    const resultDetails: Array<{ via: "single" | "batch" | "fallback"; truncated?: boolean } | undefined> = new Array(
+      uniqueItems.length,
+    );
+    if (normalItems.length > 0) {
+      const result = await translateBatch(normalItems, sourceLang, targetLang, {
+        model: options.model,
+        temperature: options.temperature,
+        ollamaUrl: options.ollamaUrl,
+        glossary: options.glossary,
+        softwareGlossary: options.softwareGlossary,
+        polish: options.polish,
+        batchCharLimit: options.batchCharLimit,
+        // A heartbeat per finished group of segments, so a long document shows progress
+        // before the whole call returns (the Colab stall guard reads it).
+        onItemsDone: options.onProgress
+          ? (done) => options.onProgress!(Math.min(totalItems - 1, completedItems + done), totalItems)
+          : undefined,
+      });
+      ollamaCalls = result.ollamaCalls;
+      for (let k = 0; k < normalItems.length; k++) {
+        uniqueTranslations[normalMap[k]] = result.translations[k] ?? "";
+        resultDetails[normalMap[k]] = result.details?.[k];
+      }
+    }
 
     // A translation the segment cannot use (the English echoed back, an empty
     // part, or code-span placeholders that did not come back) is retried once
     // on its own. A segment that took the one-call-per-item fallback after a
     // separator-count mismatch has already been sent on its own, so that is its
-    // retry. A segment still unusable after its retry that has several lines is
-    // then translated line by line, each line with its own placeholders.
+    // retry. A segment still unusable after its retry walks the piecewise
+    // fallback ladder (line by line -> sentence by sentence -> span by span),
+    // keeping each clean block so one unrecoverable line never throws away
+    // sibling lines in the same block list.
     const spansByMasked = new Map<string, string[]>();
     for (const m of misses) if (!spansByMasked.has(m.text)) spansByMasked.set(m.text, m.spans);
     const batchOptions = {
@@ -1042,11 +1424,12 @@ export async function translateMarkdown(
       const item = uniqueItems[i];
       const spans = spansByMasked.get(item.text) ?? [];
       const isHeading = item.kind === "heading";
-      const via = result.details?.[i]?.via ?? "batch";
-      const problem = unusableReason(item.text, spans, uniqueTranslations[i], isHeading);
+      const isOversize = oversizeIndices.has(i);
+      const via = resultDetails[i]?.via ?? "batch";
+      const problem = isOversize ? "empty" : unusableReason(item.text, spans, uniqueTranslations[i], isHeading);
       if (problem === undefined && via !== "fallback") continue;
 
-      const truncated = result.details?.[i]?.truncated === true;
+      const truncated = resultDetails[i]?.truncated === true;
       const how =
         via === "fallback" ? "after a separator-count mismatch" : via === "single" ? "as a single item" : "in a batch";
       if (problem === undefined) {
@@ -1060,8 +1443,9 @@ export async function translateMarkdown(
         continue;
       }
 
-      const what =
-        problem === "empty"
+      const what = isOversize
+        ? "segment exceeds single-call context window"
+        : problem === "empty"
           ? truncated
             ? `output cut off at the num_predict cap ${how}`
             : `empty output ${how}`
@@ -1072,51 +1456,239 @@ export async function translateMarkdown(
 
       let recovered = false;
       let route = what;
-      if (via !== "fallback") {
+      let sawPlaceholderFailure = problem === "placeholders";
+      const onDiff = (diff: SpanDiff) => pushSpanDiff(item.text, diff);
+      if (problem === "placeholders") {
+        const d = diffCandidateSpans(item.text, spans, cleanTranslation(uniqueTranslations[i], isHeading));
+        if (d) onDiff({ ...d, stage: via });
+      }
+      if (!isOversize && via !== "fallback") {
         const retry = await translateBatch([item], sourceLang, targetLang, batchOptions);
         ollamaCalls += retry.ollamaCalls;
         retries++;
         options.onHeartbeat?.();
         const again = retry.translations[0] ?? "";
-        if (unusableReason(item.text, spans, again, isHeading) === undefined) {
+        const retryProblem = unusableReason(item.text, spans, again, isHeading);
+        if (retryProblem === undefined) {
           uniqueTranslations[i] = again;
           recovered = true;
+        } else if (retryProblem === "placeholders") {
+          sawPlaceholderFailure = true;
+          const d = diffCandidateSpans(item.text, spans, cleanTranslation(again, isHeading));
+          if (d) onDiff({ ...d, stage: "retry" });
         }
-      } else {
+      } else if (!isOversize) {
         route = `${what} (its one-call-per-item answer was its retry)`;
       }
 
-      // Last steps before giving up: line by line (a multi-line segment), then
-      // sentence by sentence (what recovered the longest lines in practice). A
-      // step applies only when it cuts the segment differently from the one
-      // before; and what it returns is checked as a whole, because pieces that
-      // each pass can add up to a segment that does not.
-      const sameCut = (): boolean =>
-        pieces(item.text, "line").flat().join("\n") === pieces(item.text, "sentence").flat().join("\n");
-      const hasLines = pieces(item.text, "line").length > 1;
-      for (const [mode, label, applies] of [
-        ["line", "line by line", hasLines],
-        ["sentence", "sentence by sentence", !sameCut()],
-      ] as const) {
-        if (recovered || !applies) continue;
-        const attempt = await translateByPieces(item, spans, mode, sourceLang, targetLang, batchOptions);
-        ollamaCalls += attempt.calls;
-        options.onHeartbeat?.();
-        if (attempt.translation === undefined) {
-          route += `; ${label} did not recover it`;
-          continue;
+      if (!recovered) {
+        const blocks = buildSegmentBlocks(item.text);
+        const blockDone: Array<string | undefined> = new Array(blocks.length).fill(undefined);
+        const sentenceDone: Array<Array<string | undefined>> = blocks.map((b) =>
+          new Array(b.sentences.length).fill(undefined),
+        );
+        const hasLines = pieces(item.text, "line").length > 1;
+        const sameCut =
+          pieces(item.text, "line").flat().join("\n") === pieces(item.text, "sentence").flat().join("\n");
+
+        // Rung 1: line by line (multi-line segments)
+        if (hasLines) {
+          const lineResults: Array<Array<string | undefined>> = [];
+          let allLinesOk = true;
+          for (let b = 0; b < blocks.length; b++) {
+            const blk = blocks[b]!;
+            const resLines: Array<string | undefined> = [];
+            for (const rawLine of blk.rawLines) {
+              const r = await translatePiece(
+                rawLine,
+                spans,
+                item.kind,
+                sourceLang,
+                targetLang,
+                batchOptions,
+                options.onHeartbeat,
+                onDiff,
+                "line",
+              );
+              ollamaCalls += r.calls;
+              if (r.text === undefined) {
+                allLinesOk = false;
+                if (r.reason === "placeholders") sawPlaceholderFailure = true;
+              }
+              resLines.push(r.text);
+            }
+            lineResults.push(resLines);
+          }
+
+          let whole: UnusableReason | undefined = allLinesOk ? undefined : "placeholders";
+          if (allLinesOk) {
+            const candidate = lineResults.map((ls) => ls.join("\n")).join("\n");
+            whole = unusableReason(item.text, spans, candidate, isHeading);
+            if (whole === undefined) {
+              uniqueTranslations[i] = candidate;
+              recovered = true;
+              route += "; translated line by line";
+            } else {
+              if (whole === "placeholders") {
+                const d = diffCandidateSpans(item.text, spans, cleanTranslation(candidate, isHeading));
+                if (d) onDiff({ ...d, stage: "line reassembly" });
+              }
+              route += `; line by line did not recover it (the reassembled segment was still ${whole === "english" ? "English" : whole})`;
+            }
+          } else {
+            route += "; line by line did not recover it";
+          }
+
+          if (!recovered) {
+            // Preserve single-line blocks that passed cleanly; multi-line blocks
+            // re-run joined in sentence mode if needed.
+            for (let b = 0; b < blocks.length; b++) {
+              if (
+                blocks[b]!.rawLines.length === 1 &&
+                lineResults[b]![0] !== undefined &&
+                isPieceUsableInGlobal(blocks[b]!.joined, lineResults[b]![0]!, spans, onDiff, "line block reassembly")
+              ) {
+                blockDone[b] = lineResults[b]![0]!;
+              }
+            }
+          }
         }
-        const whole = unusableReason(item.text, spans, attempt.translation, isHeading);
-        if (whole !== undefined) {
-          route += `; ${label} did not recover it (the reassembled segment was still ${whole === "english" ? "English" : whole})`;
-          continue;
+
+        // Rung 2: sentence by sentence
+        if (!recovered && !sameCut) {
+          for (let b = 0; b < blocks.length; b++) {
+            if (blockDone[b] !== undefined) continue;
+            const blk = blocks[b]!;
+            for (let sIdx = 0; sIdx < blk.sentences.length; sIdx++) {
+              const sent = blk.sentences[sIdx]!;
+              const r = await translatePiece(
+                sent,
+                spans,
+                item.kind,
+                sourceLang,
+                targetLang,
+                batchOptions,
+                options.onHeartbeat,
+                onDiff,
+                "sentence",
+              );
+              ollamaCalls += r.calls;
+              if (r.text === undefined) {
+                if (r.reason === "placeholders") sawPlaceholderFailure = true;
+              } else {
+                sentenceDone[b]![sIdx] = r.text;
+              }
+            }
+            if (sentenceDone[b]!.every((x) => x !== undefined)) {
+              const joinedOut = sentenceDone[b]!.join(" ");
+              if (isPieceUsableInGlobal(blk.joined, joinedOut, spans, onDiff, "sentence block reassembly")) {
+                blockDone[b] = joinedOut;
+              }
+            }
+          }
+
+          if (blockDone.every((x) => x !== undefined)) {
+            const candidate = blockDone.join("\n");
+            const whole = unusableReason(item.text, spans, candidate, isHeading);
+            if (whole === undefined) {
+              uniqueTranslations[i] = candidate;
+              recovered = true;
+              route += "; translated sentence by sentence";
+            } else {
+              if (whole === "placeholders") {
+                const d = diffCandidateSpans(item.text, spans, cleanTranslation(candidate, isHeading));
+                if (d) onDiff({ ...d, stage: "sentence reassembly" });
+              }
+              route += `; sentence by sentence did not recover it (the reassembled segment was still ${whole === "english" ? "English" : whole})`;
+            }
+          } else {
+            route += "; sentence by sentence did not recover it";
+          }
         }
-        uniqueTranslations[i] = attempt.translation;
-        recovered = true;
-        route += `; translated ${label}`;
+
+        // Rung 3: span by span (split dense sentences down to <=3 then <=1 placeholders)
+        const hasDenseSentence =
+          !recovered &&
+          (sawPlaceholderFailure || isOversize || truncated) &&
+          blocks.some(
+            (blk, b) =>
+              blockDone[b] === undefined &&
+              blk.sentences.some(
+                (sent, sIdx) => sentenceDone[b]![sIdx] === undefined && splitSpanBounded(sent, 1).length > 1,
+              ),
+          );
+        if (hasDenseSentence) {
+          for (let b = 0; b < blocks.length; b++) {
+            if (blockDone[b] !== undefined) continue;
+            const blk = blocks[b]!;
+            for (let sIdx = 0; sIdx < blk.sentences.length; sIdx++) {
+              if (sentenceDone[b]![sIdx] !== undefined) continue;
+              const sent = blk.sentences[sIdx]!;
+              if (splitSpanBounded(sent, 1).length <= 1) continue;
+              const r = await translateSentenceSpanBounded(
+                sent,
+                spans,
+                item.kind,
+                sourceLang,
+                targetLang,
+                batchOptions,
+                options.onHeartbeat,
+                onDiff,
+              );
+              ollamaCalls += r.calls;
+              if (r.text === undefined) {
+                if (r.sawPlaceholderFailure) sawPlaceholderFailure = true;
+              } else {
+                sentenceDone[b]![sIdx] = r.text;
+              }
+            }
+            if (sentenceDone[b]!.every((x) => x !== undefined)) {
+              const joinedOut = sentenceDone[b]!.join(" ");
+              if (isPieceUsableInGlobal(blk.joined, joinedOut, spans, onDiff, "span block reassembly")) {
+                blockDone[b] = joinedOut;
+              }
+            }
+          }
+
+          if (blockDone.every((x) => x !== undefined)) {
+            const candidate = blockDone.join("\n");
+            const whole = unusableReason(item.text, spans, candidate, isHeading);
+            if (whole === undefined) {
+              uniqueTranslations[i] = candidate;
+              recovered = true;
+              route += "; translated span by span";
+            } else {
+              if (whole === "placeholders") {
+                const d = diffCandidateSpans(item.text, spans, cleanTranslation(candidate, isHeading));
+                if (d) onDiff({ ...d, stage: "span reassembly" });
+              }
+              route += `; span by span did not recover it (the reassembled segment was still ${whole === "english" ? "English" : whole})`;
+            }
+          } else {
+            route += "; span by span did not recover it";
+          }
+        }
+
+        // Per-block salvage: keep translated blocks and fall back to English only
+        // for blocks that failed, so one unrecoverable line never blanks out siblings.
+        if (!recovered && blocks.length > 1 && blockDone.some((x) => x !== undefined)) {
+          uniqueTranslations[i] = blocks.map((blk, b) => blockDone[b] ?? blk.rawLines.join("\n")).join("\n");
+          if (sawPlaceholderFailure) partialPlaceholderFallback.add(item.text);
+        } else if (!recovered && isOversize) {
+          uniqueTranslations[i] = item.text;
+        }
       }
+
       reasonByMasked.set(item.text, route);
-      fallbacks.push({ lang: targetLang, segment: segmentLabel(item.text), reason: route, retried: true, recovered });
+      const collectedDiffs = diffsByMasked.get(item.text);
+      fallbacks.push({
+        lang: targetLang,
+        segment: segmentLabel(item.text),
+        reason: route,
+        retried: true,
+        recovered,
+        ...(collectedDiffs && collectedDiffs.length > 0 ? { spanDiffs: collectedDiffs } : {}),
+      });
     }
 
     // Cache the results, under each miss's own key: two misses can share a
@@ -1171,32 +1743,69 @@ export async function translateMarkdown(
       cleaned = cleanTranslation(translated, item.kind === "heading");
 
       // Put the inline code spans and protected terms back. If the
-      // placeholders did not survive the round trip the translation has
-      // silently lost or doubled an identifier, so fall back to the source
-      // text: untranslated prose is a visible, reportable cost, whereas a
-      // mangled `npm install` line reads as correct and is not. The fallback
-      // is the masked source restored, which is the source with its counts
-      // written as N/M.
+      // placeholders did not survive the round trip (or an unmasked segment
+      // altered an inline code span) the translation has silently lost or
+      // damaged an identifier, so fall back to the source text: untranslated
+      // prose is a visible, reportable cost, whereas a mangled `npm install`
+      // line reads as correct and is not. The fallback is the masked source
+      // restored, which is the source with its counts written as N/M.
+      const recordPlaceholderFallback = (partial: boolean) => {
+        warnings.push(
+          partial
+            ? `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation on every line; kept the source text for some lines while keeping translated sibling blocks.`
+            : `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
+        );
+        reasonByMasked.set(
+          item.text,
+          `${reasonByMasked.get(item.text) ?? "code-span placeholders did not survive"}; ${
+            partial ? "the source text was kept for some lines" : "the source text was kept"
+          }`,
+        );
+      };
+
+      const expected = item.spans.length > 0 ? restoreCodeSpans(item.text, item.spans).text : item.original;
+      const expectedCode = extractCodeSpans(expected);
       if (item.spans.length > 0) {
         const restored = restoreCodeSpans(cleaned, item.spans);
-        if (restored.intact) {
+        const spansOk =
+          restored.intact &&
+          (expectedCode.length === 0 || codeSpansMatch(expectedCode, restored.text, strayBacktickCount(expected)));
+        if (spansOk) {
           cleaned = restored.text;
+          if (partialPlaceholderFallback.has(item.text)) recordPlaceholderFallback(true);
         } else {
-          warnings.push(
-            `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
-          );
-          cleaned = restoreCodeSpans(item.text, item.spans).text;
-          reasonByMasked.set(
-            item.text,
-            `${reasonByMasked.get(item.text) ?? "code-span placeholders did not survive"}; the source text was kept`,
-          );
+          const assemblyDiff = diffCandidateSpans(item.text, item.spans, cleaned);
+          if (assemblyDiff) pushSpanDiff(item.text, { ...assemblyDiff, stage: "assembly" });
+          recordPlaceholderFallback(false);
+          cleaned = expected;
         }
+      } else if (expectedCode.length > 0 && !codeSpansMatch(expectedCode, cleaned, strayBacktickCount(expected))) {
+        const assemblyDiff = diffCandidateSpans(item.original, [], cleaned);
+        if (assemblyDiff) pushSpanDiff(item.text, { ...assemblyDiff, stage: "assembly" });
+        recordPlaceholderFallback(false);
+        cleaned = expected;
+        if (!retriedMasked.has(item.text)) {
+          const collectedDiffs = diffsByMasked.get(item.text);
+          fallbacks.push({
+            lang: targetLang,
+            segment: segmentLabel(item.text),
+            reason: reasonByMasked.get(item.text) ?? "code-span placeholders did not survive; the source text was kept",
+            retried: false,
+            recovered: false,
+            ...(collectedDiffs && collectedDiffs.length > 0 ? { spanDiffs: collectedDiffs } : {}),
+          });
+        } else if (assemblyDiff) {
+          const segLbl = segmentLabel(item.text);
+          const existing = fallbacks.find((f) => f.segment === segLbl);
+          if (existing) existing.spanDiffs = diffsByMasked.get(item.text);
+        }
+      } else if (partialPlaceholderFallback.has(item.text)) {
+        recordPlaceholderFallback(true);
       }
 
       // The finished segment, whatever road it took (model, retry, an empty
       // part, the placeholder fallback): any prose line still identical to the
       // English is untranslated. A pinned segment never reaches here.
-      const expected = item.spans.length > 0 ? restoreCodeSpans(item.text, item.spans).text : item.original;
       for (const line of survivingProse(expected, cleaned)) {
         untranslated.push({
           lang: targetLang,

@@ -47,6 +47,7 @@ if (rawArgv.includes("--help") || rawArgv.includes("-h")) {
   console.log(
     "Usage: node scripts/translate-readme.mjs <readme> <lang-code> [--fast] [--no-cache] [--cache-clear] [--on-lost-span=fail|report] [--on-untranslated=fail|report] [--help]"
   );
+  console.log('Note: "pt-BR" is accepted as an alias of "pt" and writes README.pt-BR.md.');
   process.exit(0);
 }
 const args = rawArgv.filter((a) => !a.startsWith("--"));
@@ -60,6 +61,9 @@ if (!readmePath || !targetCode) {
   );
   process.exit(1);
 }
+
+const isPtBrAlias = /^pt[-_]br$/i.test(targetCode);
+const canonicalTargetCode = isPtBrAlias ? "pt" : targetCode;
 
 let onLostSpan;
 let onUntranslated;
@@ -82,7 +86,7 @@ const absReadmePath = resolve(readmePath);
 
 const readme = readFileSync(absReadmePath, "utf-8");
 console.log(
-  `Translating ${readmePath} → ${targetCode}${useFast ? " [fast mode]" : ""}`
+  `Translating ${readmePath} → ${isPtBrAlias ? "pt-BR (pt)" : targetCode}${useFast ? " [fast mode]" : ""}`
 );
 
 const start = Date.now();
@@ -102,7 +106,7 @@ function writeHeartbeat(completed) {
   if (!dir) return;
   try {
     const tag = (process.env.POLYGLOT_PROGRESS_TAG || "readme").replace(/[^A-Za-z0-9_.-]/g, "_");
-    writeFileSync(resolve(dir, `${tag}.${targetCode}.txt`), `${heartbeatCount}\n`);
+    writeFileSync(resolve(dir, `${tag}.${canonicalTargetCode}.txt`), `${heartbeatCount}\n`);
   } catch {
     // A heartbeat that cannot be written must never fail a translation.
   }
@@ -112,7 +116,7 @@ let result;
 let lostSpanError;
 let untranslatedError;
 try {
-  result = await translateMarkdown(readme, "en", targetCode, {
+  result = await translateMarkdown(readme, "en", canonicalTargetCode, {
     model,
     cache: useCache,
     cacheClear: doCacheClear,
@@ -164,7 +168,7 @@ if (result.warnings.length > 0) {
 console.log(`\nDone! ${result.segments} segments in ${elapsed}s`);
 
 // Write output
-const ext = targetCode.toLowerCase();
+const ext = isPtBrAlias ? "pt-BR" : targetCode.toLowerCase();
 const outPath = readmePath.replace(/README\.md$/, `README.${ext}.md`);
 const writtenBytes = Buffer.from(result.markdown, "utf-8");
 writeFileSync(outPath, writtenBytes);
