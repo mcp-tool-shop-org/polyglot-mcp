@@ -20,38 +20,62 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 0,
-      "changed": 3,
+      "added": 2,
+      "changed": 17,
       "moved": 0,
-      "parts": 3,
+      "parts": 4,
       "removed": 0
     },
     "items": [
       {
-        "kind": "landing",
-        "sentence": "README.ja.md is now also read by src/colabLane.test.ts.",
+        "kind": "door",
+        "sentence": "CI now also runs src/translateMarkdown.denseCodeSpans.test.ts.",
         "subjects": [
-          "README.ja.md",
-          "src/colabLane.test.ts"
+          ".github/workflows/ci.yml",
+          "src/translateMarkdown.denseCodeSpans.test.ts"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "Publish to npm now also runs src/translateMarkdown.denseCodeSpans.test.ts.",
+        "subjects": [
+          ".github/workflows/publish.yml",
+          "src/translateMarkdown.denseCodeSpans.test.ts"
         ]
       },
       {
         "kind": "landing",
-        "sentence": "README.zh.md is now also read by src/colabLane.test.ts.",
+        "sentence": "README.pt-BR.md is now also read by scripts/translate-readme.mjs.",
         "subjects": [
-          "README.zh.md",
-          "src/colabLane.test.ts"
+          "README.pt-BR.md",
+          "scripts/translate-readme.mjs"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "scripts/translate-readme.mjs is now also read by src/translateMarkdown.denseCodeSpans.test.ts.",
+        "subjects": [
+          "scripts/translate-readme.mjs",
+          "src/translateMarkdown.denseCodeSpans.test.ts"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "src/fixtures/dense-code-spans/ai-rpg-engine.README.d53d90ea.md is now read by src/translateMarkdown.denseCodeSpans.test.ts.",
+        "subjects": [
+          "src/fixtures/dense-code-spans/ai-rpg-engine.README.d53d90ea.md",
+          "src/translateMarkdown.denseCodeSpans.test.ts"
         ]
       },
       {
         "kind": "counts",
-        "sentence": "3 files changed content, across 3 parts.",
+        "sentence": "2 files added and 17 changed content, across 4 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "3701108ec3b96216057c92ff9aadd08747ecef15",
-      "generatedAt": "2026-11-12T20:21:13.573Z"
+      "commit": "280cb7c9eb5d4d6b986cf8801b213665dd99ffb4",
+      "generatedAt": "2026-11-12T20:35:54.095Z"
     },
     "unchanged": false
   },
@@ -59,7 +83,7 @@
     {
       "a": "scripts/translate-all.mjs",
       "b": "scripts/translate-readme.mjs",
-      "either": 10,
+      "either": 11,
       "partLabels": [
         "scripts",
         "scripts"
@@ -74,7 +98,7 @@
     {
       "a": "scripts/translate-readme.mjs",
       "b": "src/translateMarkdown.ts",
-      "either": 11,
+      "either": 12,
       "partLabels": [
         "scripts",
         "src"
@@ -84,17 +108,32 @@
         "src"
       ],
       "relation": "a-imports-b",
-      "shared": 6
+      "shared": 7
+    },
+    {
+      "a": "src/survival.ts",
+      "b": "src/translateMarkdown.ts",
+      "either": 10,
+      "partLabels": [
+        "src",
+        "src"
+      ],
+      "parts": [
+        "src",
+        "src"
+      ],
+      "relation": "inside",
+      "shared": 5
     }
   ],
   "changesTogetherNote": [
     "Confidence is low: fewer than 25 source files reach 10 revisions in the window.",
-    "Window: 180 days; a pair counts from 3 shared commits, since 0 source files reach 10 revisions; the floor rises to 10 when 25 do."
+    "Window: 180 days; a pair counts from 3 shared commits, since 1 source file reaches 10 revisions; the floor rises to 10 when 25 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "280cb7c9eb5d4d6b986cf8801b213665dd99ffb4",
+  "commit": "c15ac844dad0ebf7908dc4a6e338301fcdb6026b",
   "defaultBranch": "main",
-  "derived": "8 parts, mostly TypeScript (56 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
+  "derived": "8 parts, mostly TypeScript (57 files), JavaScript (5), Python (4), CSS (2), shell (2) and Astro (1). Work enters through 5 doors; CI, Deploy site to GitHub Pages, Publish to npm, @mcptoolshop/polyglot-mcp and polyglot-mcp each reach 1 part, and CI is followed because it comes first by name. It publishes to npm. It deploys a site to GitHub Pages. People run polyglot-mcp. People import @mcptoolshop/polyglot-mcp.",
   "doors": [
     {
       "builds": [
@@ -112,7 +151,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 53
+          "files": 54
         }
       ],
       "runs": [
@@ -140,6 +179,7 @@
         "src/translateMarkdown.cache.test.ts",
         "src/translateMarkdown.codespans.test.ts",
         "src/translateMarkdown.concurrency.test.ts",
+        "src/translateMarkdown.denseCodeSpans.test.ts",
         "src/translateMarkdown.heartbeat.test.ts",
         "src/translateMarkdown.protected.test.ts",
         "src/translateMarkdown.roundtrip.test.ts",
@@ -150,8 +190,8 @@
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 33,
-      "runsMore": 30,
+      "runsCount": 34,
+      "runsMore": 31,
       "sends": [
         "uploads coverage to Codecov"
       ],
@@ -210,7 +250,7 @@
         {
           "boundary": "src",
           "depth": 0,
-          "files": 53
+          "files": 54
         }
       ],
       "runs": [
@@ -238,6 +278,7 @@
         "src/translateMarkdown.cache.test.ts",
         "src/translateMarkdown.codespans.test.ts",
         "src/translateMarkdown.concurrency.test.ts",
+        "src/translateMarkdown.denseCodeSpans.test.ts",
         "src/translateMarkdown.heartbeat.test.ts",
         "src/translateMarkdown.protected.test.ts",
         "src/translateMarkdown.roundtrip.test.ts",
@@ -248,8 +289,8 @@
         "src/validate.test.ts",
         "src/version.test.ts"
       ],
-      "runsCount": 33,
-      "runsMore": 30,
+      "runsCount": 34,
+      "runsMore": 31,
       "sends": [
         "publishes to npm"
       ],
@@ -333,7 +374,7 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T20:35:54.095Z",
+  "generatedAt": "2026-11-25T19:38:09.621Z",
   "limits": [
     "5 writes and 15 reads use paths built at run time and are not named here.",
     "12 writes and 24 reads go to a path their caller passes, not to this repository.",
@@ -364,11 +405,16 @@
       "files": [
         "src/languages.ts",
         "src/glossary.ts",
-        "src/codeSpans.ts",
         "src/polish.ts",
         "src/validate.ts"
       ],
       "from": "src/translate.ts"
+    },
+    {
+      "files": [
+        "src/glossary.ts"
+      ],
+      "from": "src/numCtx.ts"
     }
   ],
   "startDoor": ".github/workflows/ci.yml",
@@ -378,15 +424,17 @@
     "src/translate.ts",
     "src/ollama.ts",
     "src/numCtx.ts",
+    "src/codeSpans.ts",
+    "src/protectedTerms.ts",
     "src/errors.ts"
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 33,
+  "testFiles": 34,
   "testedBy": {
-    "scripts": 1,
+    "scripts": 2,
     "site": 0,
-    "src": 30
+    "src": 31
   },
   "testedCodeParts": 3,
   "unnamedWrites": 5,
