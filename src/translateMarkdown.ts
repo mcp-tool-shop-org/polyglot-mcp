@@ -750,6 +750,7 @@ function pieces(text: string, mode: "line" | "sentence"): string[][] {
  * Cuts only outside atomic ranges (links, HTML tags, placeholders, short bold
  * spans), preferring `; ` / `: ` / ` — `, then `, `, then whitespace, then
  * inline punctuation such as `/` so reassembly restores exact spacing.
+ * Scans in time bounded by `n × atomic ranges` without regex backtracking.
  */
 export function splitSpanBounded(
   sentence: string,
@@ -1661,44 +1662,59 @@ export async function translateMarkdown(
       cleaned = cleanTranslation(translated, item.kind === "heading");
 
       // Put the inline code spans and protected terms back. If the
-      // placeholders did not survive the round trip the translation has
-      // silently lost or doubled an identifier, so fall back to the source
-      // text: untranslated prose is a visible, reportable cost, whereas a
-      // mangled `npm install` line reads as correct and is not. The fallback
-      // is the masked source restored, which is the source with its counts
-      // written as N/M.
-      const recordPlaceholderFallback = () => {
+      // placeholders did not survive the round trip (or an unmasked segment
+      // altered an inline code span) the translation has silently lost or
+      // damaged an identifier, so fall back to the source text: untranslated
+      // prose is a visible, reportable cost, whereas a mangled `npm install`
+      // line reads as correct and is not. The fallback is the masked source
+      // restored, which is the source with its counts written as N/M.
+      const recordPlaceholderFallback = (partial: boolean) => {
         warnings.push(
-          `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
+          partial
+            ? `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation on every line; kept the source text for some lines while keeping translated sibling blocks.`
+            : `[segment "${item.original.slice(0, 40)}…"]: code-span placeholders did not survive translation; kept the source text so the identifiers stay correct.`,
         );
         reasonByMasked.set(
           item.text,
-          `${reasonByMasked.get(item.text) ?? "code-span placeholders did not survive"}; the source text was kept`,
+          `${reasonByMasked.get(item.text) ?? "code-span placeholders did not survive"}; ${
+            partial ? "the source text was kept for some lines" : "the source text was kept"
+          }`,
         );
       };
 
+      const expected = item.spans.length > 0 ? restoreCodeSpans(item.text, item.spans).text : item.original;
+      const expectedCode = extractCodeSpans(expected);
       if (item.spans.length > 0) {
         const restored = restoreCodeSpans(cleaned, item.spans);
-        const expected = restoreCodeSpans(item.text, item.spans).text;
-        const expectedCode = extractCodeSpans(expected);
         const spansOk =
           restored.intact &&
           (expectedCode.length === 0 || codeSpansMatch(expectedCode, restored.text, strayBacktickCount(expected)));
         if (spansOk) {
           cleaned = restored.text;
-          if (partialPlaceholderFallback.has(item.text)) recordPlaceholderFallback();
+          if (partialPlaceholderFallback.has(item.text)) recordPlaceholderFallback(true);
         } else {
-          recordPlaceholderFallback();
+          recordPlaceholderFallback(false);
           cleaned = expected;
         }
+      } else if (expectedCode.length > 0 && !codeSpansMatch(expectedCode, cleaned, strayBacktickCount(expected))) {
+        recordPlaceholderFallback(false);
+        cleaned = expected;
+        if (!retriedMasked.has(item.text)) {
+          fallbacks.push({
+            lang: targetLang,
+            segment: segmentLabel(item.text),
+            reason: reasonByMasked.get(item.text) ?? "code-span placeholders did not survive; the source text was kept",
+            retried: false,
+            recovered: false,
+          });
+        }
       } else if (partialPlaceholderFallback.has(item.text)) {
-        recordPlaceholderFallback();
+        recordPlaceholderFallback(true);
       }
 
       // The finished segment, whatever road it took (model, retry, an empty
       // part, the placeholder fallback): any prose line still identical to the
       // English is untranslated. A pinned segment never reaches here.
-      const expected = item.spans.length > 0 ? restoreCodeSpans(item.text, item.spans).text : item.original;
       for (const line of survivingProse(expected, cleaned)) {
         untranslated.push({
           lang: targetLang,

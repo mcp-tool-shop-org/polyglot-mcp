@@ -23,8 +23,92 @@
 
 import { findProtectedSpans, hashRules, type ProtectedSpanKind, type ProtectedTermSet } from "./protectedTerms.js";
 
-/** Matches an inline code span, backticks included. Never spans a newline. */
+/** Matches a single-backtick inline code span on one line. Kept for callers expecting a RegExp. */
 export const CODE_SPAN_PATTERN = /`[^`\n]+`/g;
+
+export interface InlineCodeSpanMatch {
+  start: number;
+  end: number;
+  span: string;
+}
+
+/**
+ * Find all inline code spans in `text` using CommonMark's backtick-run rule:
+ * an opening run of N backticks closes only at the next run of exact length N
+ * on the same line. Single-pass O(n) per line with no regex backtracking.
+ */
+export function findInlineCodeSpans(text: string): InlineCodeSpanMatch[] {
+  const spans: InlineCodeSpanMatch[] = [];
+  let lineStart = 0;
+
+  while (lineStart < text.length) {
+    const nl = text.indexOf("\n", lineStart);
+    const lineEnd = nl === -1 ? text.length : nl;
+    const firstTick = text.indexOf("`", lineStart);
+
+    if (firstTick !== -1 && firstTick < lineEnd) {
+      const runs: Array<{ pos: number; len: number }> = [];
+      const byLen = new Map<number, number[]>();
+      let i = firstTick;
+
+      while (i < lineEnd) {
+        if (text[i] === "`") {
+          let len = 1;
+          while (i + len < lineEnd && text[i + len] === "`") len++;
+          const runIdx = runs.length;
+          runs.push({ pos: i, len });
+          let list = byLen.get(len);
+          if (!list) {
+            list = [];
+            byLen.set(len, list);
+          }
+          list.push(runIdx);
+          i += len;
+        } else {
+          i++;
+        }
+      }
+
+      if (runs.length >= 2) {
+        const ptrByLen = new Map<number, number>();
+        let r = 0;
+        while (r < runs.length) {
+          const open = runs[r]!;
+          const list = byLen.get(open.len)!;
+          let p = ptrByLen.get(open.len) ?? 0;
+          while (p < list.length && list[p]! <= r) p++;
+          if (p < list.length) {
+            const closeIdx = list[p]!;
+            ptrByLen.set(open.len, p + 1);
+            const end = runs[closeIdx]!.pos + runs[closeIdx]!.len;
+            spans.push({ start: open.pos, end, span: text.slice(open.pos, end) });
+            r = closeIdx + 1;
+          } else {
+            ptrByLen.set(open.len, p);
+            r++;
+          }
+        }
+      }
+    }
+
+    if (nl === -1) break;
+    lineStart = nl + 1;
+  }
+
+  return spans;
+}
+
+function replaceInlineCodeSpans(text: string, replacer: (span: string) => string): string {
+  const matches = findInlineCodeSpans(text);
+  if (matches.length === 0) return text;
+  let out = "";
+  let cursor = 0;
+  for (const m of matches) {
+    out += text.slice(cursor, m.start) + replacer(m.span);
+    cursor = m.end;
+  }
+  return out + text.slice(cursor);
+}
 
 /** Build the placeholder for span `index`. */
 export const codePlaceholder = (index: number): string => `⟦${index}⟧`;
@@ -86,7 +170,7 @@ export function maskCodeSpans(text: string, terms?: ProtectedTermSet): MaskedTex
 
   const spans: string[] = [];
   const kinds: MaskedSpanKind[] = [];
-  let masked = text.replace(CODE_SPAN_PATTERN, (span) => {
+  let masked = replaceInlineCodeSpans(text, (span) => {
     spans.push(span);
     kinds.push("code");
     return codePlaceholder(spans.length - 1);
@@ -124,21 +208,31 @@ export interface RestoreResult {
   intact: boolean;
 }
 
-const EXACT_CODE_SPAN_RE = /^`[^`\n]+`$/;
+function isExactInlineCodeSpan(s: string): boolean {
+  if (!s.startsWith("`") || !s.endsWith("`")) return false;
+  const found = findInlineCodeSpans(s);
+  return found.length === 1 && found[0]!.start === 0 && found[0]!.end === s.length;
+}
 
 /** Return all inline code spans in `text`, in order (backticks included). */
 export function extractCodeSpans(text: string): string[] {
-  return text.match(CODE_SPAN_PATTERN) ?? [];
+  return findInlineCodeSpans(text).map((m) => m.span);
 }
 
 /** Count backtick characters in `text` outside valid inline code spans. */
 export function strayBacktickCount(text: string): number {
-  const outside = text.replace(CODE_SPAN_PATTERN, "");
-  let count = 0;
-  for (let i = 0; i < outside.length; i++) {
-    if (outside[i] === "`") count++;
+  let total = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "`") total++;
   }
-  return count;
+  if (total === 0) return 0;
+  let inSpans = 0;
+  for (const m of findInlineCodeSpans(text)) {
+    for (let i = 0; i < m.span.length; i++) {
+      if (m.span[i] === "`") inSpans++;
+    }
+  }
+  return total - inSpans;
 }
 
 /**
@@ -194,7 +288,7 @@ export function restoreCodeSpans(text: string, spans: string[]): RestoreResult {
     }
     seen[index]++;
     const replacement = spans[index];
-    if (EXACT_CODE_SPAN_RE.test(replacement)) {
+    if (isExactInlineCodeSpan(replacement)) {
       const before = offset > 0 ? str[offset - 1] : "";
       const after = offset + whole.length < str.length ? str[offset + whole.length] : "";
       if (before === "`" || after === "`") {
@@ -204,7 +298,7 @@ export function restoreCodeSpans(text: string, spans: string[]): RestoreResult {
     return replacement;
   });
 
-  const expectedCode = spans.filter((s) => EXACT_CODE_SPAN_RE.test(s));
+  const expectedCode = spans.filter((s) => isExactInlineCodeSpan(s));
   const placeholdersIntact = !unknown && !wrappedInBackticks && seen.every((count) => count === 1);
   const spansIntact = codeSpansMatch(expectedCode, restored);
 

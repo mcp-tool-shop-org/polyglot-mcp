@@ -54,6 +54,12 @@ function fakeModelTranslatePart(part: string, lang: string): string {
   if (part.includes("zzswapspans")) {
     return `[${lang}] ${part.replace("⟦0⟧", "⟦__SWAP__⟧").replace("⟦1⟧", "⟦0⟧").replace("⟦__SWAP__⟧", "⟦1⟧")}`;
   }
+  if (part.includes("zzalterunmasked")) {
+    return `[${lang}] ${part.replace("`foo_bar`", "`foo-bar`")}`;
+  }
+  if (part.includes("zzalterdbl")) {
+    return `[${lang}] ${part.replace("⟦0⟧", "``y``").replace("``x``", "`x`")}`;
+  }
 
   // Dense-placeholder failure reproduction: models drop, merge, or renumber/reorder
   // placeholders when >= 4 appear in a single segment/call (or >= 2 with zzdroptwoplus).
@@ -134,9 +140,10 @@ vi.mock("./ollama.js", () => {
 
 import { translateMarkdown, splitSpanBounded, unusableReason } from "./translateMarkdown.js";
 import { survivingProse } from "./survival.js";
+import { extractCodeSpans } from "./codeSpans.js";
 
 function extractInlineCodeSpans(md: string): string[] {
-  return md.match(/`[^`\n]+`/g) ?? [];
+  return extractCodeSpans(md);
 }
 
 describe("dense inline code-span lines — ai-rpg-engine README fixture", () => {
@@ -218,6 +225,7 @@ describe("dense inline code-span lines — ai-rpg-engine README fixture", () => 
     // All 3 altered lines are reported as untranslated with fallback/warning details.
     expect(result.untranslated).toHaveLength(3);
     expect(result.warnings.join("\n")).toMatch(/placeholders did not survive/);
+    expect(result.warnings.join("\n")).toMatch(/kept the source text for some lines/);
     expect(result.fallbacks).toHaveLength(1);
     expect(result.fallbacks[0]).toMatchObject({ retried: true, recovered: false });
 
@@ -254,7 +262,7 @@ describe("dense inline code-span lines — ai-rpg-engine README fixture", () => 
     // Unmasked text (spans = []) still rejects altered code spans.
     expect(unusableReason("Footnote ⟦1⟧ and `run`.", [], "Nota ⟦1⟧ y `correr`.", false)).toBe("placeholders");
 
-    // Linear-time guard against unclosed "<A" and long whitespace runs.
+    // Bounded-time guard (n × atomic ranges, no regex backtracking) against unclosed "<A" and long whitespace runs.
     const hostile = "⟦0⟧ " + "<A".repeat(25_000) + " " + " ".repeat(25_000) + " ⟦1⟧; ⟦2⟧ — ⟦3⟧";
     const t0 = Date.now();
     const hostileParts = splitSpanBounded(hostile, 1);
@@ -269,6 +277,64 @@ describe("dense inline code-span lines — ai-rpg-engine README fixture", () => 
     expect(result.retries).toBe(1);
     expect(result.untranslated).toHaveLength(1);
     expect(result.markdown).toBe(echoed);
+  }, 30_000);
+
+  it("keeps source text, warns, records fallback, and reports untranslated when an unmasked segment alters a code span", async () => {
+    const doc = "Literal ⟦7⟧ marker and `foo_bar` code zzalterunmasked in this sentence here.";
+    const result = await translateMarkdown(doc, "en", "es", { cache: false });
+
+    expect(result.markdown).toBe(doc);
+    expect(result.markdown).not.toContain("`foo-bar`");
+    expect(result.warnings.join("\n")).toMatch(/kept the source text so the identifiers stay correct/);
+    expect(result.fallbacks).toHaveLength(1);
+    expect(result.fallbacks[0]).toMatchObject({ retried: true, recovered: false });
+    expect(result.untranslated).toHaveLength(1);
+    expect(result.untranslated[0]?.reason).toContain("the source text was kept");
+  }, 30_000);
+
+  it("translates lines with double-backtick code spans cleanly with spans byte-equal", async () => {
+    const doc = [
+      "Use ``x`` to start the local server today.",
+      "",
+      "Use ``foo `bar` baz`` to inspect nested backticks today.",
+    ].join("\n");
+    const result = await translateMarkdown(doc, "en", "es", { cache: false });
+
+    expect(result.untranslated).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.markdown).not.toBe(doc);
+    expect(result.markdown).toContain("``x``");
+    expect(result.markdown).toContain("``foo `bar` baz``");
+    expect(extractInlineCodeSpans(result.markdown)).toEqual(["``x``", "``foo `bar` baz``"]);
+  }, 30_000);
+
+  it("keeps double-backtick lines in English and reports them when the model alters or wraps the span", async () => {
+    const wrapped = "Use ``x`` zzalterbacktick to start the local server today.";
+    const wrappedRes = await translateMarkdown(wrapped, "en", "es", { cache: false });
+    expect(wrappedRes.markdown).toBe(wrapped);
+    expect(wrappedRes.markdown).not.toContain("```x```");
+    expect(wrappedRes.warnings.join("\n")).toMatch(/placeholders did not survive/);
+    expect(wrappedRes.fallbacks).toHaveLength(1);
+    expect(wrappedRes.fallbacks[0]).toMatchObject({ retried: true, recovered: false });
+    expect(wrappedRes.untranslated).toHaveLength(1);
+
+    const replaced = "Use ``x`` zzalterdbl to start the local server today.";
+    const replacedRes = await translateMarkdown(replaced, "en", "es", { cache: false });
+    expect(replacedRes.markdown).toBe(replaced);
+    expect(replacedRes.markdown).not.toContain("``y``");
+    expect(replacedRes.warnings.join("\n")).toMatch(/placeholders did not survive/);
+    expect(replacedRes.fallbacks).toHaveLength(1);
+    expect(replacedRes.fallbacks[0]).toMatchObject({ retried: true, recovered: false });
+    expect(replacedRes.untranslated).toHaveLength(1);
+
+    const downgraded = "Literal ⟦7⟧ marker and ``x`` code zzalterdbl in this sentence here.";
+    const downgradedRes = await translateMarkdown(downgraded, "en", "es", { cache: false });
+    expect(downgradedRes.markdown).toBe(downgraded);
+    expect(extractInlineCodeSpans(downgradedRes.markdown)).toEqual(["``x``"]);
+    expect(downgradedRes.warnings.join("\n")).toMatch(/placeholders did not survive/);
+    expect(downgradedRes.fallbacks).toHaveLength(1);
+    expect(downgradedRes.fallbacks[0]).toMatchObject({ retried: true, recovered: false });
+    expect(downgradedRes.untranslated).toHaveLength(1);
   }, 30_000);
 });
 

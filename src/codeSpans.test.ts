@@ -62,6 +62,16 @@ describe("maskCodeSpans", () => {
     expect(text).toBe(md);
     expect(spans).toEqual([]);
   });
+
+  it("masks CommonMark multi-backtick code spans whole", () => {
+    const simple = maskCodeSpans("Use ``x`` to start.");
+    expect(simple.text).toBe("Use ⟦0⟧ to start.");
+    expect(simple.spans).toEqual(["``x``"]);
+
+    const nested = maskCodeSpans("Use ``foo `bar` baz`` to inspect.");
+    expect(nested.text).toBe("Use ⟦0⟧ to inspect.");
+    expect(nested.spans).toEqual(["``foo `bar` baz``"]);
+  });
 });
 
 // ─── restoreCodeSpans ──────────────────────────────────────────────
@@ -186,5 +196,26 @@ describe("placeholder patterns — linear time", () => {
     expect(codeSpansMatch(["`a`"], "Usa `a` y `.", 0)).toBe(false);
     expect(codeSpansMatch([], "Usa `a`.", 1)).toBe(false);
     expect(codeSpansMatch([], "Usa `a`.", 0)).toBe(true);
+  });
+
+  it("restores clean multi-backtick spans and rejects wrapped, downgraded, or substituted ones", () => {
+    const { spans } = maskCodeSpans("Use ``x`` and ``foo `bar` baz`` here.");
+    expect(restoreCodeSpans("Usa ⟦0⟧ y ⟦1⟧ aquí.", spans)).toEqual({
+      text: "Usa ``x`` y ``foo `bar` baz`` aquí.",
+      intact: true,
+    });
+    expect(restoreCodeSpans("Usa `⟦0⟧` y ⟦1⟧ aquí.", spans).intact).toBe(false);
+    expect(restoreCodeSpans("Usa ``y`` y ⟦1⟧ aquí.", spans).intact).toBe(false);
+    expect(restoreCodeSpans("Usa `x` y ⟦1⟧ aquí.", spans).intact).toBe(false);
+    expect(strayBacktickCount("Use ``foo `bar` baz`` here.")).toBe(0);
+    expect(strayBacktickCount("An unclosed `` tick here.")).toBe(2);
+  });
+
+  it("handles many unmatched multi-backtick runs in linear time", () => {
+    const hostile = Array.from({ length: 1_000 }, (_, i) => "`".repeat(i + 1)).join(" ");
+    const start = Date.now();
+    expect(extractCodeSpans(hostile)).toEqual([]);
+    expect(strayBacktickCount(hostile)).toBe(500_500);
+    expect(Date.now() - start).toBeLessThan(500);
   });
 });
