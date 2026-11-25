@@ -94,12 +94,12 @@
         "importsAndCoChanges": [],
         "importsOnly": []
       },
-      "cohesion": 0.562044,
+      "cohesion": 0.521739,
       "cohesionDropped": false,
       "confidence": "low",
       "highWater": null,
       "name": "scripts",
-      "qualifyingSourceCommits": 13,
+      "qualifyingSourceCommits": 14,
       "rebaseline": null
     },
     {
@@ -128,12 +128,12 @@
         ],
         "importsOnly": []
       },
-      "cohesion": 0,
+      "cohesion": 0.461539,
       "cohesionDropped": false,
       "confidence": "low",
       "highWater": null,
       "name": "src",
-      "qualifyingSourceCommits": 17,
+      "qualifyingSourceCommits": 18,
       "rebaseline": null
     }
   ],
@@ -171,8 +171,8 @@
         "path": ".polyglot-pins.json"
       },
       {
-        "commits": 14,
-        "lines": 144,
+        "commits": 16,
+        "lines": 170,
         "path": "CHANGELOG.md"
       },
       {
@@ -201,8 +201,8 @@
         "path": "README.ja.md"
       },
       {
-        "commits": 9,
-        "lines": 322,
+        "commits": 10,
+        "lines": 324,
         "path": "README.md"
       },
       {
@@ -222,7 +222,7 @@
       },
       {
         "commits": 14,
-        "lines": 582,
+        "lines": 583,
         "path": "atlas/README.md"
       },
       {
@@ -232,17 +232,17 @@
       },
       {
         "commits": 14,
-        "lines": 2127,
+        "lines": 2117,
         "path": "atlas/page.json"
       },
       {
         "commits": 14,
-        "lines": 4058,
+        "lines": 4153,
         "path": "atlas/statistics.json"
       },
       {
         "commits": 14,
-        "lines": 15400,
+        "lines": 15414,
         "path": "atlas/structure.json"
       },
       {
@@ -261,18 +261,18 @@
         "path": "docs/colab-rung1-request.md"
       },
       {
-        "commits": 2,
-        "lines": 208,
+        "commits": 3,
+        "lines": 241,
         "path": "docs/colab-translations.md"
       },
       {
-        "commits": 18,
-        "lines": 1822,
+        "commits": 19,
+        "lines": 1826,
         "path": "package-lock.json"
       },
       {
-        "commits": 12,
-        "lines": 65,
+        "commits": 13,
+        "lines": 67,
         "path": "package.json"
       },
       {
@@ -291,8 +291,8 @@
         "path": "scripts/colab/launch_guards.py"
       },
       {
-        "commits": 5,
-        "lines": 2813,
+        "commits": 6,
+        "lines": 2885,
         "path": "scripts/colab/launch_translate.sh"
       },
       {
@@ -316,8 +316,8 @@
         "path": "scripts/translate-all.mjs"
       },
       {
-        "commits": 9,
-        "lines": 195,
+        "commits": 10,
+        "lines": 207,
         "path": "scripts/translate-readme.mjs"
       },
       {
@@ -341,8 +341,8 @@
         "path": "site/src/content/docs/handbook/beginners.md"
       },
       {
-        "commits": 4,
-        "lines": 66,
+        "commits": 5,
+        "lines": 70,
         "path": "site/src/content/docs/handbook/features.md"
       },
       {
@@ -386,24 +386,29 @@
         "path": "src/cache.ts"
       },
       {
-        "commits": 2,
-        "lines": 169,
+        "commits": 3,
+        "lines": 309,
         "path": "src/codeSpans.test.ts"
       },
       {
-        "commits": 3,
-        "lines": 175,
+        "commits": 4,
+        "lines": 573,
         "path": "src/codeSpans.ts"
       },
       {
         "commits": 5,
-        "lines": 4551,
+        "lines": 4563,
         "path": "src/colabLane.test.ts"
       },
       {
         "commits": 3,
         "lines": 10,
         "path": "src/errors.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 53,
+        "path": "src/fixtures/dense-code-spans/ai-rpg-engine.README.d53d90ea.md"
       },
       {
         "commits": 1,
@@ -496,13 +501,13 @@
         "path": "src/index.ts"
       },
       {
-        "commits": 1,
-        "lines": 97,
+        "commits": 2,
+        "lines": 128,
         "path": "src/numCtx.test.ts"
       },
       {
-        "commits": 1,
-        "lines": 50,
+        "commits": 2,
+        "lines": 115,
         "path": "src/numCtx.ts"
       },
       {
@@ -511,8 +516,8 @@
         "path": "src/ollama.test.ts"
       },
       {
-        "commits": 3,
-        "lines": 76,
+        "commits": 4,
+        "lines": 78,
         "path": "src/ollama.ts"
       },
       {
@@ -551,8 +556,8 @@
         "path": "src/survival.test.ts"
       },
       {
-        "commits": 4,
-        "lines": 1341,
+        "commits": 5,
+        "lines": 1358,
         "path": "src/survival.ts"
       },
       {
@@ -566,8 +571,8 @@
         "path": "src/translate.truncation.test.ts"
       },
       {
-        "commits": 3,
-        "lines": 77,
+        "commits": 4,
+        "lines": 109,
         "path": "src/translate.ts"
       },
       {
@@ -591,14 +596,19 @@
         "path": "src/translateMarkdown.cache.test.ts"
       },
       {
-        "commits": 2,
-        "lines": 182,
+        "commits": 3,
+        "lines": 215,
         "path": "src/translateMarkdown.codespans.test.ts"
       },
       {
         "commits": 2,
         "lines": 142,
         "path": "src/translateMarkdown.concurrency.test.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 532,
+        "path": "src/translateMarkdown.denseCodeSpans.test.ts"
       },
       {
         "commits": 1,
@@ -621,8 +631,8 @@
         "path": "src/translateMarkdown.test.ts"
       },
       {
-        "commits": 10,
-        "lines": 1045,
+        "commits": 11,
+        "lines": 1864,
         "path": "src/translateMarkdown.ts"
       },
       {
@@ -631,8 +641,8 @@
         "path": "src/translateMarkdown.untranslated.fixes.test.ts"
       },
       {
-        "commits": 1,
-        "lines": 315,
+        "commits": 2,
+        "lines": 339,
         "path": "src/translateMarkdown.untranslated.test.ts"
       },
       {
@@ -656,31 +666,31 @@
     "level": "low",
     "reason": "fewer than 25 source files reach 10 revisions in the window"
   },
-  "generatedAt": "2026-11-12T20:35:54.095Z",
+  "generatedAt": "2026-11-25T19:38:09.621Z",
   "generatedFrom": {
-    "commit": "280cb7c9eb5d4d6b986cf8801b213665dd99ffb4"
+    "commit": "c15ac844dad0ebf7908dc4a6e338301fcdb6026b"
   },
   "pairs": [
     {
       "a": "CHANGELOG.md",
       "b": "README.md",
-      "either": 14,
-      "shared": 7,
+      "either": 16,
+      "shared": 8,
       "strength": 0.5
     },
     {
       "a": "CHANGELOG.md",
       "b": "scripts/translate-readme.mjs",
-      "either": 14,
-      "shared": 7,
+      "either": 16,
+      "shared": 8,
       "strength": 0.5
     },
     {
       "a": "CHANGELOG.md",
       "b": "src/translateMarkdown.ts",
-      "either": 14,
-      "shared": 8,
-      "strength": 0.571429
+      "either": 16,
+      "shared": 9,
+      "strength": 0.5625
     },
     {
       "a": "README.es.md",
@@ -823,6 +833,13 @@
       "strength": 1
     },
     {
+      "a": "README.md",
+      "b": "src/survival.ts",
+      "either": 9,
+      "shared": 5,
+      "strength": 0.555556
+    },
+    {
       "a": "README.pt-BR.md",
       "b": "README.zh.md",
       "either": 5,
@@ -874,16 +891,16 @@
     {
       "a": "package-lock.json",
       "b": "package.json",
-      "either": 14,
-      "shared": 10,
-      "strength": 0.714286
+      "either": 15,
+      "shared": 11,
+      "strength": 0.733333
     },
     {
       "a": "scripts/colab/colab_window.sh",
       "b": "scripts/colab/launch_translate.sh",
-      "either": 5,
+      "either": 6,
       "shared": 5,
-      "strength": 1
+      "strength": 0.833333
     },
     {
       "a": "scripts/colab/colab_window.sh",
@@ -895,27 +912,34 @@
     {
       "a": "scripts/colab/launch_translate.sh",
       "b": "src/colabLane.test.ts",
-      "either": 5,
+      "either": 6,
       "shared": 5,
-      "strength": 1
+      "strength": 0.833333
     },
     {
       "a": "scripts/translate-all.mjs",
       "b": "scripts/translate-readme.mjs",
-      "either": 10,
+      "either": 11,
       "shared": 7,
-      "strength": 0.7
+      "strength": 0.636364
     },
     {
       "a": "scripts/translate-readme.mjs",
       "b": "src/translateMarkdown.ts",
-      "either": 11,
-      "shared": 6,
-      "strength": 0.545455
+      "either": 12,
+      "shared": 7,
+      "strength": 0.583333
+    },
+    {
+      "a": "src/survival.ts",
+      "b": "src/translateMarkdown.ts",
+      "either": 10,
+      "shared": 5,
+      "strength": 0.5
     }
   ],
   "parameters": {
-    "appliedChangesetLimit": 45.5,
+    "appliedChangesetLimit": 46,
     "changeset": 50,
     "changesetFraction": 0.25,
     "cohesionDrop": 0.2,
@@ -924,16 +948,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "revision-depth",
-    "headDate": "2026-11-12T15:21:18-05:00",
-    "inScopeFiles": 182,
+    "headDate": "2026-11-25T14:22:33-05:00",
+    "inScopeFiles": 184,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 42,
+    "qualifyingCommits": 44,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-05-16T20:21:18.000Z",
+    "since": "2026-05-29T19:22:33.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",
@@ -949,7 +973,7 @@
     ],
     "sourceFileReach": 20,
     "sourceFileRise": 25,
-    "sourceFilesReachingStrongFloor": 0,
+    "sourceFilesReachingStrongFloor": 1,
     "strength": 0.5,
     "windowDays": 180
   },
