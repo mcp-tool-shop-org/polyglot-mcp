@@ -11,10 +11,10 @@
  */
 
 import GithubSlugger from "github-slugger";
-import { translateBatch, type TranslateBatchOptions, type BatchItem } from "./translate.js";
+import { translateBatch, buildSingleItemPrompt, type TranslateBatchOptions, type BatchItem } from "./translate.js";
 import { resolveLanguage } from "./languages.js";
 import { validateTranslation } from "./validate.js";
-import { PLACEHOLDER_PATTERN, codeSpansMatch, extractCodeSpans, maskCodeSpans, restoreCodeSpans, strayBacktickCount } from "./codeSpans.js";
+import { PLACEHOLDER_PATTERN, codeSpansMatch, diffCandidateSpans, extractCodeSpans, maskCodeSpans, restoreCodeSpans, strayBacktickCount, type SpanDiff } from "./codeSpans.js";
 import { MIN_NUM_PREDICT, estimateTokens, resolveNumCtx } from "./numCtx.js";
 import { anchorsEnabled, DEFAULT_PROTECTED_TERMS, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
 import { createPins, getPin, loadPins, type PinFile } from "./pins.js";
@@ -990,6 +990,8 @@ async function translatePiece(
   targetLang: string,
   batchOptions: Omit<TranslateBatchOptions, "batchCharLimit">,
   onHeartbeat?: () => void,
+  onSpanDiff?: (diff: SpanDiff) => void,
+  stage = "piece",
 ): Promise<{ text: string | undefined; reason?: UnusableReason; calls: number }> {
   if (!/\p{L}/u.test(piece.replace(PLACEHOLDER_PATTERN, ""))) {
     return { text: piece, calls: 0 };
@@ -1003,6 +1005,10 @@ async function translatePiece(
   const answer = r.translations[0] ?? "";
   const reason = unusableReason(local.text, local.spans, answer, false);
   if (reason !== undefined) {
+    if (reason === "placeholders" && onSpanDiff) {
+      const diff = diffCandidateSpans(local.text, local.spans, cleanTranslation(answer, false));
+      if (diff) onSpanDiff({ ...diff, stage, piece: segmentLabel(piece) });
+    }
     return { text: undefined, reason, calls: r.ollamaCalls };
   }
   const restoredNum = cleanTranslation(answer).replace(
@@ -1016,13 +1022,20 @@ function isPieceUsableInGlobal(
   sourcePiece: string,
   outputWithGlobalPlaceholders: string,
   spans: readonly string[],
+  onSpanDiff?: (diff: SpanDiff) => void,
+  stage = "block reassembly",
 ): boolean {
   const local = localiseLine(sourcePiece, spans);
   const localOut = outputWithGlobalPlaceholders.replace(PLACEHOLDER_PATTERN, (m, g: string) => {
     const idx = local.order.indexOf(Number(g));
     return idx >= 0 ? `⟦${idx}⟧` : m;
   });
-  return unusableReason(local.text, local.spans, localOut, false) === undefined;
+  const reason = unusableReason(local.text, local.spans, localOut, false);
+  if (reason === "placeholders" && onSpanDiff) {
+    const diff = diffCandidateSpans(local.text, local.spans, cleanTranslation(localOut, false));
+    if (diff) onSpanDiff({ ...diff, stage, piece: segmentLabel(sourcePiece) });
+  }
+  return reason === undefined;
 }
 
 async function translateSentenceSpanBounded(
@@ -1033,6 +1046,7 @@ async function translateSentenceSpanBounded(
   targetLang: string,
   batchOptions: Omit<TranslateBatchOptions, "batchCharLimit">,
   onHeartbeat?: () => void,
+  onSpanDiff?: (diff: SpanDiff) => void,
 ): Promise<{ text: string | undefined; sawPlaceholderFailure?: boolean; calls: number }> {
   let calls = 0;
   let sawPlaceholderFailure = false;
@@ -1042,7 +1056,7 @@ async function translateSentenceSpanBounded(
 
   const outParts: string[] = [];
   for (const part of primaryParts) {
-    const res = await translatePiece(part.piece, spans, kind, sourceLang, targetLang, batchOptions, onHeartbeat);
+    const res = await translatePiece(part.piece, spans, kind, sourceLang, targetLang, batchOptions, onHeartbeat, onSpanDiff, "span-clause");
     calls += res.calls;
     if (res.text !== undefined) {
       outParts.push(res.text + part.sep);
@@ -1053,7 +1067,7 @@ async function translateSentenceSpanBounded(
     if (subParts.length <= 1) return { text: undefined, sawPlaceholderFailure, calls };
     let subOut = "";
     for (const sub of subParts) {
-      const subRes = await translatePiece(sub.piece, spans, kind, sourceLang, targetLang, batchOptions, onHeartbeat);
+      const subRes = await translatePiece(sub.piece, spans, kind, sourceLang, targetLang, batchOptions, onHeartbeat, onSpanDiff, "span-single");
       calls += subRes.calls;
       if (subRes.text === undefined) {
         if (subRes.reason === "placeholders") sawPlaceholderFailure = true;
@@ -1065,20 +1079,31 @@ async function translateSentenceSpanBounded(
   }
 
   const assembled = outParts.join("");
-  return isPieceUsableInGlobal(sentence, assembled, spans)
+  return isPieceUsableInGlobal(sentence, assembled, spans, onSpanDiff, "span sentence reassembly")
     ? { text: assembled, calls }
     : { text: undefined, sawPlaceholderFailure, calls };
 }
 
 /**
  * True when sending `text` as a single whole-segment request would fail
- * `numPredictFor`'s context budget before reaching Ollama.
+ * `numPredictFor`'s context budget before reaching Ollama. Resolves `numCtx`
+ * from `POLYGLOT_NUM_CTX` or `-<N>k` model tag and counts the real single-item
+ * prompt (including any language-specific glossary hint).
  */
-function exceedsSingleCallContext(text: string): boolean {
-  const numCtx = resolveNumCtx();
+export function exceedsSingleCallContext(
+  text: string,
+  sourceLang = "en",
+  targetLang = "es",
+  options: TranslateBatchOptions = {},
+): boolean {
+  const source = resolveLanguage(sourceLang);
+  const target = resolveLanguage(targetLang);
+  const modelStr = options.model ?? process.env.POLYGLOT_MODEL ?? "translategemma:12b";
+  const numCtx = resolveNumCtx(modelStr);
   const srcTokens = estimateTokens(text);
-  const estPromptTokens = srcTokens + 400;
-  return numCtx - estPromptTokens < Math.max(MIN_NUM_PREDICT, srcTokens);
+  const promptTokens =
+    source && target ? estimateTokens(buildSingleItemPrompt(text, source, target, options)) : srcTokens + 400;
+  return numCtx - promptTokens < Math.max(MIN_NUM_PREDICT, srcTokens);
 }
 
 // ─── Is a translation usable? ─────────────────────────────────────
@@ -1311,6 +1336,27 @@ export async function translateMarkdown(
   const reasonByMasked = new Map<string, string>();
   const retriedMasked = new Set<string>();
   const partialPlaceholderFallback = new Set<string>();
+  const diffsByMasked = new Map<string, SpanDiff[]>();
+  const pushSpanDiff = (maskedKey: string, diff: SpanDiff | undefined) => {
+    if (!diff) return;
+    let list = diffsByMasked.get(maskedKey);
+    if (!list) {
+      list = [];
+      diffsByMasked.set(maskedKey, list);
+    }
+    if (list.length >= 32) return;
+    const dup = list.some(
+      (d) =>
+        d.stage === diff.stage &&
+        d.piece === diff.piece &&
+        d.spanIndex === diff.spanIndex &&
+        d.expected === diff.expected &&
+        d.received === diff.received &&
+        d.expectedStrayBackticks === diff.expectedStrayBackticks &&
+        d.receivedStrayBackticks === diff.receivedStrayBackticks,
+    );
+    if (!dup) list.push(diff);
+  };
   let retries = 0;
 
   if (uniqueItems.length > 0) {
@@ -1318,7 +1364,10 @@ export async function translateMarkdown(
     const normalItems: BatchItem[] = [];
     const normalMap: number[] = [];
     for (let i = 0; i < uniqueItems.length; i++) {
-      if (exceedsSingleCallContext(uniqueItems[i].text) && pieces(uniqueItems[i].text, "line").length > 1) {
+      if (
+        exceedsSingleCallContext(uniqueItems[i].text, sourceLang, targetLang, options) &&
+        pieces(uniqueItems[i].text, "line").length > 1
+      ) {
         oversizeIndices.add(i);
       } else {
         normalMap.push(i);
@@ -1408,6 +1457,11 @@ export async function translateMarkdown(
       let recovered = false;
       let route = what;
       let sawPlaceholderFailure = problem === "placeholders";
+      const onDiff = (diff: SpanDiff) => pushSpanDiff(item.text, diff);
+      if (problem === "placeholders") {
+        const d = diffCandidateSpans(item.text, spans, cleanTranslation(uniqueTranslations[i], isHeading));
+        if (d) onDiff({ ...d, stage: via });
+      }
       if (!isOversize && via !== "fallback") {
         const retry = await translateBatch([item], sourceLang, targetLang, batchOptions);
         ollamaCalls += retry.ollamaCalls;
@@ -1420,6 +1474,8 @@ export async function translateMarkdown(
           recovered = true;
         } else if (retryProblem === "placeholders") {
           sawPlaceholderFailure = true;
+          const d = diffCandidateSpans(item.text, spans, cleanTranslation(again, isHeading));
+          if (d) onDiff({ ...d, stage: "retry" });
         }
       } else if (!isOversize) {
         route = `${what} (its one-call-per-item answer was its retry)`;
@@ -1451,6 +1507,8 @@ export async function translateMarkdown(
                 targetLang,
                 batchOptions,
                 options.onHeartbeat,
+                onDiff,
+                "line",
               );
               ollamaCalls += r.calls;
               if (r.text === undefined) {
@@ -1471,6 +1529,10 @@ export async function translateMarkdown(
               recovered = true;
               route += "; translated line by line";
             } else {
+              if (whole === "placeholders") {
+                const d = diffCandidateSpans(item.text, spans, cleanTranslation(candidate, isHeading));
+                if (d) onDiff({ ...d, stage: "line reassembly" });
+              }
               route += `; line by line did not recover it (the reassembled segment was still ${whole === "english" ? "English" : whole})`;
             }
           } else {
@@ -1484,7 +1546,7 @@ export async function translateMarkdown(
               if (
                 blocks[b]!.rawLines.length === 1 &&
                 lineResults[b]![0] !== undefined &&
-                isPieceUsableInGlobal(blocks[b]!.joined, lineResults[b]![0]!, spans)
+                isPieceUsableInGlobal(blocks[b]!.joined, lineResults[b]![0]!, spans, onDiff, "line block reassembly")
               ) {
                 blockDone[b] = lineResults[b]![0]!;
               }
@@ -1507,6 +1569,8 @@ export async function translateMarkdown(
                 targetLang,
                 batchOptions,
                 options.onHeartbeat,
+                onDiff,
+                "sentence",
               );
               ollamaCalls += r.calls;
               if (r.text === undefined) {
@@ -1517,7 +1581,7 @@ export async function translateMarkdown(
             }
             if (sentenceDone[b]!.every((x) => x !== undefined)) {
               const joinedOut = sentenceDone[b]!.join(" ");
-              if (isPieceUsableInGlobal(blk.joined, joinedOut, spans)) {
+              if (isPieceUsableInGlobal(blk.joined, joinedOut, spans, onDiff, "sentence block reassembly")) {
                 blockDone[b] = joinedOut;
               }
             }
@@ -1531,6 +1595,10 @@ export async function translateMarkdown(
               recovered = true;
               route += "; translated sentence by sentence";
             } else {
+              if (whole === "placeholders") {
+                const d = diffCandidateSpans(item.text, spans, cleanTranslation(candidate, isHeading));
+                if (d) onDiff({ ...d, stage: "sentence reassembly" });
+              }
               route += `; sentence by sentence did not recover it (the reassembled segment was still ${whole === "english" ? "English" : whole})`;
             }
           } else {
@@ -1565,6 +1633,7 @@ export async function translateMarkdown(
                 targetLang,
                 batchOptions,
                 options.onHeartbeat,
+                onDiff,
               );
               ollamaCalls += r.calls;
               if (r.text === undefined) {
@@ -1575,7 +1644,7 @@ export async function translateMarkdown(
             }
             if (sentenceDone[b]!.every((x) => x !== undefined)) {
               const joinedOut = sentenceDone[b]!.join(" ");
-              if (isPieceUsableInGlobal(blk.joined, joinedOut, spans)) {
+              if (isPieceUsableInGlobal(blk.joined, joinedOut, spans, onDiff, "span block reassembly")) {
                 blockDone[b] = joinedOut;
               }
             }
@@ -1589,6 +1658,10 @@ export async function translateMarkdown(
               recovered = true;
               route += "; translated span by span";
             } else {
+              if (whole === "placeholders") {
+                const d = diffCandidateSpans(item.text, spans, cleanTranslation(candidate, isHeading));
+                if (d) onDiff({ ...d, stage: "span reassembly" });
+              }
               route += `; span by span did not recover it (the reassembled segment was still ${whole === "english" ? "English" : whole})`;
             }
           } else {
@@ -1607,7 +1680,15 @@ export async function translateMarkdown(
       }
 
       reasonByMasked.set(item.text, route);
-      fallbacks.push({ lang: targetLang, segment: segmentLabel(item.text), reason: route, retried: true, recovered });
+      const collectedDiffs = diffsByMasked.get(item.text);
+      fallbacks.push({
+        lang: targetLang,
+        segment: segmentLabel(item.text),
+        reason: route,
+        retried: true,
+        recovered,
+        ...(collectedDiffs && collectedDiffs.length > 0 ? { spanDiffs: collectedDiffs } : {}),
+      });
     }
 
     // Cache the results, under each miss's own key: two misses can share a
@@ -1693,20 +1774,30 @@ export async function translateMarkdown(
           cleaned = restored.text;
           if (partialPlaceholderFallback.has(item.text)) recordPlaceholderFallback(true);
         } else {
+          const assemblyDiff = diffCandidateSpans(item.text, item.spans, cleaned);
+          if (assemblyDiff) pushSpanDiff(item.text, { ...assemblyDiff, stage: "assembly" });
           recordPlaceholderFallback(false);
           cleaned = expected;
         }
       } else if (expectedCode.length > 0 && !codeSpansMatch(expectedCode, cleaned, strayBacktickCount(expected))) {
+        const assemblyDiff = diffCandidateSpans(item.original, [], cleaned);
+        if (assemblyDiff) pushSpanDiff(item.text, { ...assemblyDiff, stage: "assembly" });
         recordPlaceholderFallback(false);
         cleaned = expected;
         if (!retriedMasked.has(item.text)) {
+          const collectedDiffs = diffsByMasked.get(item.text);
           fallbacks.push({
             lang: targetLang,
             segment: segmentLabel(item.text),
             reason: reasonByMasked.get(item.text) ?? "code-span placeholders did not survive; the source text was kept",
             retried: false,
             recovered: false,
+            ...(collectedDiffs && collectedDiffs.length > 0 ? { spanDiffs: collectedDiffs } : {}),
           });
+        } else if (assemblyDiff) {
+          const segLbl = segmentLabel(item.text);
+          const existing = fallbacks.find((f) => f.segment === segLbl);
+          if (existing) existing.spanDiffs = diffsByMasked.get(item.text);
         }
       } else if (partialPlaceholderFallback.has(item.text)) {
         recordPlaceholderFallback(true);

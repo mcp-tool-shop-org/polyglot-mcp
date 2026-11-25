@@ -304,3 +304,228 @@ export function restoreCodeSpans(text: string, spans: string[]): RestoreResult {
 
   return { text: restored, intact: placeholdersIntact && spansIntact };
 }
+
+export interface SpanDiff {
+  stage?: string;
+  piece?: string;
+  spanIndex: number;
+  expected: string;
+  received: string;
+  expectedStrayBackticks: number;
+  receivedStrayBackticks: number;
+  candidate?: string;
+}
+
+/**
+ * Escape control, bidi/zero-width, and backslash/quote characters for safe
+ * single-line terminal logging, capping the escaped string at `maxLen`.
+ */
+export function escapeForTerminal(value: string, maxLen = 80): string {
+  if (maxLen <= 0) return "";
+  let out = "";
+  let i = 0;
+  while (i < value.length) {
+    const cp = value.codePointAt(i)!;
+    const step = cp > 0xffff ? 2 : 1;
+    let rep: string;
+    if (cp === 0x5c) rep = "\\\\";
+    else if (cp === 0x22) rep = '\\"';
+    else if (cp === 0x0a) rep = "\\n";
+    else if (cp === 0x0d) rep = "\\r";
+    else if (cp === 0x09) rep = "\\t";
+    else if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) {
+      rep = `\\x${cp.toString(16).padStart(2, "0")}`;
+    } else if (
+      (cp >= 0x200b && cp <= 0x200f) ||
+      (cp >= 0x2028 && cp <= 0x202f) ||
+      (cp >= 0x2060 && cp <= 0x206f) ||
+      cp === 0xfeff ||
+      (cp >= 0xfff9 && cp <= 0xfffb) ||
+      (cp >= 0xd800 && cp <= 0xdfff)
+    ) {
+      rep = `\\u${cp.toString(16).padStart(4, "0")}`;
+    } else {
+      rep = value.slice(i, i + step);
+    }
+
+    if (out.length + rep.length > maxLen) {
+      if (maxLen === 1) return "…";
+      return `${out.slice(0, maxLen - 1)}…`;
+    }
+    out += rep;
+    i += step;
+  }
+  return out;
+}
+
+/**
+ * Compute a terminal-safe diagnostic diff describing the first inline code-span
+ * or placeholder mismatch between expected source (`masked`, `spans`) and a
+ * cleaned candidate translation (`cleaned`).
+ */
+export function diffCandidateSpans(masked: string, spans: readonly string[], cleaned: string): SpanDiff | undefined {
+  const expectedText = spans.length > 0 ? restoreCodeSpans(masked, [...spans]).text : masked;
+  const expectedStrayBackticks = strayBacktickCount(expectedText);
+
+  if (spans.length === 0) {
+    const expectedCode = extractCodeSpans(masked);
+    const actualCode = extractCodeSpans(cleaned);
+    const receivedStrayBackticks = strayBacktickCount(cleaned);
+    const limit = Math.max(expectedCode.length, actualCode.length);
+    for (let i = 0; i < limit; i++) {
+      if (expectedCode[i] !== actualCode[i]) {
+        const expRaw = expectedCode[i];
+        const actRaw = actualCode[i];
+        const expected = expRaw === undefined ? "none" : escapeForTerminal(expRaw);
+        const received =
+          expRaw === undefined && actRaw !== undefined
+            ? `extra: ${escapeForTerminal(actRaw)}`
+            : actRaw === undefined
+              ? "missing"
+              : escapeForTerminal(actRaw);
+        return {
+          spanIndex: i,
+          expected,
+          received,
+          expectedStrayBackticks,
+          receivedStrayBackticks,
+          ...(received === "missing" || expectedStrayBackticks !== receivedStrayBackticks
+            ? { candidate: escapeForTerminal(cleaned, 96) }
+            : {}),
+        };
+      }
+    }
+    if (expectedStrayBackticks !== receivedStrayBackticks) {
+      return {
+        spanIndex: 0,
+        expected: "none",
+        received: "missing",
+        expectedStrayBackticks,
+        receivedStrayBackticks,
+        candidate: escapeForTerminal(cleaned, 96),
+      };
+    }
+    return undefined;
+  }
+
+  const seen = new Array<number>(spans.length).fill(0);
+  let badUnknown: { tok: string; index: number } | undefined;
+  let badDupIdx: number | undefined;
+  let badWrapIdx: number | undefined;
+
+  for (const m of cleaned.matchAll(PLACEHOLDER_PATTERN)) {
+    const index = Number(m[1]);
+    if (!Number.isInteger(index) || index < 0 || index >= spans.length) {
+      if (!badUnknown) badUnknown = { tok: m[0], index: Number.isInteger(index) && index >= 0 ? index : spans.length };
+      continue;
+    }
+    seen[index]++;
+    if (seen[index]! > 1 && badDupIdx === undefined) badDupIdx = index;
+    const offset = m.index ?? 0;
+    if (isExactInlineCodeSpan(spans[index]!)) {
+      const before = offset > 0 ? cleaned[offset - 1] : "";
+      const after = offset + m[0].length < cleaned.length ? cleaned[offset + m[0].length] : "";
+      if ((before === "`" || after === "`") && badWrapIdx === undefined) {
+        badWrapIdx = index;
+      }
+    }
+  }
+
+  const restored = restoreCodeSpans(cleaned, [...spans]);
+  const expectedCode = spans.filter((s) => isExactInlineCodeSpan(s));
+  const actualCode = extractCodeSpans(restored.text);
+  const receivedStrayBackticks = strayBacktickCount(restored.text);
+
+  const codeLimit = Math.max(expectedCode.length, actualCode.length);
+  for (let i = 0; i < codeLimit; i++) {
+    if (expectedCode[i] !== actualCode[i]) {
+      const expRaw = expectedCode[i];
+      const actRaw = actualCode[i];
+      const expected = expRaw === undefined ? "none" : escapeForTerminal(expRaw);
+      const received =
+        expRaw === undefined && actRaw !== undefined
+          ? `extra: ${escapeForTerminal(actRaw)}`
+          : actRaw === undefined
+            ? "missing"
+            : escapeForTerminal(actRaw);
+      return {
+        spanIndex: i,
+        expected,
+        received,
+        expectedStrayBackticks,
+        receivedStrayBackticks,
+        ...(received === "missing" || expectedStrayBackticks !== receivedStrayBackticks
+          ? { candidate: escapeForTerminal(cleaned, 96) }
+          : {}),
+      };
+    }
+  }
+
+  if (expectedStrayBackticks !== receivedStrayBackticks) {
+    return {
+      spanIndex: badWrapIdx ?? 0,
+      expected: expectedCode[badWrapIdx ?? 0] ? escapeForTerminal(expectedCode[badWrapIdx ?? 0]!) : "none",
+      received: "missing",
+      expectedStrayBackticks,
+      receivedStrayBackticks,
+      candidate: escapeForTerminal(cleaned, 96),
+    };
+  }
+
+  const missingIdx = seen.findIndex((c) => c === 0);
+  if (missingIdx !== -1) {
+    return {
+      spanIndex: missingIdx,
+      expected: escapeForTerminal(spans[missingIdx]!),
+      received: "missing",
+      expectedStrayBackticks,
+      receivedStrayBackticks,
+      candidate: escapeForTerminal(cleaned, 96),
+    };
+  }
+  if (badUnknown) {
+    return {
+      spanIndex: badUnknown.index,
+      expected: "none",
+      received: `extra: ${escapeForTerminal(badUnknown.tok)}`,
+      expectedStrayBackticks,
+      receivedStrayBackticks,
+      candidate: escapeForTerminal(cleaned, 96),
+    };
+  }
+  if (badDupIdx !== undefined) {
+    return {
+      spanIndex: badDupIdx,
+      expected: escapeForTerminal(spans[badDupIdx]!),
+      received: `extra: ${escapeForTerminal(spans[badDupIdx]!)}`,
+      expectedStrayBackticks,
+      receivedStrayBackticks,
+      candidate: escapeForTerminal(cleaned, 96),
+    };
+  }
+  if (badWrapIdx !== undefined) {
+    return {
+      spanIndex: badWrapIdx,
+      expected: escapeForTerminal(spans[badWrapIdx]!),
+      received: escapeForTerminal(`\`${spans[badWrapIdx]!}\``),
+      expectedStrayBackticks,
+      receivedStrayBackticks,
+    };
+  }
+  return undefined;
+}
+
+/** Render one `SpanDiff` into a compact single-line diagnostic string. */
+export function formatSpanDiff(diff: SpanDiff): string {
+  const fmt = (val: string) => {
+    if (val === "missing" || val === "none") return val;
+    if (val.startsWith("extra: ")) return `extra "${val.slice(7)}"`;
+    return `"${val}"`;
+  };
+  const prefix = `${diff.stage ? `${diff.stage}: ` : ""}${diff.piece ? `"${diff.piece}" ` : ""}`;
+  const candidateSuffix = diff.candidate ? ` [candidate: "${diff.candidate}"]` : "";
+  return (
+    `${prefix}span[${diff.spanIndex}] expected ${fmt(diff.expected)}, received ${fmt(diff.received)} ` +
+    `(stray backticks: expected ${diff.expectedStrayBackticks}, received ${diff.receivedStrayBackticks})${candidateSuffix}`
+  );
+}

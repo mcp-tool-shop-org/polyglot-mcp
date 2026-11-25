@@ -138,9 +138,10 @@ vi.mock("./ollama.js", () => {
   return { OllamaClient: MockOllamaClient };
 });
 
-import { translateMarkdown, splitSpanBounded, unusableReason } from "./translateMarkdown.js";
-import { survivingProse } from "./survival.js";
-import { extractCodeSpans } from "./codeSpans.js";
+import { translateMarkdown, splitSpanBounded, unusableReason, exceedsSingleCallContext } from "./translateMarkdown.js";
+import { formatFallbacks, survivingProse } from "./survival.js";
+import { extractCodeSpans, maskCodeSpans } from "./codeSpans.js";
+import { DEFAULT_PROTECTED_TERMS } from "./protectedTerms.js";
 
 function extractInlineCodeSpans(md: string): string[] {
   return extractCodeSpans(md);
@@ -149,6 +150,7 @@ function extractInlineCodeSpans(md: string): string[] {
 describe("dense inline code-span lines — ai-rpg-engine README fixture", () => {
   const fixtureRaw = readFileSync(FIXTURE_PATH, "utf-8");
   const savedNumCtx = process.env.POLYGLOT_NUM_CTX;
+  const savedModel = process.env.POLYGLOT_MODEL;
 
   beforeEach(() => {
     mockState.calls.length = 0;
@@ -157,6 +159,8 @@ describe("dense inline code-span lines — ai-rpg-engine README fixture", () => 
   afterEach(() => {
     if (savedNumCtx === undefined) delete process.env.POLYGLOT_NUM_CTX;
     else process.env.POLYGLOT_NUM_CTX = savedNumCtx;
+    if (savedModel === undefined) delete process.env.POLYGLOT_MODEL;
+    else process.env.POLYGLOT_MODEL = savedModel;
   });
 
   it.each(["es", "ja", "pt"] as const)(
@@ -336,6 +340,87 @@ describe("dense inline code-span lines — ai-rpg-engine README fixture", () => 
     expect(downgradedRes.fallbacks[0]).toMatchObject({ retried: true, recovered: false });
     expect(downgradedRes.untranslated).toHaveLength(1);
   }, 30_000);
+
+  it("records terminal-safe span diffs on rejected candidates with expected and received bytes", async () => {
+    const doc = [
+      "- Altered backtick check with `alpha_cmd` zzalterbacktick and enough prose words to report.",
+      "- Missing placeholder check with `beta_cmd` and `zzmissing_tok` and enough prose words to report.",
+    ].join("\n");
+    // Drop the last placeholder on lines containing zzdroptwoplus as well, or test unmasked/wrapped/swapped/missing.
+    const unmasked = "Literal ⟦7⟧ marker and `foo_bar` code zzalterunmasked in this sentence here.";
+    const unmaskedRes = await translateMarkdown(unmasked, "en", "es", { cache: false });
+    const fb = unmaskedRes.fallbacks[0] as unknown as {
+      spanDiffs?: Array<{ spanIndex: number; expected: string; received: string; expectedStrayBackticks: number; receivedStrayBackticks: number }>;
+    };
+    expect(fb.spanDiffs).toBeDefined();
+    expect(fb.spanDiffs!.length).toBeGreaterThan(0);
+    expect(fb.spanDiffs![0]).toMatchObject({
+      spanIndex: 0,
+      expected: "`foo_bar`",
+      received: "`foo-bar`",
+      expectedStrayBackticks: 0,
+      receivedStrayBackticks: 0,
+    });
+    const formatted = formatFallbacks(unmaskedRes.fallbacks).join("\n");
+    expect(formatted).toContain("span[0]");
+    expect(formatted).toContain("`foo_bar`");
+    expect(formatted).toContain("`foo-bar`");
+    expect(formatted).toContain("stray backticks: expected 0, received 0");
+
+    // Control characters and overlong spans are escaped and capped in fallback output.
+    const dirtySpan = "`" + "a".repeat(90) + "`";
+    const dirtyDoc = `Literal ⟦7⟧ marker and \`foo_bar\` code zzalterunmasked in ${dirtySpan} here.`;
+    expect(doc).toBeTruthy();
+    const dirtyRes = await translateMarkdown(dirtyDoc, "en", "es", { cache: false });
+    expect(formatFallbacks(dirtyRes.fallbacks).join("\n")).toContain("`foo-bar`");
+
+    // Missing placeholder case (dense line dropping last span in es fallback).
+    const dropDoc = "Use `keep_cmd` zzdroptwoplus and `drop_cmd` in one sentence today.";
+    const dropRes = await translateMarkdown(dropDoc, "en", "es", { cache: false });
+    const dropFb = dropRes.fallbacks[0] as unknown as {
+      spanDiffs?: Array<{ spanIndex: number; expected: string; received: string }>;
+    };
+    expect(dropFb.spanDiffs?.some((d) => d.expected === "`drop_cmd`" && d.received === "missing")).toBe(true);
+  }, 30_000);
+
+  it("judges fixture-sized Japanese segments to fit at 16384 (-16k tag or POLYGLOT_NUM_CTX) and overflows only when truly too large", async () => {
+    delete process.env.POLYGLOT_NUM_CTX;
+    delete process.env.POLYGLOT_MODEL;
+    const maskedFixture = maskCodeSpans(fixtureRaw, DEFAULT_PROTECTED_TERMS).text;
+
+    // Under default 8192, the 25.8 KB segment is oversize.
+    expect(exceedsSingleCallContext(maskedFixture, "en", "ja", { model: "translategemma:27b" })).toBe(true);
+
+    // Under 16k (via -16k model tag even without POLYGLOT_NUM_CTX, or via POLYGLOT_NUM_CTX=16384), ja fits.
+    expect(exceedsSingleCallContext(maskedFixture, "en", "ja", { model: "translategemma:27b-16k" })).toBe(false);
+    process.env.POLYGLOT_NUM_CTX = "16384";
+    expect(exceedsSingleCallContext(maskedFixture, "en", "ja", { model: "translategemma:27b" })).toBe(false);
+    delete process.env.POLYGLOT_NUM_CTX;
+
+    // Truly overflowing segment (>16384 tokens) is judged oversize and still handled safely via piecewise ladder.
+    const doubledFixture = `${maskedFixture}\n${maskedFixture}`;
+    expect(exceedsSingleCallContext(doubledFixture, "en", "ja", { model: "translategemma:27b-16k" })).toBe(true);
+
+    // Running ja on the fixture with model "translategemma:27b-16k" attempts single-call first (not flagged oversize)
+    // and recovers all lines via piecewise rungs.
+    const jaRes = await translateMarkdown(fixtureRaw, "en", "ja", {
+      cache: false,
+      model: "translategemma:27b-16k",
+    });
+    expect(jaRes.untranslated).toEqual([]);
+    expect(jaRes.fallbacks[0]?.reason).toMatch(/^code-span placeholders did not survive/);
+    expect(jaRes.fallbacks[0]?.reason).not.toContain("segment exceeds single-call context window");
+
+    // A genuinely oversize segment (>16384) routes directly into piecewise recovery without throwing PROMPT_EXCEEDS_CONTEXT.
+    const bodyOnly = fixtureRaw.split("\n").slice(2).join("\n").trimEnd();
+    const doubledRaw = `${fixtureRaw.trimEnd()}\n${bodyOnly}\n`;
+    const overflowRes = await translateMarkdown(doubledRaw, "en", "ja", {
+      cache: false,
+      model: "translategemma:27b-16k",
+    });
+    expect(overflowRes.untranslated).toEqual([]);
+    expect(overflowRes.fallbacks[0]?.reason).toContain("segment exceeds single-call context window");
+  }, 30_000);
 });
 
 describe("scripts/translate-readme.mjs — pt-BR alias", () => {
@@ -425,6 +510,21 @@ describe("scripts/translate-readme.mjs — pt-BR alias", () => {
       expect(ptRes.code, ptRes.stderr).toBe(0);
       expect(ptRes.stdout).toContain("0 Ollama call(s)");
       expect(readFileSync(join(dir, "README.pt.md"), "utf-8")).toBe(ptBrText);
+
+      // translate-readme fallback report and POLYGLOT_FALLBACKS JSON carry span diffs for rejected spans.
+      const badReadme = join(dir, "README.bad.md");
+      writeFileSync(
+        badReadme,
+        "Literal ⟦7⟧ marker and `foo_bar` code zzalterunmasked in this sentence here.\n",
+        "utf-8",
+      );
+      const badRes = await runCli([badReadme, "es", "--no-cache", "--on-untranslated=report"], dir);
+      expect(badRes.code, badRes.stderr).toBe(0);
+      expect(badRes.stdout).toContain("span[0]");
+      expect(badRes.stdout).toContain("`foo_bar`");
+      expect(badRes.stdout).toContain("`foo-bar`");
+      expect(badRes.stdout).toContain("stray backticks: expected 0, received 0");
+      expect(badRes.stdout).toContain("POLYGLOT_FALLBACKS ");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

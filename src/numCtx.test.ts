@@ -38,21 +38,37 @@ describe("numPredictFor", () => {
 });
 
 describe("resolveNumCtx", () => {
+  const savedModel = process.env.POLYGLOT_MODEL;
   afterEach(() => {
     delete process.env.POLYGLOT_NUM_CTX;
+    if (savedModel === undefined) delete process.env.POLYGLOT_MODEL;
+    else process.env.POLYGLOT_MODEL = savedModel;
   });
   it("defaults to the pin and takes POLYGLOT_NUM_CTX when sane", () => {
+    delete process.env.POLYGLOT_MODEL;
     expect(resolveNumCtx()).toBe(8192);
     process.env.POLYGLOT_NUM_CTX = "16384";
     expect(resolveNumCtx()).toBe(16384);
     process.env.POLYGLOT_NUM_CTX = "12";
     expect(resolveNumCtx()).toBe(8192);
   });
+
+  it("derives context size from -<N>k model tags when POLYGLOT_NUM_CTX is unset, while explicit POLYGLOT_NUM_CTX wins", () => {
+    delete process.env.POLYGLOT_NUM_CTX;
+    expect((resolveNumCtx as (m?: string) => number)("translategemma:27b-16k")).toBe(16384);
+    expect((resolveNumCtx as (m?: string) => number)("translategemma:27b")).toBe(8192);
+    process.env.POLYGLOT_MODEL = "translategemma:27b-16k";
+    expect(resolveNumCtx()).toBe(16384);
+    process.env.POLYGLOT_NUM_CTX = "8192";
+    expect((resolveNumCtx as (m?: string) => number)("translategemma:27b-16k")).toBe(8192);
+  });
 });
 
 describe("OllamaClient window", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => {
+    delete process.env.POLYGLOT_NUM_CTX;
+    delete process.env.POLYGLOT_MODEL;
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
@@ -68,6 +84,21 @@ describe("OllamaClient window", () => {
     expect(body.options.num_ctx).toBe(8192);
     expect(body.options.num_predict).toBeGreaterThanOrEqual(256);
     expect(body.options.temperature).toBe(0.1);
+  });
+
+  it("sends num_ctx derived from a -16k model tag when POLYGLOT_NUM_CTX is unset", async () => {
+    delete process.env.POLYGLOT_NUM_CTX;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ model: "translategemma:27b-16k", response: "x", done: true }),
+    });
+    globalThis.fetch = fetchMock;
+    await new OllamaClient("http://localhost:11434").generate({
+      model: "translategemma:27b-16k",
+      prompt: "hello",
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.options.num_ctx).toBe(16384);
   });
 
   it("refuses an oversize prompt before any request goes out", async () => {

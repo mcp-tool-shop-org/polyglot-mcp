@@ -18,7 +18,8 @@
  */
 
 import GithubSlugger from "github-slugger";
-import { CODE_SPAN_PATTERN, maskCodeSpans, type MaskedSpanKind } from "./codeSpans.js";
+import { CODE_SPAN_PATTERN, formatSpanDiff, maskCodeSpans, type MaskedSpanKind, type SpanDiff } from "./codeSpans.js";
+export { formatSpanDiff, type SpanDiff };
 import { PolyglotError } from "./errors.js";
 import { DEFAULT_PROTECTED_TERMS, linkTargetsEnabled, urlsEnabled, type ProtectedTermSet } from "./protectedTerms.js";
 
@@ -1013,6 +1014,8 @@ export interface SegmentFallback {
   retried: boolean;
   /** True when the translation that was kept is no longer the English. */
   recovered: boolean;
+  /** Diagnostic diffs for candidates rejected for inline code spans or placeholders. */
+  spanDiffs?: SpanDiff[];
 }
 
 /** What to do when prose comes back untranslated: fail the run, or report it and carry on. */
@@ -1191,12 +1194,14 @@ export function untranslatedBlockText(items: readonly UntranslatedSegment[]): st
   return `\n⚠ ${items.length} prose line(s) came back in English after a retry:\n${formatUntranslated(items).map((l) => `  - ${l}`).join("\n")}`;
 }
 
-/** One line per segment that left the plain batch path. */
+/** One line per segment that left the plain batch path, with indented span diffs when recorded. */
 export function formatFallbacks(items: readonly SegmentFallback[]): string[] {
-  return items.map(
-    (f) =>
-      `[${f.lang}] "${f.segment}": ${f.reason}${f.retried ? (f.recovered ? "; retried, translated" : "; retried, still English") : ""}`,
-  );
+  return items.map((f) => {
+    const head = `[${f.lang}] "${f.segment}": ${f.reason}${f.retried ? (f.recovered ? "; retried, translated" : "; retried, still English") : ""}`;
+    if (!f.spanDiffs || f.spanDiffs.length === 0) return head;
+    const details = f.spanDiffs.map((d) => `    • ${formatSpanDiff(d)}`).join("\n");
+    return `${head}\n${details}`;
+  });
 }
 
 /**

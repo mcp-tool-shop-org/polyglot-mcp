@@ -311,5 +311,29 @@ describe("untranslated policy and report lines", () => {
     expect(lines[0]).toContain("retried, translated");
     expect(lines[1]).toContain("retried, still English");
     expect(lines[2]).not.toContain("retried");
+
+    const withDiffs = formatFallbacks([
+      {
+        lang: "ja",
+        segment: "Run `foo_bar` today.",
+        reason: "code-span placeholders did not survive in a batch",
+        retried: true,
+        recovered: false,
+        spanDiffs: [
+          {
+            stage: "batch",
+            spanIndex: 0,
+            expected: "`foo_bar`",
+            received: "`foo-bar`",
+            expectedStrayBackticks: 0,
+            receivedStrayBackticks: 0,
+          },
+        ],
+      } as never,
+    ]);
+    expect(withDiffs[0]).toContain("span[0]");
+    expect(withDiffs[0]).toContain("`foo_bar`");
+    expect(withDiffs[0]).toContain("`foo-bar`");
+    expect(withDiffs[0]).toContain("stray backticks: expected 0, received 0");
   });
 });

@@ -15,10 +15,25 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3);
 }
 
-/** The num_ctx a request carries: POLYGLOT_NUM_CTX when set and sane, else the pinned default. */
-export function resolveNumCtx(): number {
+/** Parse a `-<N>k` or `:<N>k` context suffix from a model tag (e.g. `translategemma:27b-16k` -> 16384). */
+export function parseModelContextTag(model?: string): number | undefined {
+  if (!model) return undefined;
+  const m = /[-:_](\d{1,4})[kK]$/.exec(model.trim());
+  if (!m) return undefined;
+  const k = Number.parseInt(m[1]!, 10);
+  if (!Number.isFinite(k) || k < 1 || k > 256) return undefined;
+  const tokens = k * 1024;
+  return tokens >= 512 ? tokens : undefined;
+}
+
+/**
+ * The num_ctx a request carries: POLYGLOT_NUM_CTX when set and sane, else a
+ * `-<N>k` tag on `model` (or `POLYGLOT_MODEL`), else the pinned default.
+ */
+export function resolveNumCtx(model?: string): number {
   const raw = Number.parseInt(process.env.POLYGLOT_NUM_CTX ?? "", 10);
-  return Number.isFinite(raw) && raw >= 512 ? raw : DEFAULT_NUM_CTX;
+  if (Number.isFinite(raw) && raw >= 512) return raw;
+  return parseModelContextTag(model ?? process.env.POLYGLOT_MODEL) ?? DEFAULT_NUM_CTX;
 }
 
 /** Smallest output budget a request may have. */

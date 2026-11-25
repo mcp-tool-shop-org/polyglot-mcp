@@ -4,7 +4,7 @@
  */
 
 import { OllamaClient, type StreamCallback } from "./ollama.js";
-import { numPredictFor } from "./numCtx.js";
+import { numPredictFor, resolveNumCtx } from "./numCtx.js";
 import { resolveLanguage, type Language } from "./languages.js";
 import {
   buildGlossaryHint,
@@ -174,6 +174,28 @@ export function chunkText(text: string, maxChars: number): string[] {
   return chunks;
 }
 
+function resolveGlossaryEntries(options: TranslateOptions): GlossaryEntry[] {
+  const glossaryEntries: GlossaryEntry[] = [];
+  if (options.softwareGlossary !== false) {
+    glossaryEntries.push(...SOFTWARE_GLOSSARY);
+  }
+  if (options.glossary) {
+    glossaryEntries.push(...options.glossary);
+  }
+  return glossaryEntries;
+}
+
+/** @internal Build the full single-item prompt with glossary hint for token budgeting. */
+export function buildSingleItemPrompt(
+  text: string,
+  source: Language,
+  target: Language,
+  options: TranslateOptions = {},
+): string {
+  const glossaryHint = buildGlossaryHint(text, target.code, resolveGlossaryEntries(options));
+  return buildPrompt(source, target, text, glossaryHint);
+}
+
 /** Resolve languages and ensure Ollama + model are ready. Returns shared setup. */
 async function resolveSetup(
   sourceLang: string,
@@ -230,13 +252,7 @@ async function resolveSetup(
     });
   }
 
-  const glossaryEntries: GlossaryEntry[] = [];
-  if (options.softwareGlossary !== false) {
-    glossaryEntries.push(...SOFTWARE_GLOSSARY);
-  }
-  if (options.glossary) {
-    glossaryEntries.push(...options.glossary);
-  }
+  const glossaryEntries = resolveGlossaryEntries(options);
 
   return { source, target, model, client, glossaryEntries };
 }
@@ -264,17 +280,18 @@ export async function translate(
     const glossaryHint = buildGlossaryHint(chunk, target.code, glossaryEntries);
     const prompt = buildPrompt(source, target, chunk, glossaryHint);
 
+    const numCtx = resolveNumCtx(model);
     let response;
     if (useStream) {
       response = await client.generateStream(
-        { model, prompt, options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk) } },
+        { model, prompt, options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk, numCtx) } },
         options.onToken!
       );
     } else {
       response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk) },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, chunk, numCtx) },
       });
     }
 
@@ -354,6 +371,7 @@ export async function translateBatch(
       batchSize += addedSize;
     }
 
+    const numCtx = resolveNumCtx(model);
     if (batchItems.length === 1) {
       // Single item — use normal prompt (no separator overhead)
       const item = batchItems[0];
@@ -362,7 +380,7 @@ export async function translateBatch(
       const response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, item.text) },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, item.text, numCtx) },
       });
       ollamaCalls++;
       const truncated = response.done_reason === "length";
@@ -380,7 +398,7 @@ export async function translateBatch(
       const response = await client.generate({
         model,
         prompt,
-        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, joinedText) },
+        options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(prompt, joinedText, numCtx) },
       });
       ollamaCalls++;
 
@@ -403,7 +421,7 @@ export async function translateBatch(
           const fallbackResponse = await client.generate({
             model,
             prompt: fallbackPrompt,
-            options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(fallbackPrompt, item.text) },
+            options: { temperature: options.temperature ?? 0.1, num_predict: numPredictFor(fallbackPrompt, item.text, numCtx) },
           });
           ollamaCalls++;
           const truncated = fallbackResponse.done_reason === "length";
