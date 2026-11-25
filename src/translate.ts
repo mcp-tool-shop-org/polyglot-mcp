@@ -4,7 +4,7 @@
  */
 
 import { OllamaClient, type StreamCallback } from "./ollama.js";
-import { numPredictFor, resolveNumCtx } from "./numCtx.js";
+import { buildSinglePrompt, numPredictFor, PLACEHOLDER_INSTRUCTION_LINE, resolveGlossaryEntries, resolveNumCtx } from "./numCtx.js";
 import { resolveLanguage, type Language } from "./languages.js";
 import {
   buildGlossaryHint,
@@ -104,8 +104,7 @@ export interface TranslateBatchResult {
  * Restore is tolerant and fails closed regardless — this instruction just makes
  * the round trip succeed more often, so fewer segments fall back to source.
  */
-export const PLACEHOLDER_INSTRUCTION =
-  '\nIMPORTANT: The text contains placeholders like "⟦0⟧" that stand for code. Keep each one exactly as-is in your output, in the position the meaning requires. Do NOT translate, transliterate, renumber, drop, or duplicate them.';
+export const PLACEHOLDER_INSTRUCTION = PLACEHOLDER_INSTRUCTION_LINE;
 
 /** @internal Build the TranslateGemma prompt — two blank lines before text is critical. */
 export function buildPrompt(
@@ -114,12 +113,7 @@ export function buildPrompt(
   text: string,
   glossaryHint: string
 ): string {
-  const placeholderHint = containsCodePlaceholder(text) ? PLACEHOLDER_INSTRUCTION : "";
-  return `You are a professional ${source.name} (${source.code}) to ${target.name} (${target.code}) translator. Your goal is to accurately convey the meaning and nuances of the original ${source.name} text while adhering to ${target.name} grammar, vocabulary, and cultural sensitivities.
-Produce only the ${target.name} translation, without any additional explanations or commentary.${placeholderHint}${glossaryHint} Please translate the following ${source.name} text into ${target.name}:
-
-
-${text}`;
+  return buildSinglePrompt(source, target, text, glossaryHint);
 }
 
 /** @internal Build a batch prompt with separator instructions. */
@@ -172,28 +166,6 @@ export function chunkText(text: string, maxChars: number): string[] {
   }
 
   return chunks;
-}
-
-function resolveGlossaryEntries(options: TranslateOptions): GlossaryEntry[] {
-  const glossaryEntries: GlossaryEntry[] = [];
-  if (options.softwareGlossary !== false) {
-    glossaryEntries.push(...SOFTWARE_GLOSSARY);
-  }
-  if (options.glossary) {
-    glossaryEntries.push(...options.glossary);
-  }
-  return glossaryEntries;
-}
-
-/** @internal Build the full single-item prompt with glossary hint for token budgeting. */
-export function buildSingleItemPrompt(
-  text: string,
-  source: Language,
-  target: Language,
-  options: TranslateOptions = {},
-): string {
-  const glossaryHint = buildGlossaryHint(text, target.code, resolveGlossaryEntries(options));
-  return buildPrompt(source, target, text, glossaryHint);
 }
 
 /** Resolve languages and ensure Ollama + model are ready. Returns shared setup. */

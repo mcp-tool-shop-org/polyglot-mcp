@@ -11,11 +11,11 @@
  */
 
 import GithubSlugger from "github-slugger";
-import { translateBatch, buildSingleItemPrompt, type TranslateBatchOptions, type BatchItem } from "./translate.js";
+import { translateBatch, type TranslateBatchOptions, type BatchItem } from "./translate.js";
 import { resolveLanguage } from "./languages.js";
 import { validateTranslation } from "./validate.js";
 import { PLACEHOLDER_PATTERN, codeSpansMatch, diffCandidateSpans, extractCodeSpans, maskCodeSpans, restoreCodeSpans, strayBacktickCount, type SpanDiff } from "./codeSpans.js";
-import { MIN_NUM_PREDICT, estimateTokens, resolveNumCtx } from "./numCtx.js";
+import { MIN_NUM_PREDICT, buildSingleItemPrompt, estimateTokens, resolveNumCtx } from "./numCtx.js";
 import { anchorsEnabled, DEFAULT_PROTECTED_TERMS, loadProtectedTerms, type ProtectedTermSet } from "./protectedTerms.js";
 import { createPins, getPin, loadPins, type PinFile } from "./pins.js";
 import {
